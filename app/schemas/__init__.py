@@ -1,5 +1,6 @@
 from app.schemas.user import (
     AuthToken,
+    GoogleAuthRequest,
     LogoutResponse,
     UserCreate,
     UserLogin,
@@ -9,6 +10,7 @@ from app.schemas.user import (
 
 __all__ = [
     "AuthToken",
+    "GoogleAuthRequest",
     "LogoutResponse",
     "UserCreate",
     "UserLogin",
