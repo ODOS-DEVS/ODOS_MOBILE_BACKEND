@@ -52,8 +52,19 @@ class UserUpdate(BaseModel):
     phone_number: str | None = Field(default=None, max_length=30)
     avatar_url: str | None = Field(default=None, max_length=500)
     date_of_birth: date | None = None
+    gender: str | None = Field(default=None, max_length=30)
+    city: str | None = Field(default=None, max_length=120)
+    region: str | None = Field(default=None, max_length=120)
 
-    @field_validator("full_name", "phone_number", "avatar_url", mode="before")
+    @field_validator(
+        "full_name",
+        "phone_number",
+        "avatar_url",
+        "gender",
+        "city",
+        "region",
+        mode="before",
+    )
     @classmethod
     def strip_text(cls, value: str | None) -> str | None:
         if value is None:
@@ -70,6 +81,9 @@ class UserRead(BaseModel):
     phone_number: str | None
     avatar_url: str | None
     date_of_birth: date | None
+    gender: str | None
+    city: str | None
+    region: str | None
     role: UserRole
     is_active: bool
     is_verified: bool

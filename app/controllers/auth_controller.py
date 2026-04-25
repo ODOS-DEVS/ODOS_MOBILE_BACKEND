@@ -9,7 +9,7 @@ from app.core.config import settings
 from app.core.google_auth import verify_google_identity_token
 from app.core.security import create_access_token, hash_password, verify_password
 from app.models import AuthProvider, User, UserAuthAccount
-from app.schemas.user import AuthToken, GoogleAuthRequest, UserCreate, UserLogin
+from app.schemas.user import AuthToken, GoogleAuthRequest, UserCreate, UserLogin, UserUpdate
 
 
 def signup_user(db: Session, user_data: UserCreate) -> User:
@@ -180,3 +180,36 @@ def build_auth_token(db: Session, user: User) -> AuthToken:
         expires_in=settings.access_token_expire_minutes * 60,
         user=user,
     )
+
+
+def update_user_profile(db: Session, user: User, payload: UserUpdate) -> User:
+    updates = payload.model_dump(exclude_unset=True)
+
+    phone_number = updates.get("phone_number")
+    if phone_number:
+        existing_phone = db.scalar(
+            select(User).where(
+                User.phone_number == phone_number,
+                User.id != user.id,
+            )
+        )
+        if existing_phone:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="A user with this phone number already exists.",
+            )
+
+    for field, value in updates.items():
+        setattr(user, field, value)
+
+    try:
+        db.commit()
+        db.refresh(user)
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="We couldn't save those profile changes.",
+        ) from None
+
+    return user

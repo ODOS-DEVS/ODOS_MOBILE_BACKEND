@@ -46,6 +46,9 @@ class User(Base):
 
     avatar_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     date_of_birth: Mapped[date | None] = mapped_column(Date, nullable=True)
+    gender: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    city: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    region: Mapped[str | None] = mapped_column(String(120), nullable=True)
     role: Mapped[UserRole] = mapped_column(
         Enum(
             UserRole,

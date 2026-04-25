@@ -3,7 +3,12 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 
-from app.controllers.auth_controller import google_auth_user, login_user, signup_user
+from app.controllers.auth_controller import (
+    google_auth_user,
+    login_user,
+    signup_user,
+    update_user_profile,
+)
 from app.core.auth import get_current_user
 from app.core.database import get_db
 from app.models import User
@@ -14,6 +19,7 @@ from app.schemas.user import (
     UserCreate,
     UserLogin,
     UserRead,
+    UserUpdate,
 )
 
 router = APIRouter(tags=["auth"])
@@ -49,6 +55,17 @@ def me(current_user: Annotated[User, Depends(get_current_user)]):
     return current_user
 
 
+@router.patch("/me", response_model=UserRead)
+def update_me(
+    payload: UserUpdate,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return update_user_profile(db, current_user, payload)
+
+
 @router.post("/logout", response_model=LogoutResponse)
 def logout():
-    return LogoutResponse(message="Logged out successfully. Remove the token on the app.")
+    return LogoutResponse(
+        message="Logged out successfully. Remove the token on the app."
+    )
