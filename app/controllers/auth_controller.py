@@ -1,4 +1,7 @@
-from datetime import UTC, datetime
+import hashlib
+import logging
+import secrets
+from datetime import UTC, datetime, timedelta
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
@@ -7,9 +10,141 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.google_auth import verify_google_identity_token
-from app.core.security import create_access_token, hash_password, verify_password
+from app.core.security import (
+    create_access_token,
+    create_password_reset_token,
+    decode_access_token,
+    hash_password,
+    verify_password,
+)
 from app.models import AuthProvider, User, UserAuthAccount
-from app.schemas.user import AuthToken, GoogleAuthRequest, UserCreate, UserLogin, UserUpdate
+from app.schemas.user import (
+    AuthToken,
+    ForgotPasswordRequest,
+    GoogleAuthRequest,
+    MessageResponse,
+    PasswordResetTokenResponse,
+    ResetPasswordRequest,
+    UserCreate,
+    UserLogin,
+    UserUpdate,
+    VerifyPasswordResetCodeRequest,
+    VerifyEmailRequest,
+)
+from app.services.email_service import send_email_verification_code, send_password_reset_code
+from app.services.email_service import (
+    send_email_verified_success,
+    send_password_changed_success,
+)
+
+logger = logging.getLogger(__name__)
+EMAIL_VERIFICATION_CODE_LENGTH = 6
+
+
+def _generate_email_verification_code() -> str:
+    return f"{secrets.randbelow(10**EMAIL_VERIFICATION_CODE_LENGTH):0{EMAIL_VERIFICATION_CODE_LENGTH}d}"
+
+
+def _hash_email_verification_code(email: str, code: str) -> str:
+    return hashlib.sha256(
+        f"{settings.secret_key}:{email.lower()}:{code}".encode("utf-8")
+    ).hexdigest()
+
+
+def _set_email_verification_code(user: User) -> str:
+    code = _generate_email_verification_code()
+    user.email_verification_code_hash = _hash_email_verification_code(user.email, code)
+    user.email_verification_expires_at = datetime.now(UTC) + timedelta(
+        minutes=settings.email_verification_code_expire_minutes
+    )
+    user.email_verification_sent_at = datetime.now(UTC)
+    return code
+
+
+def _clear_email_verification_code(user: User) -> None:
+    user.email_verification_code_hash = None
+    user.email_verification_expires_at = None
+    user.email_verification_sent_at = None
+
+
+def _set_password_reset_code(user: User) -> str:
+    code = _generate_email_verification_code()
+    user.password_reset_code_hash = _hash_email_verification_code(user.email, code)
+    user.password_reset_expires_at = datetime.now(UTC) + timedelta(
+        minutes=settings.password_reset_code_expire_minutes
+    )
+    user.password_reset_sent_at = datetime.now(UTC)
+    return code
+
+
+def _clear_password_reset_code(user: User) -> None:
+    user.password_reset_code_hash = None
+    user.password_reset_expires_at = None
+    user.password_reset_sent_at = None
+
+
+def _dispatch_email_verification_code(
+    *,
+    user: User,
+    code: str,
+    strict: bool,
+) -> None:
+    try:
+        send_email_verification_code(
+            to_email=user.email,
+            to_name=user.full_name,
+            code=code,
+        )
+    except Exception as exc:
+        logger.exception("Failed to send verification email to %s", user.email)
+        if strict:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="We couldn't send the verification email right now. Please try again.",
+            ) from exc
+
+
+def _dispatch_password_reset_code(
+    *,
+    user: User,
+    code: str,
+) -> None:
+    try:
+        send_password_reset_code(
+            to_email=user.email,
+            to_name=user.full_name,
+            code=code,
+        )
+    except Exception as exc:
+        logger.exception("Failed to send password reset email to %s", user.email)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="We couldn't send the reset code right now. Please try again.",
+        ) from exc
+
+
+def _dispatch_email_verified_success(user: User) -> None:
+    try:
+        send_email_verified_success(
+            to_email=user.email,
+            to_name=user.full_name,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to send email verification success email to %s", user.email
+        )
+
+
+def _dispatch_password_changed_success(user: User) -> None:
+    try:
+        send_password_changed_success(
+            to_email=user.email,
+            to_name=user.full_name,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to send password changed confirmation email to %s", user.email
+        )
 
 
 def signup_user(db: Session, user_data: UserCreate) -> User:
@@ -50,6 +185,11 @@ def signup_user(db: Session, user_data: UserCreate) -> User:
             status_code=status.HTTP_409_CONFLICT,
             detail="A user with these details already exists.",
         ) from None
+
+    code = _set_email_verification_code(user)
+    db.commit()
+    db.refresh(user)
+    _dispatch_email_verification_code(user=user, code=code, strict=False)
 
     return user
 
@@ -180,6 +320,153 @@ def build_auth_token(db: Session, user: User) -> AuthToken:
         expires_in=settings.access_token_expire_minutes * 60,
         user=user,
     )
+
+
+def verify_user_email(
+    db: Session,
+    user: User,
+    payload: VerifyEmailRequest,
+) -> User:
+    if user.is_verified:
+        return user
+
+    if not user.email_verification_code_hash or not user.email_verification_expires_at:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No verification code is active. Request a new code and try again.",
+        )
+
+    if user.email_verification_expires_at < datetime.now(UTC):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This verification code has expired. Request a new one and try again.",
+        )
+
+    expected_hash = _hash_email_verification_code(user.email, payload.code)
+    if not secrets.compare_digest(expected_hash, user.email_verification_code_hash):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="That verification code is not correct.",
+        )
+
+    user.is_verified = True
+    _clear_email_verification_code(user)
+    db.commit()
+    db.refresh(user)
+    _dispatch_email_verified_success(user)
+    return user
+
+
+def resend_verification_code(db: Session, user: User) -> MessageResponse:
+    if user.is_verified:
+        return MessageResponse(message="This email address is already verified.")
+
+    code = _set_email_verification_code(user)
+    db.commit()
+    db.refresh(user)
+    _dispatch_email_verification_code(user=user, code=code, strict=True)
+    return MessageResponse(
+        message="We sent a new verification code to your email address."
+    )
+
+
+def request_password_reset(
+    db: Session,
+    payload: ForgotPasswordRequest,
+) -> MessageResponse:
+    normalized_email = payload.email.lower()
+    user = db.scalar(select(User).where(User.email == normalized_email))
+
+    if not user or not user.is_active or not user.hashed_password:
+        return MessageResponse(
+            message="If that email is registered, a reset code is on the way."
+        )
+
+    code = _set_password_reset_code(user)
+    db.commit()
+    db.refresh(user)
+    _dispatch_password_reset_code(user=user, code=code)
+    return MessageResponse(
+        message="If that email is registered, a reset code is on the way."
+    )
+
+
+def verify_password_reset_code(
+    db: Session,
+    payload: VerifyPasswordResetCodeRequest,
+) -> PasswordResetTokenResponse:
+    normalized_email = payload.email.lower()
+    user = db.scalar(select(User).where(User.email == normalized_email))
+
+    if not user or not user.password_reset_code_hash or not user.password_reset_expires_at:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No reset code is active for this email. Request a new one and try again.",
+        )
+
+    if user.password_reset_expires_at < datetime.now(UTC):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This reset code has expired. Request a new one and try again.",
+        )
+
+    expected_hash = _hash_email_verification_code(user.email, payload.code)
+    if not secrets.compare_digest(expected_hash, user.password_reset_code_hash):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="That reset code is not correct.",
+        )
+
+    reset_token = create_password_reset_token(
+        subject=str(user.id),
+        email=user.email,
+    )
+    return PasswordResetTokenResponse(
+        message="Reset code verified successfully.",
+        reset_token=reset_token,
+    )
+
+
+def reset_password(
+    db: Session,
+    payload: ResetPasswordRequest,
+) -> MessageResponse:
+    normalized_email = payload.email.lower()
+    user = db.scalar(select(User).where(User.email == normalized_email))
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="We couldn't reset the password for that account.",
+        )
+
+    try:
+        token_payload = decode_access_token(payload.reset_token)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This password reset session is no longer valid. Start again.",
+        ) from exc
+
+    if token_payload.get("purpose") != "password_reset":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This password reset session is not valid.",
+        )
+
+    if token_payload.get("sub") != str(user.id) or token_payload.get("email") != normalized_email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This password reset session does not match the account.",
+        )
+
+    user.hashed_password = hash_password(payload.new_password)
+    _clear_password_reset_code(user)
+    db.commit()
+    db.refresh(user)
+    _dispatch_password_changed_success(user)
+
+    return MessageResponse(message="Your password has been updated successfully.")
 
 
 def update_user_profile(db: Session, user: User, payload: UserUpdate) -> User:

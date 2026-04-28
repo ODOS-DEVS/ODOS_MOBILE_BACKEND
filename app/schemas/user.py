@@ -47,6 +47,38 @@ class GoogleAuthRequest(BaseModel):
     id_token: str = Field(min_length=1)
 
 
+class VerifyEmailRequest(BaseModel):
+    code: str = Field(pattern=r"^\d{6}$")
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class VerifyPasswordResetCodeRequest(BaseModel):
+    email: EmailStr
+    code: str = Field(pattern=r"^\d{6}$")
+
+
+class PasswordResetTokenResponse(BaseModel):
+    message: str
+    reset_token: str
+
+
+class ResetPasswordRequest(BaseModel):
+    email: EmailStr
+    reset_token: str = Field(min_length=1)
+    new_password: str = Field(min_length=8, max_length=72)
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_bcrypt_password_length(cls, value: str) -> str:
+        if len(value.encode("utf-8")) > 72:
+            raise ValueError("Password must be 72 bytes or fewer.")
+
+        return value
+
+
 class UserUpdate(BaseModel):
     full_name: str | None = Field(default=None, min_length=2, max_length=120)
     phone_number: str | None = Field(default=None, max_length=30)
@@ -102,4 +134,8 @@ class AuthToken(BaseModel):
 
 
 class LogoutResponse(BaseModel):
+    message: str
+
+
+class MessageResponse(BaseModel):
     message: str

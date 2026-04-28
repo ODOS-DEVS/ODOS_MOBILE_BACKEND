@@ -6,20 +6,31 @@ from sqlalchemy.orm import Session
 from app.controllers.auth_controller import (
     google_auth_user,
     login_user,
+    request_password_reset,
+    resend_verification_code,
+    reset_password,
     signup_user,
     update_user_profile,
+    verify_password_reset_code,
+    verify_user_email,
 )
 from app.core.auth import get_current_user
 from app.core.database import get_db
 from app.models import User
 from app.schemas.user import (
     AuthToken,
+    ForgotPasswordRequest,
     GoogleAuthRequest,
     LogoutResponse,
+    MessageResponse,
+    PasswordResetTokenResponse,
+    ResetPasswordRequest,
     UserCreate,
     UserLogin,
     UserRead,
     UserUpdate,
+    VerifyPasswordResetCodeRequest,
+    VerifyEmailRequest,
 )
 
 router = APIRouter(tags=["auth"])
@@ -41,13 +52,54 @@ def login(
 ):
     return login_user(db, credentials)
 
-
+  
 @router.post("/google", response_model=AuthToken)
 def google_auth(
     payload: GoogleAuthRequest,
     db: Session = Depends(get_db),
 ):
     return google_auth_user(db, payload)
+
+
+@router.post("/verify-email", response_model=UserRead)
+def verify_email(
+    payload: VerifyEmailRequest,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return verify_user_email(db, current_user, payload)
+
+
+@router.post("/forgot-password", response_model=MessageResponse)
+def forgot_password(
+    payload: ForgotPasswordRequest,
+    db: Session = Depends(get_db),
+):
+    return request_password_reset(db, payload)
+
+
+@router.post("/verify-reset-code", response_model=PasswordResetTokenResponse)
+def verify_reset_code(
+    payload: VerifyPasswordResetCodeRequest,
+    db: Session = Depends(get_db),
+):
+    return verify_password_reset_code(db, payload)
+
+
+@router.post("/reset-password", response_model=MessageResponse)
+def reset_password_route(
+    payload: ResetPasswordRequest,
+    db: Session = Depends(get_db),
+):
+    return reset_password(db, payload)
+
+
+@router.post("/resend-verification-code", response_model=MessageResponse)
+def resend_email_verification_code(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return resend_verification_code(db, current_user)
 
 
 @router.get("/me", response_model=UserRead)
