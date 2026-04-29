@@ -20,18 +20,43 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 
 def create_access_token(subject: str) -> str:
+    return create_signed_token(
+        subject=subject,
+        expires_in_minutes=settings.access_token_expire_minutes,
+    )
+
+
+def create_signed_token(
+    *,
+    subject: str,
+    expires_in_minutes: int,
+    extra_claims: dict | None = None,
+) -> str:
     now = datetime.now(UTC)
-    expires_at = now + timedelta(minutes=settings.access_token_expire_minutes)
+    expires_at = now + timedelta(minutes=expires_in_minutes)
     payload = {
         "sub": subject,
         "iat": now,
         "exp": expires_at,
     }
+    if extra_claims:
+        payload.update(extra_claims)
 
     return jwt.encode(
         payload,
         settings.secret_key,
         algorithm=settings.jwt_algorithm,
+    )
+
+
+def create_password_reset_token(subject: str, email: str) -> str:
+    return create_signed_token(
+        subject=subject,
+        expires_in_minutes=settings.password_reset_token_expire_minutes,
+        extra_claims={
+            "purpose": "password_reset",
+            "email": email.lower(),
+        },
     )
 
 
