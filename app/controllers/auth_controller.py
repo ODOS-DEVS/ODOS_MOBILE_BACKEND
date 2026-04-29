@@ -18,6 +18,7 @@ from app.core.security import (
     verify_password,
 )
 from app.models import AuthProvider, User, UserAuthAccount
+from app.controllers.notification_controller import create_notification_event
 from app.schemas.user import (
     AuthToken,
     ForgotPasswordRequest,
@@ -187,6 +188,18 @@ def signup_user(db: Session, user_data: UserCreate) -> User:
         ) from None
 
     code = _set_email_verification_code(user)
+    create_notification_event(
+        db,
+        user,
+        kind="account_ready",
+        title="Your account is ready",
+        body="You can now browse, place orders, and manage everything from your profile.",
+        icon="person-outline",
+        accent="neutral",
+        action_label="Open profile",
+        route_type="profile",
+        route_target_id=str(user.id),
+    )
     db.commit()
     db.refresh(user)
     _dispatch_email_verification_code(user=user, code=code, strict=False)
@@ -351,6 +364,18 @@ def verify_user_email(
 
     user.is_verified = True
     _clear_email_verification_code(user)
+    create_notification_event(
+        db,
+        user,
+        kind="email_verified",
+        title="Email verified successfully",
+        body="Your account is now fully verified and ready for secure shopping.",
+        icon="mail-outline",
+        accent="success",
+        action_label="View profile",
+        route_type="profile",
+        route_target_id=str(user.id),
+    )
     db.commit()
     db.refresh(user)
     _dispatch_email_verified_success(user)
@@ -462,6 +487,18 @@ def reset_password(
 
     user.hashed_password = hash_password(payload.new_password)
     _clear_password_reset_code(user)
+    create_notification_event(
+        db,
+        user,
+        kind="password_changed",
+        title="Password changed successfully",
+        body="Your password was updated and your account is secure again.",
+        icon="person-outline",
+        accent="neutral",
+        action_label="Open profile",
+        route_type="profile",
+        route_target_id=str(user.id),
+    )
     db.commit()
     db.refresh(user)
     _dispatch_password_changed_success(user)

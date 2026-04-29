@@ -79,6 +79,97 @@ class ResetPasswordRequest(BaseModel):
         return value
 
 
+class WishlistItemCreate(BaseModel):
+    product_id: str = Field(min_length=1, max_length=100)
+    title: str = Field(min_length=1, max_length=255)
+    image_url: str | None = Field(default=None, max_length=500)
+    category: str | None = Field(default=None, max_length=120)
+    price: str | None = Field(default=None, max_length=50)
+    old_price: str | None = Field(default=None, max_length=50)
+    rating: str | None = Field(default=None, max_length=50)
+    reviews: str | None = Field(default=None, max_length=50)
+
+    @field_validator(
+        "product_id",
+        "title",
+        "image_url",
+        "category",
+        "price",
+        "old_price",
+        "rating",
+        "reviews",
+        mode="before",
+    )
+    @classmethod
+    def strip_wishlist_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+
+        cleaned_value = value.strip()
+        return cleaned_value or None
+
+
+class WishlistItemRead(BaseModel):
+    id: uuid.UUID
+    product_id: str
+    title: str
+    image_url: str | None
+    category: str | None
+    price: str | None
+    old_price: str | None
+    rating: str | None
+    reviews: str | None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class CartItemCreate(BaseModel):
+    product_id: str = Field(min_length=1, max_length=100)
+    title: str = Field(min_length=1, max_length=255)
+    image_url: str | None = Field(default=None, max_length=500)
+    image_key: str | None = Field(default=None, max_length=100)
+    category: str | None = Field(default=None, max_length=120)
+    price: str = Field(min_length=1, max_length=50)
+    quantity: int = Field(default=1, ge=1, le=99)
+
+    @field_validator(
+        "product_id",
+        "title",
+        "image_url",
+        "image_key",
+        "category",
+        "price",
+        mode="before",
+    )
+    @classmethod
+    def strip_cart_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+
+        cleaned_value = value.strip()
+        return cleaned_value or None
+
+
+class CartItemUpdate(BaseModel):
+    quantity: int = Field(ge=1, le=99)
+
+
+class CartItemRead(BaseModel):
+    id: uuid.UUID
+    product_id: str
+    title: str
+    image_url: str | None
+    image_key: str | None
+    category: str | None
+    price: str
+    quantity: int
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class UserUpdate(BaseModel):
     full_name: str | None = Field(default=None, min_length=2, max_length=120)
     phone_number: str | None = Field(default=None, max_length=30)
@@ -87,6 +178,12 @@ class UserUpdate(BaseModel):
     gender: str | None = Field(default=None, max_length=30)
     city: str | None = Field(default=None, max_length=120)
     region: str | None = Field(default=None, max_length=120)
+    allow_notifications: bool | None = None
+    discount_notifications: bool | None = None
+    store_notifications: bool | None = None
+    system_notifications: bool | None = None
+    location_notifications: bool | None = None
+    location_updates: bool | None = None
 
     @field_validator(
         "full_name",
@@ -116,6 +213,12 @@ class UserRead(BaseModel):
     gender: str | None
     city: str | None
     region: str | None
+    allow_notifications: bool
+    discount_notifications: bool
+    store_notifications: bool
+    system_notifications: bool
+    location_notifications: bool
+    location_updates: bool
     role: UserRole
     is_active: bool
     is_verified: bool
