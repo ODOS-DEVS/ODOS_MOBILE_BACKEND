@@ -24,6 +24,10 @@ def get_categories(db: Session = Depends(get_db)):
 def get_products(
     audience: str | None = Query(default=None, max_length=50),
     section: str | None = Query(default=None, max_length=50),
+    placement: str | None = Query(default=None, max_length=50),
+    category: str | None = Query(default=None, max_length=120),
+    subcategory: str | None = Query(default=None, max_length=120),
+    store_id: str | None = Query(default=None, max_length=100),
     limit: int | None = Query(default=None, ge=1, le=100),
     db: Session = Depends(get_db),
 ):
@@ -31,6 +35,10 @@ def get_products(
         db,
         audience=audience,
         section=section,
+        placement=placement,
+        category=category,
+        subcategory=subcategory,
+        store_id=store_id,
         limit=limit,
     )
 
@@ -56,9 +64,10 @@ def get_markets(db: Session = Depends(get_db)):
 def get_stores(
     market_slug: str | None = Query(default=None, max_length=50),
     category: str | None = Query(default=None, max_length=120),
+    audience: str | None = Query(default=None, max_length=50),
     db: Session = Depends(get_db),
 ):
-    return list_stores(db, market_slug=market_slug, category=category)
+    return list_stores(db, market_slug=market_slug, category=category, audience=audience)
 
 
 @router.get("/stores/{store_id}", response_model=StoreRead)

@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.auth import raise_account_blocked
 from app.core.config import settings
 from app.core.google_auth import verify_google_identity_token
 from app.core.security import (
@@ -232,10 +233,7 @@ def login_user(db: Session, credentials: UserLogin) -> AuthToken:
         )
 
     if not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="This account is disabled.",
-        )
+        raise_account_blocked()
 
     return build_auth_token(db, user)
 
@@ -272,10 +270,7 @@ def google_auth_user(db: Session, payload: GoogleAuthRequest) -> AuthToken:
     if linked_account:
         user = linked_account.user
         if not user.is_active:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="This account is disabled.",
-            )
+            raise_account_blocked()
         if avatar_url and not user.avatar_url:
             user.avatar_url = avatar_url
         return build_auth_token(db, user)
@@ -285,10 +280,7 @@ def google_auth_user(db: Session, payload: GoogleAuthRequest) -> AuthToken:
 
     if user:
         if not user.is_active:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="This account is disabled.",
-            )
+            raise_account_blocked()
         if not email_verified:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,

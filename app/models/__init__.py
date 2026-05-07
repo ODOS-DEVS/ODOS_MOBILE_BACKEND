@@ -8,8 +8,10 @@ from app.models.user import (
     User,
     UserAuthAccount,
     UserRole,
+    VendorStatus,
     WishlistItem,
 )
+from app.models.vendor import VendorApplication
 
 __all__ = [
     "AuthProvider",
@@ -28,5 +30,7 @@ __all__ = [
     "User",
     "UserAuthAccount",
     "UserRole",
+    "VendorApplication",
+    "VendorStatus",
     "WishlistItem",
 ]

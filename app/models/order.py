@@ -25,6 +25,13 @@ class Order(Base):
     )
     source: Mapped[str] = mapped_column(String(30), nullable=False, default="buy_now")
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="processing", index=True)
+    vendor_status: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        default="pending",
+        server_default="pending",
+        index=True,
+    )
     subtotal_amount: Mapped[float] = mapped_column(Float, nullable=False)
     shipping_amount: Mapped[float] = mapped_column(Float, nullable=False, default=0)
     total_amount: Mapped[float] = mapped_column(Float, nullable=False)
