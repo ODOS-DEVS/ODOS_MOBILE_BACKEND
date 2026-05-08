@@ -1,107 +1,57 @@
 # ODOS Mobile Backend
 
-ODOS Mobile Backend is the FastAPI API for the ODOS mobile app.
+ODOS Mobile Backend is the FastAPI API for the ODOS ecosystem. It serves the mobile shopper app and the admin dashboard, including auth, account data, catalog, stores, orders, notifications, and admin management flows.
 
-It currently handles:
-
-- email/password signup
-- email verification by code
-- email/password login
-- bearer-token auth
-- current-user lookup
-- profile updates
-- forgot password
-- password reset by code
-- logout response
-- Google auth backend support
-
-This repository is the backend/API project. The Expo mobile client lives separately at:
+Mobile repo:
 
 `/Users/paul/Desktop/DeV/odos-workspace/odos-mobile-expo`
 
-## Current Status
+Admin repo:
 
-The backend is in a solid development state for auth and user account flows.
+`/Users/paul/Desktop/DeV/odos-workspace/ODOS_ADMIN`
 
-Implemented now:
-
-- FastAPI app bootstrapped and running
-- PostgreSQL via SQLAlchemy
-- Alembic migrations
-- `users` table
-- `user_auth_accounts` table for provider-linked auth accounts
-- email verification email sending via Brevo
-- password reset email sending via Brevo
-- verification-success email
-- password-changed confirmation email
-- JWT bearer auth
-- current-user endpoint
-- profile update endpoint
-- Google ID token verification support
-
-Important current realities:
-
-- the mobile app currently uses email/password auth in Expo Go
-- Google auth support exists on the backend, but the current frontend flow is not using it
-- products, carts, orders, stores, payments, and catalog entities are still not implemented
-
-## Tech Stack
+## Stack
 
 - FastAPI
-- Uvicorn
 - SQLAlchemy 2
 - Alembic
 - PostgreSQL
-- Psycopg 3
 - Pydantic Settings
-- bcrypt
-- PyJWT
-- Brevo transactional email API
-- Google ID token verification via `google-auth`
+- JWT auth
+- Brevo transactional email
 
-## Project Structure
+## Current Backend Coverage
 
-```text
-app/
-  main.py
-  controllers/
-    auth_controller.py
-  core/
-    auth.py
-    config.py
-    database.py
-    google_auth.py
-    security.py
-  models/
-    __init__.py
-    user.py
-  routes/
-    auth.py
-    health.py
-  schemas/
-    __init__.py
-    user.py
-  services/
-    email_service.py
+- Email/password signup and login
+- Email verification and password reset codes
+- Google auth backend support
+- Profile, address, and payment-method APIs
+- Wishlist and cart persistence
+- Catalog products, categories, markets, and stores
+- Order creation and lifecycle actions
+- Notification event storage and read state
+- Expo push token registration
+- Admin auth, dashboard, vendors, users, orders, notifications, markets, stores, categories, and products
 
-alembic/
-  versions/
+## New Catalog/Admin Capabilities
 
-alembic.ini
-requirements.txt
-.env.example
-```
+- Admin-created stores
+- Category image uploads
+- Category subcategory lists stored in the database
+- Product links to one or more category slugs and one or more subcategory slugs
+- Dynamic ODOS taxonomy seed data in the migration layer
+- Public catalog filtering by category and subcategory for the mobile app
 
 ## Prerequisites
 
 - Python 3.11+
 - PostgreSQL
-- pgAdmin optional, for inspection
-- a Brevo account if you want email verification and password reset delivery
+- virtualenv support
+- Brevo account if you want real email delivery
 
-## Environment Setup
+## Setup
 
-Create a virtual environment:
+Create and activate a virtual environment:
 
 ```bash
 python3 -m venv .venv
@@ -114,15 +64,15 @@ Install dependencies:
 pip install -r requirements.txt
 ```
 
-Create your env file:
+Create environment file:
 
 ```bash
 cp .env.example .env
 ```
 
-Then fill in real values.
+## Environment Variables
 
-## Example Environment
+Example:
 
 ```env
 DATABASE_URL=postgresql+psycopg://odos_user:your_password@localhost:5432/odos_mobile
@@ -139,15 +89,7 @@ PASSWORD_RESET_CODE_EXPIRE_MINUTES=10
 PASSWORD_RESET_TOKEN_EXPIRE_MINUTES=15
 ```
 
-## Database Setup
-
-Create a PostgreSQL database and user, then point `DATABASE_URL` at it.
-
-Typical local setup:
-
-- database: `odos_mobile`
-- user: `odos_user`
-- password: your local password
+## Database
 
 Run migrations:
 
@@ -155,9 +97,12 @@ Run migrations:
 alembic upgrade head
 ```
 
-## Run The Backend
+Important:
 
-Start the server:
+- run migrations before using the latest admin category/store/product features
+- the latest migration seeds the ODOS category taxonomy and adds category/product taxonomy fields
+
+## Run
 
 ```bash
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
@@ -165,198 +110,75 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 Useful URLs:
 
-- API docs: `http://127.0.0.1:8000/docs`
-- Health check: `http://127.0.0.1:8000/api/health`
+- `http://127.0.0.1:8000/docs`
+- `http://127.0.0.1:8000/api/health`
 
-Using `--host 0.0.0.0` is important if a real phone on the same network will connect to the API.
+Use `--host 0.0.0.0` for real-device mobile testing on the same network.
 
-## Auth Endpoints
+## Route Groups
 
-Current auth endpoints:
+### Shopper-facing
 
-- `POST /api/auth/signup`
-- `POST /api/auth/login`
-- `POST /api/auth/google`
-- `POST /api/auth/verify-email`
-- `POST /api/auth/resend-verification-code`
-- `POST /api/auth/forgot-password`
-- `POST /api/auth/verify-reset-code`
-- `POST /api/auth/reset-password`
-- `GET /api/auth/me`
-- `PATCH /api/auth/me`
-- `POST /api/auth/logout`
+- `/api/auth/*`
+- `/api/account/*`
+- `/api/cart*`
+- `/api/wishlist*`
+- `/api/catalog/*`
+- `/api/orders*`
+- `/api/notifications*`
+- `/api/health`
 
-Support endpoint:
+### Admin-facing
 
-- `GET /api/health`
+- `/api/admin/auth/*`
+- `/api/admin/dashboard`
+- `/api/admin/users*`
+- `/api/admin/vendors*`
+- `/api/admin/vendor-applications*`
+- `/api/admin/markets*`
+- `/api/admin/stores*`
+- `/api/admin/categories*`
+- `/api/admin/products*`
+- `/api/admin/orders*`
+- `/api/admin/notifications*`
 
-## Auth Flow
+## Project Structure
 
-### Email/Password Signup
+```text
+app/
+  controllers/
+  core/
+  models/
+  routes/
+  schemas/
+  services/
 
-1. frontend calls `POST /api/auth/signup`
-2. backend creates the user with a hashed password
-3. backend creates a 6-digit email verification code
-4. backend stores the hashed code and expiry
-5. backend sends the verification email through Brevo
+alembic/
+  versions/
+```
 
-### Email Verification
+## Notable Files
 
-1. frontend sends the code to `POST /api/auth/verify-email`
-2. backend validates the code and expiry
-3. backend marks `is_verified = true`
-4. backend clears the verification code fields
-5. backend sends an email-verification success email
+- [app/main.py](/Users/paul/Desktop/DeV/odos-workspace/ODOS_MOBILE_BACKEND/app/main.py:1)
+- [app/routes/admin.py](/Users/paul/Desktop/DeV/odos-workspace/ODOS_MOBILE_BACKEND/app/routes/admin.py:1)
+- [app/controllers/admin_controller.py](/Users/paul/Desktop/DeV/odos-workspace/ODOS_MOBILE_BACKEND/app/controllers/admin_controller.py:1)
+- [app/routes/catalog.py](/Users/paul/Desktop/DeV/odos-workspace/ODOS_MOBILE_BACKEND/app/routes/catalog.py:1)
+- [app/controllers/catalog_controller.py](/Users/paul/Desktop/DeV/odos-workspace/ODOS_MOBILE_BACKEND/app/controllers/catalog_controller.py:1)
+- [app/core/catalog_taxonomy.py](/Users/paul/Desktop/DeV/odos-workspace/ODOS_MOBILE_BACKEND/app/core/catalog_taxonomy.py:1)
+- [alembic/versions/c4d8e1b7a2f0_add_category_media_and_product_taxonomy.py](/Users/paul/Desktop/DeV/odos-workspace/ODOS_MOBILE_BACKEND/alembic/versions/c4d8e1b7a2f0_add_category_media_and_product_taxonomy.py:1)
 
-### Login
+## Verification
 
-1. frontend calls `POST /api/auth/login`
-2. backend verifies password
-3. backend returns a bearer token plus current user
-4. frontend uses the token for `/api/auth/me`
-
-### Forgot Password
-
-1. frontend calls `POST /api/auth/forgot-password`
-2. backend generates a 6-digit reset code
-3. backend stores the hashed reset code and expiry
-4. backend sends the reset email through Brevo
-5. frontend calls `POST /api/auth/verify-reset-code`
-6. backend returns a short-lived password reset token
-7. frontend calls `POST /api/auth/reset-password`
-8. backend updates the password hash
-9. backend sends a password-changed confirmation email
-
-### Google Auth
-
-Google auth support exists through `POST /api/auth/google`.
-
-The backend:
-
-- verifies the Google ID token
-- checks the token audience against configured client IDs
-- finds or creates the local ODOS user
-- links provider identity in `user_auth_accounts`
-- returns the normal ODOS bearer token
-
-This is ready on the backend, but the current Expo Go frontend flow is not using it.
-
-## User Model
-
-The user model currently supports:
-
-- UUID primary key
-- full name
-- email
-- optional phone number
-- nullable hashed password
-- avatar URL
-- date of birth
-- gender
-- city
-- region
-- role
-- active/verified flags
-- email verification code hash / expiry / sent time
-- password reset code hash / expiry / sent time
-- last login timestamp
-- created/updated timestamps
-
-Provider-linked auth accounts are stored separately in `user_auth_accounts`.
-
-## Migrations
-
-Apply all migrations:
+Syntax check on changed files:
 
 ```bash
-alembic upgrade head
+python3 -m py_compile app/**/*.py
 ```
 
-Create a new migration after model changes:
+Targeted checks I used for the recent catalog/admin change included `app/routes/admin.py`, `app/controllers/admin_controller.py`, `app/routes/catalog.py`, `app/controllers/catalog_controller.py`, and the latest Alembic migration.
 
-```bash
-alembic revision --autogenerate -m "describe change"
-```
+## Notes
 
-## Frontend Connection
-
-The frontend should point its env to this backend:
-
-```env
-EXPO_PUBLIC_API_URL=http://YOUR-MAC-LAN-IP:8000/api
-```
-
-Example:
-
-```env
-EXPO_PUBLIC_API_URL=http://10.11.24.79:8000/api
-```
-
-If using a real phone:
-
-- backend must run with `--host 0.0.0.0`
-- phone and Mac must be on the same Wi‑Fi
-
-## Important Files
-
-- [app/main.py](/Users/paul/Desktop/DeV/odos-workspace/ODOS_MOBILE_BACKEND/app/main.py)
-- [app/routes/auth.py](/Users/paul/Desktop/DeV/odos-workspace/ODOS_MOBILE_BACKEND/app/routes/auth.py)
-- [app/controllers/auth_controller.py](/Users/paul/Desktop/DeV/odos-workspace/ODOS_MOBILE_BACKEND/app/controllers/auth_controller.py)
-- [app/core/security.py](/Users/paul/Desktop/DeV/odos-workspace/ODOS_MOBILE_BACKEND/app/core/security.py)
-- [app/core/auth.py](/Users/paul/Desktop/DeV/odos-workspace/ODOS_MOBILE_BACKEND/app/core/auth.py)
-- [app/core/google_auth.py](/Users/paul/Desktop/DeV/odos-workspace/ODOS_MOBILE_BACKEND/app/core/google_auth.py)
-- [app/models/user.py](/Users/paul/Desktop/DeV/odos-workspace/ODOS_MOBILE_BACKEND/app/models/user.py)
-- [app/schemas/user.py](/Users/paul/Desktop/DeV/odos-workspace/ODOS_MOBILE_BACKEND/app/schemas/user.py)
-- [app/services/email_service.py](/Users/paul/Desktop/DeV/odos-workspace/ODOS_MOBILE_BACKEND/app/services/email_service.py)
-
-## Troubleshooting
-
-### Backend starts but mobile app cannot connect
-
-Check:
-
-- backend is running with `--host 0.0.0.0`
-- frontend is using the correct Mac LAN IP
-- your phone and Mac are on the same network
-
-### Verification or reset emails are not arriving
-
-Check:
-
-- `BREVO_API_KEY` is a real API key, not an SMTP password
-- `BREVO_SENDER_EMAIL` is verified in Brevo
-- backend has been restarted after `.env` changes
-- Brevo transactional logs show successful delivery
-
-### `401` on `/api/auth/me`
-
-Check:
-
-- frontend is sending `Authorization: Bearer <token>`
-- token was stored correctly after login
-- token is not expired
-- `SECRET_KEY` is unchanged from when the token was issued
-
-### Database migration issues
-
-Check:
-
-- PostgreSQL is running
-- `DATABASE_URL` is correct
-- the database user has privileges on the target database
-
-### Google auth returns audience/config errors
-
-Check:
-
-- `GOOGLE_CLIENT_IDS` is set in `.env`
-- backend has been restarted after changing `.env`
-- the ID token comes from a client whose audience matches one of the configured client IDs
-
-## Recommended Next Steps
-
-1. add product, store, market, and category models
-2. add cart and wishlist persistence
-3. add order and checkout models/endpoints
-4. add automated tests for auth and user flows
-5. reintroduce a production-ready mobile Google auth flow later
+- Media uploads are used for category images and store assets.
+- Admin product creation now accepts store assignment plus multiple category/subcategory links.
+- The mobile app uses the backend category taxonomy directly, so category naming and subcategory structure should be managed carefully from admin.

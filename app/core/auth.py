@@ -11,6 +11,16 @@ from app.core.security import decode_access_token
 from app.models import User
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
+ACCOUNT_BLOCKED_ERROR_CODE = "ACCOUNT_BLOCKED"
+ACCOUNT_BLOCKED_MESSAGE = "This account has been blocked. Contact ODOS support."
+
+
+def raise_account_blocked() -> None:
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=ACCOUNT_BLOCKED_MESSAGE,
+        headers={"X-Error-Code": ACCOUNT_BLOCKED_ERROR_CODE},
+    )
 
 
 def get_current_user(
@@ -44,9 +54,6 @@ def get_current_user(
         raise credentials_error
 
     if not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="This account is disabled.",
-        )
+        raise_account_blocked()
 
     return user
