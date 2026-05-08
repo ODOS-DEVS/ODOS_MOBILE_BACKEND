@@ -1,6 +1,8 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Request, status
+from fastapi.exceptions import RequestValidationError
+from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.controllers.auth_controller import (
@@ -46,10 +48,28 @@ def signup(user_data: UserCreate, db: Session = Depends(get_db)):
 
 
 @router.post("/login", response_model=AuthToken)
-def login(
-    credentials: UserLogin,
+async def login(
+    request: Request,
     db: Session = Depends(get_db),
 ):
+    content_type = request.headers.get("content-type", "").lower()
+
+    try:
+        if (
+            "application/x-www-form-urlencoded" in content_type
+            or "multipart/form-data" in content_type
+        ):
+            form_data = await request.form()
+            credentials = UserLogin(
+                email=str(form_data.get("username", "")),
+                password=str(form_data.get("password", "")),
+            )
+        else:
+            payload = await request.json()
+            credentials = UserLogin.model_validate(payload)
+    except ValidationError as exc:
+        raise RequestValidationError(exc.errors()) from exc
+
     return login_user(db, credentials)
 
   

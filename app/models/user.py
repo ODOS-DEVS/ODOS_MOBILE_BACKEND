@@ -15,6 +15,15 @@ class UserRole(str, enum.Enum):
     ADMIN = "admin"
 
 
+class VendorStatus(str, enum.Enum):
+    NONE = "none"
+    PENDING = "pending"
+    UNDER_REVIEW = "under_review"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    SUSPENDED = "suspended"
+
+
 class AuthProvider:
     GOOGLE = "google"
     PASSWORD = "password"
@@ -96,6 +105,20 @@ class User(Base):
         server_default=UserRole.CUSTOMER.value,
         nullable=False,
     )
+    vendor_status: Mapped[VendorStatus] = mapped_column(
+        Enum(
+            VendorStatus,
+            name="vendor_status",
+            values_callable=lambda values: [value.value for value in values],
+        ),
+        default=VendorStatus.NONE,
+        server_default=VendorStatus.NONE.value,
+        nullable=False,
+    )
+    vendor_rejection_reason: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+    )
 
     is_active: Mapped[bool] = mapped_column(
         Boolean,
@@ -152,6 +175,11 @@ class User(Base):
         back_populates="user",
         cascade="all, delete-orphan",
     )
+    vendor_application: Mapped["VendorApplication | None"] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
     wishlist_items: Mapped[list["WishlistItem"]] = relationship(
         back_populates="user",
         cascade="all, delete-orphan",
@@ -183,6 +211,25 @@ class User(Base):
 
     def __repr__(self) -> str:
         return f"User(id={self.id!s}, email={self.email!r}, role={self.role.value!r})"
+
+    @property
+    def roles(self) -> list[str]:
+        roles = [UserRole.CUSTOMER.value]
+
+        if self.role == UserRole.ADMIN:
+            roles.append(UserRole.ADMIN.value)
+
+        if self.role == UserRole.VENDOR or self.vendor_status == VendorStatus.APPROVED:
+            roles.append(UserRole.VENDOR.value)
+
+        return roles
+
+    @property
+    def vendor_id(self) -> str | None:
+        if self.vendor_status != VendorStatus.APPROVED:
+            return None
+
+        return str(self.id)
 
 
 class UserAuthAccount(Base):

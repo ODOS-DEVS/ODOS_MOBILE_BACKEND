@@ -3,7 +3,7 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
-from app.models import UserRole
+from app.models import UserRole, VendorStatus
 
 
 class UserCreate(BaseModel):
@@ -220,6 +220,10 @@ class UserRead(BaseModel):
     location_notifications: bool
     location_updates: bool
     role: UserRole
+    roles: list[str]
+    vendor_status: VendorStatus
+    vendor_id: str | None
+    vendor_rejection_reason: str | None
     is_active: bool
     is_verified: bool
     last_login_at: datetime | None
