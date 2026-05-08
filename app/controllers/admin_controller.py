@@ -974,6 +974,16 @@ def get_admin_product(db: Session, current_user: User, product_id: str) -> Admin
     return _serialize_product(product, store_name=store_name)
 
 
+def _get_store_for_admin_product(db: Session, store_id: str | None) -> Store:
+    if store_id:
+        store = db.scalar(select(Store).where(Store.id == store_id))
+        if not store:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Store not found.")
+        return store
+
+    return _ensure_platform_store(db)
+
+
 async def create_admin_product(
     db: Session,
     current_user: User,
@@ -984,13 +994,7 @@ async def create_admin_product(
     if payload.status not in SUPPORTED_PRODUCT_STATUSES:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported product status.")
 
-    store = None
-    if payload.store_id:
-        store = db.scalar(select(Store).where(Store.id == payload.store_id))
-        if not store:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Store not found.")
-    else:
-        store = _ensure_platform_store(db)
+    store = _get_store_for_admin_product(db, payload.store_id)
 
     image_urls = await save_image_uploads(images, folder="products")
     image_url = image_urls[0] if image_urls else None
@@ -1029,15 +1033,78 @@ async def create_admin_product(
         description=payload.description,
         stock=payload.stock,
         status=payload.status,
-        store_id=store.id if store else None,
-        vendor_user_id=None,
+        store_id=store.id,
+        vendor_user_id=store.vendor_user_id,
         sort_order=0,
         is_active=payload.status == "active",
     )
     db.add(product)
     db.commit()
     db.refresh(product)
-    return _serialize_product(product, store_name=store.title if store else None)
+    return _serialize_product(product, store_name=store.title)
+
+
+async def update_admin_product(
+    db: Session,
+    current_user: User,
+    product_id: str,
+    payload: AdminProductCreate,
+    images: list[UploadFile] | None,
+) -> AdminProductRead:
+    require_admin(current_user)
+    if payload.status not in SUPPORTED_PRODUCT_STATUSES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported product status.")
+
+    product = db.scalar(select(Product).where(Product.id == product_id))
+    if not product:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found.")
+
+    store = _get_store_for_admin_product(db, payload.store_id)
+    uploaded_image_urls = await save_image_uploads(images, folder="products")
+    existing_image_urls = list(product.image_urls or ([] if not product.image_url else [product.image_url]))
+    next_image_urls = existing_image_urls + uploaded_image_urls if uploaded_image_urls else existing_image_urls
+
+    (
+        primary_category,
+        primary_subcategory,
+        normalized_category_slugs,
+        normalized_subcategory_slugs,
+    ) = _resolve_product_taxonomy(
+        category=payload.category,
+        subcategory=payload.subcategory,
+        category_slugs=payload.category_slugs,
+        subcategory_slugs=payload.subcategory_slugs,
+    )
+
+    product.audience_slug = payload.audience_slug or ((store.audience_slugs or [None])[0] if store else None)
+    product.section = payload.section
+    product.title = payload.name
+    product.category = primary_category
+    product.subcategory = primary_subcategory
+    product.category_slugs = normalized_category_slugs
+    product.subcategory_slugs = normalized_subcategory_slugs
+    product.price = payload.price
+    product.old_price = payload.old_price
+    product.discount = _build_discount(payload.price, payload.old_price)
+    product.rating = payload.rating
+    product.reviews = payload.reviews
+    product.image_key = payload.image_key or product.image_key or _infer_image_key(primary_category)
+    product.image_urls = next_image_urls or None
+    product.image_url = next_image_urls[0] if next_image_urls else None
+    product.color_options = _normalize_list(payload.color_options)
+    product.size_options = _normalize_list(payload.size_options)
+    product.specifications = _normalize_list(payload.specifications)
+    product.placement_tags = _normalize_list(payload.placement_tags)
+    product.description = payload.description
+    product.stock = payload.stock
+    product.status = payload.status
+    product.store_id = store.id
+    product.vendor_user_id = store.vendor_user_id
+    product.is_active = payload.status == "active"
+
+    db.commit()
+    db.refresh(product)
+    return _serialize_product(product, store_name=store.title)
 
 
 def update_admin_product_status(

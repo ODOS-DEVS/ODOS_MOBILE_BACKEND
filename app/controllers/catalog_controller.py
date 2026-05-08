@@ -4,6 +4,18 @@ from sqlalchemy.orm import Session
 from app.models import Category, Market, Product, Store
 
 
+def _normalize_filter_value(value: str) -> str:
+    cleaned = "".join(character if character.isalnum() else "-" for character in value.lower().strip())
+    return "-".join(segment for segment in cleaned.split("-") if segment)
+
+
+def _normalized_column_value(column):
+    return func.btrim(
+        func.regexp_replace(func.lower(func.coalesce(column, "")), r"[^a-z0-9]+", "-", "g"),
+        "-",
+    )
+
+
 def list_catalog_categories(db: Session) -> list[Category]:
     return list(
         db.scalars(
@@ -43,20 +55,20 @@ def list_catalog_products(
         )
 
     if category:
-        normalized_category = category.strip().lower()
+        normalized_category = _normalize_filter_value(category)
         statement = statement.where(
             or_(
                 Product.category_slugs.contains([normalized_category]),
-                func.lower(Product.category) == normalized_category,
+                _normalized_column_value(Product.category) == normalized_category,
             )
         )
 
     if subcategory:
-        normalized_subcategory = subcategory.strip().lower()
+        normalized_subcategory = _normalize_filter_value(subcategory)
         statement = statement.where(
             or_(
                 Product.subcategory_slugs.contains([normalized_subcategory]),
-                func.lower(Product.subcategory) == normalized_subcategory,
+                _normalized_column_value(Product.subcategory) == normalized_subcategory,
             )
         )
 

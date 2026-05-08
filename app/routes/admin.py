@@ -35,6 +35,7 @@ from app.controllers.admin_controller import (
     update_admin_market,
     update_admin_order_status,
     update_admin_profile,
+    update_admin_product,
     update_admin_product_status,
     update_admin_store_status,
     update_admin_user_status,
@@ -490,6 +491,58 @@ def get_product(
     db: Session = Depends(get_db),
 ):
     return get_admin_product(db, current_user, product_id)
+
+
+@router.patch("/products/{product_id}", response_model=AdminProductRead)
+async def patch_product(
+    product_id: str,
+    name: Annotated[str, Form(min_length=2, max_length=255)],
+    description: Annotated[str, Form(min_length=12, max_length=1000)],
+    category: Annotated[str, Form(min_length=2, max_length=120)],
+    price: Annotated[int, Form(ge=0)],
+    stock: Annotated[int, Form(ge=0)],
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+    store_id: Annotated[str | None, Form(max_length=50)] = None,
+    audience_slug: Annotated[str | None, Form(max_length=50)] = None,
+    section: Annotated[str | None, Form(max_length=50)] = None,
+    subcategory: Annotated[str | None, Form(max_length=120)] = None,
+    category_slugs: Annotated[str | None, Form(max_length=2000)] = None,
+    subcategory_slugs: Annotated[str | None, Form(max_length=4000)] = None,
+    old_price: Annotated[int | None, Form(ge=0)] = None,
+    rating: Annotated[float | None, Form(ge=0, le=5)] = None,
+    reviews: Annotated[str | None, Form(max_length=50)] = None,
+    placement_tags: Annotated[str | None, Form(max_length=255)] = None,
+    color_options: Annotated[str | None, Form(max_length=255)] = None,
+    size_options: Annotated[str | None, Form(max_length=255)] = None,
+    specifications: Annotated[str | None, Form(max_length=3000)] = None,
+    status_value: Annotated[str, Form(alias="status", min_length=1, max_length=30)] = "active",
+    image_key: Annotated[str | None, Form(max_length=100)] = None,
+    images: list[UploadFile] | None = File(default=None),
+):
+    payload = AdminProductCreate(
+        name=name,
+        description=description,
+        category=category,
+        subcategory=subcategory,
+        category_slugs=_split_csv_values(category_slugs),
+        subcategory_slugs=_split_csv_values(subcategory_slugs),
+        store_id=store_id,
+        audience_slug=audience_slug,
+        section=section,
+        price=price,
+        old_price=old_price,
+        stock=stock,
+        rating=rating,
+        reviews=reviews,
+        placement_tags=_split_csv_values(placement_tags),
+        color_options=_split_csv_values(color_options),
+        size_options=_split_csv_values(size_options),
+        specifications=_split_multiline_values(specifications),
+        status=status_value,
+        image_key=image_key,
+    )
+    return await update_admin_product(db, current_user, product_id, payload, images)
 
 
 @router.patch("/products/{product_id}/status", response_model=AdminProductRead)
