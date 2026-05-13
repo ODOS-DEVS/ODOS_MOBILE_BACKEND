@@ -1,3 +1,4 @@
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -29,6 +30,16 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def normalize_database_url(cls, value: str) -> str:
+        normalized = value.strip()
+        if normalized.startswith("postgres://"):
+            return "postgresql+psycopg://" + normalized[len("postgres://") :]
+        if normalized.startswith("postgresql://") and not normalized.startswith("postgresql+"):
+            return "postgresql+psycopg://" + normalized[len("postgresql://") :]
+        return normalized
 
     @property
     def google_client_id_list(self) -> list[str]:
