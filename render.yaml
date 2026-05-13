@@ -1,0 +1,48 @@
+services:
+  - type: web
+    name: odos-backend
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    preDeployCommand: alembic upgrade head
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: odos-postgres
+          property: connectionString
+      - key: SECRET_KEY
+        generateValue: true
+      - key: JWT_ALGORITHM
+        value: HS256
+      - key: ACCESS_TOKEN_EXPIRE_MINUTES
+        value: "10080"
+      - key: CORS_ORIGINS
+        sync: false
+      - key: GOOGLE_CLIENT_IDS
+        sync: false
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
+      - key: BREVO_API_KEY
+        sync: false
+      - key: BREVO_SENDER_NAME
+        value: ODOS
+      - key: BREVO_SENDER_EMAIL
+        sync: false
+      - key: EMAIL_VERIFICATION_CODE_EXPIRE_MINUTES
+        value: "10"
+      - key: PASSWORD_RESET_CODE_EXPIRE_MINUTES
+        value: "10"
+      - key: PASSWORD_RESET_TOKEN_EXPIRE_MINUTES
+        value: "15"
+
+databases:
+  - name: odos-postgres
+    plan: free
+    databaseName: odos_mobile
+    user: odos_user

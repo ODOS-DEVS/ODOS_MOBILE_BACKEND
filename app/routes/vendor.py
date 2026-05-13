@@ -4,18 +4,23 @@ from fastapi import APIRouter, Depends, File, Form, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.controllers.vendor_controller import (
+    archive_vendor_voucher,
+    create_vendor_voucher,
     create_vendor_product,
     delete_vendor_product,
     fetch_my_vendor_application,
     fetch_vendor_dashboard,
     fetch_vendor_profile,
     fetch_vendor_store,
+    gift_vendor_voucher,
     list_vendor_orders,
     list_vendor_products,
+    list_vendor_vouchers,
     submit_vendor_application,
     update_vendor_order_status,
     update_vendor_product,
     update_vendor_store,
+    update_vendor_voucher,
 )
 from app.core.auth import get_current_user
 from app.core.database import get_db
@@ -31,6 +36,9 @@ from app.schemas.vendor import (
     VendorProductUpdate,
     VendorProfileRead,
     VendorStoreRead,
+    VendorVoucherGiftPayload,
+    VendorVoucherRead,
+    VendorVoucherUpsert,
 )
 
 router = APIRouter(prefix="/vendor", tags=["vendor"])
@@ -233,6 +241,53 @@ def get_vendor_orders(
     db: Session = Depends(get_db),
 ):
     return list_vendor_orders(db, current_user)
+
+
+@router.get("/vouchers", response_model=list[VendorVoucherRead])
+def get_vendor_vouchers(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return list_vendor_vouchers(db, current_user)
+
+
+@router.post("/vouchers", response_model=VendorVoucherRead, status_code=status.HTTP_201_CREATED)
+def post_vendor_voucher(
+    payload: VendorVoucherUpsert,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return create_vendor_voucher(db, current_user, payload)
+
+
+@router.patch("/vouchers/{voucher_id}", response_model=VendorVoucherRead)
+def patch_vendor_voucher(
+    voucher_id: str,
+    payload: VendorVoucherUpsert,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return update_vendor_voucher(db, current_user, voucher_id, payload)
+
+
+@router.post("/vouchers/{voucher_id}/gift", response_model=VendorVoucherRead)
+def post_vendor_voucher_gift(
+    voucher_id: str,
+    payload: VendorVoucherGiftPayload,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return gift_vendor_voucher(db, current_user, voucher_id, payload)
+
+
+@router.delete("/vouchers/{voucher_id}", response_model=MessageResponse)
+def delete_vendor_voucher(
+    voucher_id: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    archive_vendor_voucher(db, current_user, voucher_id)
+    return MessageResponse(message="Store promotion archived successfully.")
 
 
 @router.patch("/orders/{order_id}/status", response_model=VendorOrderRead)

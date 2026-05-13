@@ -1,7 +1,8 @@
 from app.models.account import PaymentMethodType, SavedAddress, SavedPaymentMethod
 from app.models.notification import NotificationEvent, NotificationRead
 from app.models.catalog import Category, Market, Product, Store
-from app.models.order import Order, OrderItem
+from app.models.order import Order, OrderItem, Review
+from app.models.voucher import Voucher, VoucherAssignment, VoucherRedemption
 from app.models.user import (
     AuthProvider,
     CartItem,
@@ -24,6 +25,7 @@ __all__ = [
     "OrderItem",
     "PaymentMethodType",
     "Product",
+    "Review",
     "SavedAddress",
     "SavedPaymentMethod",
     "Store",
@@ -32,5 +34,8 @@ __all__ = [
     "UserRole",
     "VendorApplication",
     "VendorStatus",
+    "VoucherAssignment",
+    "Voucher",
+    "VoucherRedemption",
     "WishlistItem",
 ]

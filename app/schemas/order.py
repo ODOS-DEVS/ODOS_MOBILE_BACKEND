@@ -39,7 +39,9 @@ class OrderCreate(BaseModel):
     items: list[OrderItemCreate] = Field(min_length=1)
     subtotal_amount: float = Field(ge=0)
     shipping_amount: float = Field(default=0, ge=0)
+    discount_amount: float = Field(default=0, ge=0)
     total_amount: float = Field(ge=0)
+    voucher_code: str | None = Field(default=None, min_length=2, max_length=40)
 
     address_full_name: str = Field(min_length=1, max_length=120)
     address_phone: str = Field(min_length=1, max_length=30)
@@ -64,6 +66,7 @@ class OrderCreate(BaseModel):
         "payment_network",
         "payment_phone",
         "payment_last4",
+        "voucher_code",
         mode="before",
     )
     @classmethod
@@ -112,6 +115,9 @@ class OrderRead(BaseModel):
     payment_network: str | None
     payment_phone: str | None
     payment_last4: str | None
+    voucher_code: str | None
+    voucher_title: str | None
+    discount_amount: float
     placed_at: datetime
     delivered_at: datetime | None
     cancelled_at: datetime | None

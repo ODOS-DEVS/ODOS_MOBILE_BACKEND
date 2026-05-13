@@ -6,11 +6,13 @@ from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.controllers.admin_controller import (
+    archive_admin_voucher,
     bootstrap_first_admin,
     create_admin_category,
     create_admin_product,
     create_admin_market,
     create_admin_store,
+    create_admin_voucher,
     delete_admin_category,
     delete_admin_market,
     get_admin_bootstrap_status,
@@ -26,11 +28,14 @@ from app.controllers.admin_controller import (
     list_admin_notifications,
     list_admin_orders,
     list_admin_products,
+    list_admin_reviews,
     list_admin_stores,
     list_admin_users,
     list_admin_vendors,
+    list_admin_vouchers,
     login_admin_user,
     mark_admin_notification_read,
+    moderate_admin_review,
     update_admin_category,
     update_admin_market,
     update_admin_order_status,
@@ -40,6 +45,7 @@ from app.controllers.admin_controller import (
     update_admin_store_status,
     update_admin_user_status,
     update_admin_vendor_status,
+    update_admin_voucher,
 )
 from app.controllers.vendor_controller import (
     approve_vendor_application,
@@ -62,6 +68,8 @@ from app.schemas.admin import (
     AdminProductCreate,
     AdminProductRead,
     AdminProductStatusUpdate,
+    AdminReviewModerationUpdate,
+    AdminReviewRead,
     AdminStoreRead,
     AdminStoreUpsert,
     AdminStoreStatusUpdate,
@@ -69,6 +77,8 @@ from app.schemas.admin import (
     AdminUserStatusUpdate,
     AdminVendorRead,
     AdminVendorStatusUpdate,
+    AdminVoucherRead,
+    AdminVoucherUpsert,
     NotificationMarkReadResponse,
 )
 from app.schemas.user import AuthToken, UserCreate, UserLogin, UserRead
@@ -553,6 +563,61 @@ def patch_product_status(
     db: Session = Depends(get_db),
 ):
     return update_admin_product_status(db, current_user, product_id, payload)
+
+
+@router.get("/vouchers", response_model=list[AdminVoucherRead])
+def get_vouchers(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return list_admin_vouchers(db, current_user)
+
+
+@router.post("/vouchers", response_model=AdminVoucherRead, status_code=status.HTTP_201_CREATED)
+def post_voucher(
+    payload: AdminVoucherUpsert,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return create_admin_voucher(db, current_user, payload)
+
+
+@router.patch("/vouchers/{voucher_id}", response_model=AdminVoucherRead)
+def patch_voucher(
+    voucher_id: str,
+    payload: AdminVoucherUpsert,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return update_admin_voucher(db, current_user, voucher_id, payload)
+
+
+@router.delete("/vouchers/{voucher_id}")
+def remove_voucher(
+    voucher_id: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    archive_admin_voucher(db, current_user, voucher_id)
+    return {"success": True}
+
+
+@router.get("/reviews", response_model=list[AdminReviewRead])
+def get_reviews(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return list_admin_reviews(db, current_user)
+
+
+@router.patch("/reviews/{review_id}/moderation", response_model=AdminReviewRead)
+def patch_review_moderation(
+    review_id: str,
+    payload: AdminReviewModerationUpdate,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return moderate_admin_review(db, current_user, review_id, payload)
 
 
 @router.get("/orders", response_model=list[AdminOrderRead])
