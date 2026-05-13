@@ -4,7 +4,7 @@ import uuid
 from datetime import UTC, datetime
 
 from fastapi import HTTPException, UploadFile, status
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
@@ -16,6 +16,13 @@ from app.controllers.vendor_controller import (
     list_vendor_applications,
     reject_vendor_application,
 )
+from app.controllers.review_controller import recompute_product_review_metrics
+from app.controllers.voucher_controller import (
+    SUPPORTED_VOUCHER_DISCOUNT_TYPES,
+    build_voucher_reward_text,
+    validate_voucher_configuration,
+    voucher_status,
+)
 from app.services.media_service import remove_media_file, save_image_upload, save_image_uploads
 from app.models import (
     Category,
@@ -24,11 +31,14 @@ from app.models import (
     NotificationRead,
     Order,
     Product,
+    Review,
     Store,
     User,
     UserRole,
     VendorApplication,
     VendorStatus,
+    Voucher,
+    VoucherRedemption,
 )
 from app.schemas.admin import (
     AdminBootstrapStatusRead,
@@ -44,6 +54,8 @@ from app.schemas.admin import (
     AdminProductCreate,
     AdminProductRead,
     AdminProductStatusUpdate,
+    AdminReviewModerationUpdate,
+    AdminReviewRead,
     AdminStoreRead,
     AdminStoreUpsert,
     AdminStoreStatusUpdate,
@@ -51,6 +63,8 @@ from app.schemas.admin import (
     AdminUserStatusUpdate,
     AdminVendorRead,
     AdminVendorStatusUpdate,
+    AdminVoucherRead,
+    AdminVoucherUpsert,
     NotificationMarkReadResponse,
 )
 from app.schemas.user import AuthToken, UserCreate, UserLogin
@@ -58,7 +72,7 @@ from app.schemas.user import AuthToken, UserCreate, UserLogin
 SUPPORTED_ACCOUNT_STATUSES = {"active", "blocked", "inactive"}
 SUPPORTED_VENDOR_STATUSES = {"active", "suspended"}
 SUPPORTED_STORE_STATUSES = {"active", "suspended", "draft"}
-SUPPORTED_PRODUCT_STATUSES = {"active", "hidden", "suspended"}
+SUPPORTED_PRODUCT_STATUSES = {"pending", "active", "hidden", "suspended"}
 SUPPORTED_ORDER_STATUSES = {
     "pending",
     "confirmed",
@@ -121,6 +135,86 @@ def _payment_status(order: Order) -> str:
     return "paid"
 
 
+def _voucher_status(voucher: Voucher, redemption_count: int) -> str:
+    now = datetime.now(UTC)
+    return voucher_status(voucher, now=now, overall_count=redemption_count)
+
+
+def _serialize_voucher(
+    voucher: Voucher,
+    *,
+    store_name: str | None = None,
+    redemption_count: int = 0,
+    unique_user_count: int = 0,
+    total_discount_amount: float = 0,
+) -> AdminVoucherRead:
+    return AdminVoucherRead(
+        id=voucher.id,
+        code=voucher.code,
+        title=voucher.title,
+        description=voucher.description,
+        issuer_name=voucher.issuer_name,
+        scope=voucher.scope,
+        availability=voucher.availability,
+        store_id=voucher.store_id,
+        store_name=store_name,
+        reward_text=voucher.reward_text,
+        discount_type=voucher.discount_type,
+        discount_value=round(voucher.discount_value, 2),
+        min_subtotal=round(voucher.min_subtotal, 2),
+        max_discount=round(voucher.max_discount, 2) if voucher.max_discount is not None else None,
+        usage_limit=voucher.usage_limit,
+        per_user_limit=voucher.per_user_limit,
+        is_active=voucher.is_active,
+        status=_voucher_status(voucher, redemption_count),
+        redemption_count=redemption_count,
+        unique_user_count=unique_user_count,
+        total_discount_amount=round(total_discount_amount, 2),
+        starts_at=voucher.starts_at,
+        ends_at=voucher.ends_at,
+        created_at=voucher.created_at,
+    )
+
+
+def _validate_voucher_payload(payload: AdminVoucherUpsert) -> None:
+    validate_voucher_configuration(
+        scope=payload.scope,
+        availability=payload.availability,
+        discount_type=payload.discount_type,
+        discount_value=payload.discount_value,
+        starts_at=payload.starts_at,
+        ends_at=payload.ends_at,
+        usage_limit=payload.usage_limit,
+        per_user_limit=payload.per_user_limit,
+        store_id=payload.store_id,
+    )
+
+
+def _voucher_stats_map(db: Session, voucher_ids: list[uuid.UUID]) -> dict[uuid.UUID, dict[str, float | int]]:
+    if not voucher_ids:
+        return {}
+
+    rows = db.execute(
+        select(
+            VoucherRedemption.voucher_id,
+            func.count(VoucherRedemption.id),
+            func.count(func.distinct(VoucherRedemption.user_id)),
+            func.coalesce(func.sum(VoucherRedemption.discount_amount), 0),
+        )
+        .where(VoucherRedemption.voucher_id.in_(voucher_ids))
+        .group_by(VoucherRedemption.voucher_id)
+    ).all()
+
+    return {
+        voucher_id: {
+            "redemption_count": int(redemption_count or 0),
+            "unique_user_count": int(unique_user_count or 0),
+            "total_discount_amount": round(float(total_discount_amount or 0), 2),
+        }
+        for voucher_id, redemption_count, unique_user_count, total_discount_amount in rows
+    }
+
+
 def _serialize_user(user: User) -> AdminUserRead:
     return AdminUserRead(
         id=user.id,
@@ -181,12 +275,24 @@ def _serialize_category(category: Category) -> AdminCategoryRead:
     )
 
 
-def _serialize_product(product: Product, *, store_name: str | None = None) -> AdminProductRead:
+def _serialize_product(
+    product: Product,
+    *,
+    store: Store | None = None,
+    vendor: User | None = None,
+) -> AdminProductRead:
     return AdminProductRead(
         id=product.id,
         store_id=product.store_id,
-        store_name=store_name,
+        store_name=store.title if store else None,
+        store_slug=store.slug if store else None,
+        store_category=store.category if store else None,
+        store_location=store.address if store else None,
+        store_region=store.region if store else None,
+        store_city=store.city if store else None,
         vendor_id=str(product.vendor_user_id) if product.vendor_user_id else None,
+        vendor_name=vendor.full_name if vendor else None,
+        vendor_email=vendor.email if vendor else None,
         name=product.title,
         description=product.description or "",
         images=product.image_urls or ([product.image_url] if product.image_url else []),
@@ -209,6 +315,7 @@ def _serialize_product(product: Product, *, store_name: str | None = None) -> Ad
         stock=product.stock,
         status=product.status,
         created_at=product.created_at,
+        updated_at=product.updated_at,
     )
 
 
@@ -950,14 +1057,31 @@ def delete_admin_category(db: Session, current_user: User, category_id: str) -> 
 
 def list_admin_products(db: Session, current_user: User) -> list[AdminProductRead]:
     require_admin(current_user)
-    products = list(db.scalars(select(Product).order_by(Product.created_at.desc())).all())
+    products = list(
+        db.scalars(
+            select(Product).order_by(
+                case((Product.status == "pending", 0), else_=1),
+                Product.updated_at.desc(),
+                Product.created_at.desc(),
+            )
+        ).all()
+    )
     store_ids = {product.store_id for product in products if product.store_id}
+    vendor_ids = {product.vendor_user_id for product in products if product.vendor_user_id}
     store_lookup = {
-        store.id: store.title
+        store.id: store
         for store in db.scalars(select(Store).where(Store.id.in_(store_ids))).all()
     } if store_ids else {}
+    vendor_lookup = {
+        vendor.id: vendor
+        for vendor in db.scalars(select(User).where(User.id.in_(vendor_ids))).all()
+    } if vendor_ids else {}
     return [
-        _serialize_product(product, store_name=store_lookup.get(product.store_id))
+        _serialize_product(
+            product,
+            store=store_lookup.get(product.store_id),
+            vendor=vendor_lookup.get(product.vendor_user_id) if product.vendor_user_id else None,
+        )
         for product in products
     ]
 
@@ -967,11 +1091,17 @@ def get_admin_product(db: Session, current_user: User, product_id: str) -> Admin
     product = db.scalar(select(Product).where(Product.id == product_id))
     if not product:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found.")
-    store_name = None
+    store = None
     if product.store_id:
         store = db.scalar(select(Store).where(Store.id == product.store_id))
-        store_name = store.title if store else None
-    return _serialize_product(product, store_name=store_name)
+    vendor = None
+    if product.vendor_user_id:
+        vendor = db.scalar(select(User).where(User.id == product.vendor_user_id))
+    return _serialize_product(
+        product,
+        store=store,
+        vendor=vendor,
+    )
 
 
 def _get_store_for_admin_product(db: Session, store_id: str | None) -> Store:
@@ -1041,7 +1171,10 @@ async def create_admin_product(
     db.add(product)
     db.commit()
     db.refresh(product)
-    return _serialize_product(product, store_name=store.title)
+    vendor = None
+    if product.vendor_user_id:
+        vendor = db.scalar(select(User).where(User.id == product.vendor_user_id))
+    return _serialize_product(product, store=store, vendor=vendor)
 
 
 async def update_admin_product(
@@ -1104,7 +1237,14 @@ async def update_admin_product(
 
     db.commit()
     db.refresh(product)
-    return _serialize_product(product, store_name=store.title)
+    vendor = None
+    if product.vendor_user_id:
+        vendor = db.scalar(select(User).where(User.id == product.vendor_user_id))
+    return _serialize_product(
+        product,
+        store=store,
+        vendor=vendor,
+    )
 
 
 def update_admin_product_status(
@@ -1125,11 +1265,322 @@ def update_admin_product_status(
     product.is_active = payload.status == "active"
     db.commit()
     db.refresh(product)
-    store_name = None
+    store = None
     if product.store_id:
         store = db.scalar(select(Store).where(Store.id == product.store_id))
-        store_name = store.title if store else None
-    return _serialize_product(product, store_name=store_name)
+    vendor = None
+    if product.vendor_user_id:
+        vendor = db.scalar(select(User).where(User.id == product.vendor_user_id))
+    return _serialize_product(
+        product,
+        store=store,
+        vendor=vendor,
+    )
+
+
+def list_admin_vouchers(db: Session, current_user: User) -> list[AdminVoucherRead]:
+    require_admin(current_user)
+    vouchers = list(
+        db.scalars(select(Voucher).order_by(Voucher.created_at.desc(), Voucher.title.asc())).all()
+    )
+    stats_map = _voucher_stats_map(db, [voucher.id for voucher in vouchers])
+    store_name_map = {
+        store_id: title
+        for store_id, title in db.execute(
+            select(Store.id, Store.title).where(
+                Store.id.in_([voucher.store_id for voucher in vouchers if voucher.store_id])
+            )
+        ).all()
+    }
+    return [
+        _serialize_voucher(
+            voucher,
+            store_name=store_name_map.get(voucher.store_id or ""),
+            redemption_count=int(stats_map.get(voucher.id, {}).get("redemption_count", 0)),
+            unique_user_count=int(stats_map.get(voucher.id, {}).get("unique_user_count", 0)),
+            total_discount_amount=float(
+                stats_map.get(voucher.id, {}).get("total_discount_amount", 0)
+            ),
+        )
+        for voucher in vouchers
+    ]
+
+
+def _get_admin_voucher(db: Session, voucher_id: str) -> Voucher:
+    try:
+        normalized_id = uuid.UUID(str(voucher_id))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Voucher not found.",
+        ) from exc
+
+    voucher = db.get(Voucher, normalized_id)
+    if not voucher:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Voucher not found.")
+    return voucher
+
+
+def create_admin_voucher(
+    db: Session,
+    current_user: User,
+    payload: AdminVoucherUpsert,
+) -> AdminVoucherRead:
+    require_admin(current_user)
+    _validate_voucher_payload(payload)
+
+    target_store = None
+    if payload.scope == "store":
+        target_store = db.scalar(select(Store).where(Store.id == payload.store_id))
+        if not target_store:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="The selected store was not found.",
+            )
+
+    discount_value = 0 if payload.discount_type == "free_shipping" else round(payload.discount_value, 2)
+    voucher = Voucher(
+        code=payload.code,
+        title=payload.title,
+        description=payload.description,
+        issuer_name=payload.issuer_name or (target_store.title if target_store else None),
+        scope=payload.scope,
+        availability=payload.availability,
+        store_id=target_store.id if target_store else None,
+        reward_text=build_voucher_reward_text(payload.discount_type, discount_value),
+        discount_type=payload.discount_type,
+        discount_value=discount_value,
+        min_subtotal=round(payload.min_subtotal, 2),
+        max_discount=round(payload.max_discount, 2) if payload.max_discount is not None else None,
+        usage_limit=payload.usage_limit,
+        per_user_limit=payload.per_user_limit,
+        is_active=payload.is_active,
+        starts_at=payload.starts_at,
+        ends_at=payload.ends_at,
+    )
+    db.add(voucher)
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="That voucher code already exists.",
+        ) from exc
+
+    db.refresh(voucher)
+    return _serialize_voucher(voucher, store_name=target_store.title if target_store else None)
+
+
+def update_admin_voucher(
+    db: Session,
+    current_user: User,
+    voucher_id: str,
+    payload: AdminVoucherUpsert,
+) -> AdminVoucherRead:
+    require_admin(current_user)
+    _validate_voucher_payload(payload)
+
+    voucher = _get_admin_voucher(db, voucher_id)
+    target_store = None
+    if payload.scope == "store":
+        target_store = db.scalar(select(Store).where(Store.id == payload.store_id))
+        if not target_store:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="The selected store was not found.",
+            )
+    discount_value = 0 if payload.discount_type == "free_shipping" else round(payload.discount_value, 2)
+
+    voucher.code = payload.code
+    voucher.title = payload.title
+    voucher.description = payload.description
+    voucher.issuer_name = payload.issuer_name or (target_store.title if target_store else None)
+    voucher.scope = payload.scope
+    voucher.availability = payload.availability
+    voucher.store_id = target_store.id if target_store else None
+    voucher.reward_text = build_voucher_reward_text(payload.discount_type, discount_value)
+    voucher.discount_type = payload.discount_type
+    voucher.discount_value = discount_value
+    voucher.min_subtotal = round(payload.min_subtotal, 2)
+    voucher.max_discount = round(payload.max_discount, 2) if payload.max_discount is not None else None
+    voucher.usage_limit = payload.usage_limit
+    voucher.per_user_limit = payload.per_user_limit
+    voucher.is_active = payload.is_active
+    voucher.starts_at = payload.starts_at
+    voucher.ends_at = payload.ends_at
+
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="That voucher code already exists.",
+        ) from exc
+
+    db.refresh(voucher)
+    stats_map = _voucher_stats_map(db, [voucher.id])
+    voucher_stats = stats_map.get(voucher.id, {})
+    return _serialize_voucher(
+        voucher,
+        store_name=target_store.title if target_store else None,
+        redemption_count=int(voucher_stats.get("redemption_count", 0)),
+        unique_user_count=int(voucher_stats.get("unique_user_count", 0)),
+        total_discount_amount=float(voucher_stats.get("total_discount_amount", 0)),
+    )
+
+
+def archive_admin_voucher(
+    db: Session,
+    current_user: User,
+    voucher_id: str,
+) -> None:
+    require_admin(current_user)
+    voucher = _get_admin_voucher(db, voucher_id)
+    voucher.is_active = False
+    db.commit()
+
+
+def _resolve_review_context(
+    db: Session,
+    reviews: list[Review],
+) -> tuple[dict[str, Product], dict[str, str]]:
+    product_ids = list({review.product_id for review in reviews})
+    if not product_ids:
+        return {}, {}
+
+    products = {
+        product.id: product
+        for product in db.scalars(select(Product).where(Product.id.in_(product_ids))).all()
+    }
+    store_ids = [product.store_id for product in products.values() if product.store_id]
+    if not store_ids:
+        return products, {}
+
+    store_name_map = {
+        store_id: title
+        for store_id, title in db.execute(
+            select(Store.id, Store.title).where(Store.id.in_(store_ids))
+        ).all()
+    }
+    return products, store_name_map
+
+
+def _serialize_admin_review(
+    review: Review,
+    *,
+    product_name: str,
+    store_name: str | None,
+) -> AdminReviewRead:
+    return AdminReviewRead(
+        id=review.id,
+        order_id=review.order_id,
+        order_number=review.order.order_number,
+        product_id=review.product_id,
+        product_name=product_name,
+        store_name=store_name,
+        user_id=review.user_id,
+        user_name=review.user.full_name,
+        user_email=review.user.email,
+        rating=review.rating,
+        comment=review.comment,
+        is_hidden=review.is_hidden,
+        moderation_reason=review.moderation_reason,
+        moderated_at=review.moderated_at,
+        created_at=review.created_at,
+        updated_at=review.updated_at,
+    )
+
+
+def _build_admin_review_read(
+    review: Review,
+    *,
+    products: dict[str, Product],
+    store_name_map: dict[str, str],
+) -> AdminReviewRead:
+    product = products.get(review.product_id)
+    order_item = next(
+        (item for item in review.order.items if item.product_id == review.product_id),
+        None,
+    )
+    product_name = product.title if product else order_item.title if order_item else review.product_id
+    store_name = store_name_map.get(product.store_id or "") if product else None
+    return _serialize_admin_review(
+        review,
+        product_name=product_name,
+        store_name=store_name,
+    )
+
+
+def _get_admin_review(db: Session, review_id: str) -> Review:
+    try:
+        normalized_id = uuid.UUID(str(review_id))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Review not found.",
+        ) from exc
+
+    review = db.scalar(
+        select(Review)
+        .options(
+            selectinload(Review.user),
+            selectinload(Review.order).selectinload(Order.items),
+        )
+        .where(Review.id == normalized_id)
+    )
+    if not review:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found.")
+    return review
+
+
+def list_admin_reviews(db: Session, current_user: User) -> list[AdminReviewRead]:
+    require_admin(current_user)
+    reviews = list(
+        db.scalars(
+            select(Review)
+            .options(
+                selectinload(Review.user),
+                selectinload(Review.order).selectinload(Order.items),
+            )
+            .order_by(Review.updated_at.desc(), Review.created_at.desc())
+        ).all()
+    )
+    products, store_name_map = _resolve_review_context(db, reviews)
+    return [
+        _build_admin_review_read(
+            review,
+            products=products,
+            store_name_map=store_name_map,
+        )
+        for review in reviews
+    ]
+
+
+def moderate_admin_review(
+    db: Session,
+    current_user: User,
+    review_id: str,
+    payload: AdminReviewModerationUpdate,
+) -> AdminReviewRead:
+    require_admin(current_user)
+    review = _get_admin_review(db, review_id)
+    review.is_hidden = payload.is_hidden
+    review.moderation_reason = payload.moderation_reason if payload.is_hidden else None
+    review.moderated_at = datetime.now(UTC)
+    review.moderated_by_user_id = current_user.id
+    db.flush()
+    recompute_product_review_metrics(db, review.product_id)
+    db.commit()
+
+    refreshed_review = _get_admin_review(db, str(review.id))
+    products, store_name_map = _resolve_review_context(db, [refreshed_review])
+    return _build_admin_review_read(
+        refreshed_review,
+        products=products,
+        store_name_map=store_name_map,
+    )
 
 
 def list_admin_orders(db: Session, current_user: User) -> list[AdminOrderRead]:

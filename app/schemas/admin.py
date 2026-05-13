@@ -205,7 +205,14 @@ class AdminProductRead(BaseModel):
     id: str
     store_id: str | None
     store_name: str | None = None
+    store_slug: str | None = None
+    store_category: str | None = None
+    store_location: str | None = None
+    store_region: str | None = None
+    store_city: str | None = None
     vendor_id: str | None
+    vendor_name: str | None = None
+    vendor_email: str | None = None
     name: str
     description: str
     images: list[str]
@@ -228,6 +235,7 @@ class AdminProductRead(BaseModel):
     stock: int
     status: str
     created_at: datetime
+    updated_at: datetime
 
 
 class AdminProductCreate(BaseModel):
@@ -301,6 +309,102 @@ class AdminProductStatusUpdate(BaseModel):
     @classmethod
     def normalize_status(cls, value: str) -> str:
         return value.strip().lower()
+
+
+class AdminVoucherRead(BaseModel):
+    id: uuid.UUID
+    code: str
+    title: str
+    description: str | None = None
+    issuer_name: str | None = None
+    scope: str
+    availability: str
+    store_id: str | None = None
+    store_name: str | None = None
+    reward_text: str
+    discount_type: str
+    discount_value: float
+    min_subtotal: float
+    max_discount: float | None = None
+    usage_limit: int | None = None
+    per_user_limit: int | None = None
+    is_active: bool
+    status: str
+    redemption_count: int
+    unique_user_count: int
+    total_discount_amount: float
+    starts_at: datetime | None = None
+    ends_at: datetime | None = None
+    created_at: datetime
+
+
+class AdminVoucherUpsert(BaseModel):
+    code: str = Field(min_length=2, max_length=40)
+    title: str = Field(min_length=2, max_length=120)
+    description: str | None = Field(default=None, max_length=255)
+    issuer_name: str | None = Field(default=None, max_length=120)
+    scope: str = Field(default="odos", min_length=1, max_length=20)
+    availability: str = Field(default="auto", min_length=1, max_length=20)
+    store_id: str | None = Field(default=None, max_length=50)
+    discount_type: str = Field(min_length=1, max_length=20)
+    discount_value: float = Field(ge=0)
+    min_subtotal: float = Field(default=0, ge=0)
+    max_discount: float | None = Field(default=None, ge=0)
+    usage_limit: int | None = Field(default=None, ge=1)
+    per_user_limit: int | None = Field(default=None, ge=1)
+    is_active: bool = True
+    starts_at: datetime | None = None
+    ends_at: datetime | None = None
+
+    @field_validator("code", mode="before")
+    @classmethod
+    def normalize_code(cls, value: str) -> str:
+        return value.strip().upper()
+
+    @field_validator("title", "description", "issuer_name", "store_id", mode="before")
+    @classmethod
+    def strip_voucher_fields(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        cleaned = value.strip()
+        return cleaned or None
+
+    @field_validator("discount_type", "scope", "availability", mode="before")
+    @classmethod
+    def normalize_discount_type(cls, value: str) -> str:
+        return value.strip().lower()
+
+
+class AdminReviewRead(BaseModel):
+    id: uuid.UUID
+    order_id: uuid.UUID
+    order_number: str
+    product_id: str
+    product_name: str
+    store_name: str | None = None
+    user_id: uuid.UUID
+    user_name: str
+    user_email: str
+    rating: float
+    comment: str
+    is_hidden: bool
+    moderation_reason: str | None = None
+    moderated_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class AdminReviewModerationUpdate(BaseModel):
+    is_hidden: bool
+    moderation_reason: str | None = Field(default=None, max_length=255)
+
+    @field_validator("moderation_reason", mode="before")
+    @classmethod
+    def strip_reason(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        cleaned = value.strip()
+        return cleaned or None
 
 
 class AdminOrderRead(BaseModel):

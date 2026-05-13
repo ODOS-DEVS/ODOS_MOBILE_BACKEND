@@ -96,6 +96,83 @@ class VendorStoreRead(BaseModel):
     status: str
 
 
+class VendorVoucherRead(BaseModel):
+    id: uuid.UUID
+    code: str
+    title: str
+    description: str | None = None
+    issuer_name: str | None = None
+    availability: str
+    reward_text: str
+    discount_type: str
+    discount_value: float
+    min_subtotal: float
+    max_discount: float | None = None
+    usage_limit: int | None = None
+    per_user_limit: int | None = None
+    is_active: bool
+    status: str
+    redemption_count: int
+    unique_user_count: int
+    total_discount_amount: float
+    starts_at: datetime | None = None
+    ends_at: datetime | None = None
+    created_at: datetime
+
+
+class VendorVoucherUpsert(BaseModel):
+    code: str = Field(min_length=2, max_length=40)
+    title: str = Field(min_length=2, max_length=120)
+    description: str | None = Field(default=None, max_length=255)
+    issuer_name: str | None = Field(default=None, max_length=120)
+    availability: str = Field(default="claim", min_length=1, max_length=20)
+    discount_type: str = Field(min_length=1, max_length=20)
+    discount_value: float = Field(ge=0)
+    min_subtotal: float = Field(default=0, ge=0)
+    max_discount: float | None = Field(default=None, ge=0)
+    usage_limit: int | None = Field(default=None, ge=1)
+    per_user_limit: int | None = Field(default=None, ge=1)
+    is_active: bool = True
+    starts_at: datetime | None = None
+    ends_at: datetime | None = None
+
+    @field_validator("code", mode="before")
+    @classmethod
+    def normalize_code(cls, value: str) -> str:
+        return value.strip().upper()
+
+    @field_validator("title", "description", "issuer_name", mode="before")
+    @classmethod
+    def strip_voucher_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+    @field_validator("availability", "discount_type", mode="before")
+    @classmethod
+    def normalize_voucher_modes(cls, value: str) -> str:
+        return value.strip().lower()
+
+
+class VendorVoucherGiftPayload(BaseModel):
+    recipient_email: str = Field(min_length=3, max_length=255)
+    note: str | None = Field(default=None, max_length=255)
+
+    @field_validator("recipient_email", mode="before")
+    @classmethod
+    def normalize_email(cls, value: str) -> str:
+        return value.strip().lower()
+
+    @field_validator("note", mode="before")
+    @classmethod
+    def strip_note(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+
 class VendorProductCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     description: str = Field(min_length=1, max_length=1000)

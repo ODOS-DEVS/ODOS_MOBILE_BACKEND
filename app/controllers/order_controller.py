@@ -8,7 +8,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.controllers.notification_controller import create_notification_event
-from app.models import CartItem, Order, OrderItem, User
+from app.controllers.voucher_controller import build_voucher_quote
+from app.models import CartItem, Order, OrderItem, User, VoucherRedemption
 from app.schemas.order import OrderCreate
 from app.services.push_service import send_expo_push_notification
 
@@ -52,6 +53,16 @@ def _dispatch_order_push(
 
 def create_order(db: Session, user: User, payload: OrderCreate) -> Order:
     computed_subtotal = 0.0
+    voucher_quote = None
+    if payload.voucher_code:
+        voucher_quote = build_voucher_quote(
+            db,
+            user,
+            payload.voucher_code,
+            payload.items,
+            payload.shipping_amount,
+        )
+
     order = Order(
         order_number=_generate_order_number(db),
         user_id=user.id,
@@ -72,6 +83,10 @@ def create_order(db: Session, user: User, payload: OrderCreate) -> Order:
         payment_network=payload.payment_network,
         payment_phone=payload.payment_phone,
         payment_last4=payload.payment_last4,
+        voucher_id=voucher_quote.voucher.id if voucher_quote else None,
+        voucher_code=voucher_quote.voucher.code if voucher_quote else None,
+        voucher_title=voucher_quote.voucher.title if voucher_quote else None,
+        discount_amount=voucher_quote.discount_amount if voucher_quote else 0,
     )
 
     for item in payload.items:
@@ -93,15 +108,37 @@ def create_order(db: Session, user: User, payload: OrderCreate) -> Order:
         )
 
     computed_subtotal = round(computed_subtotal, 2)
-    computed_total = round(computed_subtotal + payload.shipping_amount, 2)
+    computed_discount = round(voucher_quote.discount_amount if voucher_quote else 0, 2)
+    computed_total = round(computed_subtotal + payload.shipping_amount - computed_discount, 2)
 
-    if abs(computed_subtotal - payload.subtotal_amount) > 0.01 or abs(computed_total - payload.total_amount) > 0.01:
+    if (
+        abs(computed_subtotal - payload.subtotal_amount) > 0.01
+        or abs(computed_discount - payload.discount_amount) > 0.01
+        or abs(computed_total - payload.total_amount) > 0.01
+    ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="The order totals didn't match the selected items.",
         )
 
+    order.subtotal_amount = computed_subtotal
+    order.shipping_amount = round(payload.shipping_amount, 2)
+    order.discount_amount = computed_discount
+    order.total_amount = computed_total
+
     db.add(order)
+    db.flush()
+
+    if voucher_quote:
+        db.add(
+            VoucherRedemption(
+                voucher_id=voucher_quote.voucher.id,
+                user_id=user.id,
+                order_id=order.id,
+                voucher_code=voucher_quote.voucher.code,
+                discount_amount=voucher_quote.discount_amount,
+            )
+        )
 
     if payload.source == "cart":
         cart_items = list(db.scalars(select(CartItem).where(CartItem.user_id == user.id)).all())

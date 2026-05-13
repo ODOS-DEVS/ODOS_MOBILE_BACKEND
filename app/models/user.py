@@ -200,6 +200,15 @@ class User(Base):
         back_populates="user",
         cascade="all, delete-orphan",
     )
+    reviews: Mapped[list["Review"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+        foreign_keys="Review.user_id",
+    )
+    moderated_reviews: Mapped[list["Review"]] = relationship(
+        foreign_keys="Review.moderated_by_user_id",
+        back_populates="moderated_by_user",
+    )
     notification_events: Mapped[list["NotificationEvent"]] = relationship(
         back_populates="user",
         cascade="all, delete-orphan",
