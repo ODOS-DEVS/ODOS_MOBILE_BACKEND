@@ -160,6 +160,12 @@ After deploy, your API base URL will look like:
 https://your-backend-service.onrender.com/api
 ```
 
+Current deployed backend:
+
+- API docs: `https://odos-backend.onrender.com/docs#/`
+- Health check: `https://odos-backend.onrender.com/api/health`
+- API base URL: `https://odos-backend.onrender.com/api`
+
 ## Route Groups
 
 ### Shopper-facing
