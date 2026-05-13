@@ -19,6 +19,7 @@ Admin repo:
 - Pydantic Settings
 - JWT auth
 - Brevo transactional email
+- Cloudinary for uploaded media
 
 ## Current Backend Coverage
 
@@ -79,7 +80,12 @@ DATABASE_URL=postgresql+psycopg://odos_user:your_password@localhost:5432/odos_mo
 SECRET_KEY=replace-this-with-a-long-random-secret-at-least-32-characters
 JWT_ALGORITHM=HS256
 ACCESS_TOKEN_EXPIRE_MINUTES=10080
+CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173,https://your-admin-project.vercel.app
 GOOGLE_CLIENT_IDS=your-google-web-client-id.apps.googleusercontent.com,your-google-ios-client-id.apps.googleusercontent.com
+
+CLOUDINARY_CLOUD_NAME=your-cloudinary-cloud-name
+CLOUDINARY_API_KEY=your-cloudinary-api-key
+CLOUDINARY_API_SECRET=your-cloudinary-api-secret
 
 BREVO_API_KEY=your-brevo-api-key
 BREVO_SENDER_NAME=ODOS
@@ -114,6 +120,45 @@ Useful URLs:
 - `http://127.0.0.1:8000/api/health`
 
 Use `--host 0.0.0.0` for real-device mobile testing on the same network.
+
+## Render Deployment
+
+This repo now includes [render.yaml](/Users/paul/Desktop/DeV/odos-workspace/ODOS_MOBILE_BACKEND/render.yaml:1) so you can deploy the backend from the `odos-backend` GitHub repo with a Render Blueprint.
+
+What it provisions:
+
+- one FastAPI web service
+- one Render Postgres database
+- automatic `alembic upgrade head` before each deploy
+- health check at `/api/health`
+
+Recommended deploy flow:
+
+1. Push this repo to the `odos-backend` repository in your GitHub organization.
+2. In Render, choose `New` -> `Blueprint`.
+3. Connect the `odos-backend` repo and select the branch you want to deploy.
+4. When Render reads `render.yaml`, provide the required secret values:
+   - `CORS_ORIGINS`
+   - `CLOUDINARY_CLOUD_NAME`
+   - `CLOUDINARY_API_KEY`
+   - `CLOUDINARY_API_SECRET`
+   - `GOOGLE_CLIENT_IDS`
+   - `BREVO_API_KEY`
+   - `BREVO_SENDER_EMAIL`
+5. Deploy the Blueprint.
+
+Important notes:
+
+- `DATABASE_URL` is wired automatically from the Render Postgres instance.
+- `SECRET_KEY` is generated automatically by Render.
+- For stakeholder testing, set `CORS_ORIGINS` to include your Vercel admin URL.
+- Cloudinary is strongly recommended for deployment because uploaded images should not rely on Render's ephemeral filesystem.
+
+After deploy, your API base URL will look like:
+
+```text
+https://your-backend-service.onrender.com/api
+```
 
 ## Route Groups
 
