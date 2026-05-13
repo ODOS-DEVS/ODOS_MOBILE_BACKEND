@@ -129,7 +129,7 @@ What it provisions:
 
 - one FastAPI web service
 - one Render Postgres database
-- automatic `alembic upgrade head` before each deploy
+- automatic `alembic upgrade head` during service startup on the free tier
 - health check at `/api/health`
 
 Recommended deploy flow:
