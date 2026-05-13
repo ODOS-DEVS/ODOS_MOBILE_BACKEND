@@ -5,7 +5,20 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
-from app.routes import admin, account, auth, cart, catalog, health, notifications, orders, vendor, wishlist
+from app.routes import (
+    admin,
+    account,
+    auth,
+    cart,
+    catalog,
+    health,
+    notifications,
+    orders,
+    reviews,
+    vouchers,
+    vendor,
+    wishlist,
+)
 
 app = FastAPI(title="ODOS Mobile Backend")
 
@@ -27,6 +40,8 @@ app.include_router(cart.router, prefix="/api")
 app.include_router(catalog.router, prefix="/api")
 app.include_router(notifications.router, prefix="/api")
 app.include_router(orders.router, prefix="/api")
+app.include_router(reviews.router, prefix="/api")
+app.include_router(vouchers.router, prefix="/api")
 app.include_router(vendor.router, prefix="/api")
 app.include_router(admin.router, prefix="/api")
 app.include_router(wishlist.router, prefix="/api")

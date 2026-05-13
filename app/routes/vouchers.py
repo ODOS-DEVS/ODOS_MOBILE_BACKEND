@@ -1,0 +1,56 @@
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, status
+from sqlalchemy.orm import Session
+
+from app.controllers.voucher_controller import (
+    claim_voucher,
+    list_store_vouchers,
+    list_user_vouchers,
+    preview_voucher,
+)
+from app.core.auth import get_current_user
+from app.core.database import get_db
+from app.models import User
+from app.schemas.voucher import (
+    StoreVoucherRead,
+    VoucherPreviewRead,
+    VoucherPreviewRequest,
+    VoucherWalletRead,
+)
+
+router = APIRouter(prefix="/vouchers", tags=["vouchers"])
+
+
+@router.get("/stores/{store_id}", response_model=list[StoreVoucherRead])
+def get_store_vouchers(
+    store_id: str,
+    db: Session = Depends(get_db),
+):
+    return list_store_vouchers(db, store_id)
+
+
+@router.get("/me", response_model=list[VoucherWalletRead])
+def get_my_vouchers(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return list_user_vouchers(db, current_user)
+
+
+@router.post("/{voucher_id}/claim", response_model=VoucherWalletRead, status_code=status.HTTP_201_CREATED)
+def post_claim_voucher(
+    voucher_id: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return claim_voucher(db, current_user, voucher_id)
+
+
+@router.post("/preview", response_model=VoucherPreviewRead)
+def post_voucher_preview(
+    payload: VoucherPreviewRequest,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return preview_voucher(db, current_user, payload)

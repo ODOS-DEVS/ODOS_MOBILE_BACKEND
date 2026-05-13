@@ -2,10 +2,17 @@ import uuid
 from datetime import UTC, datetime
 
 from fastapi import HTTPException, UploadFile, status
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.controllers.notification_controller import create_notification_event
+from app.controllers.voucher_controller import (
+    build_voucher_reward_text,
+    assign_voucher_to_user,
+    validate_voucher_configuration,
+    voucher_status,
+)
 from app.models import (
     Market,
     Order,
@@ -15,6 +22,8 @@ from app.models import (
     UserRole,
     VendorApplication,
     VendorStatus,
+    Voucher,
+    VoucherRedemption,
 )
 from app.schemas.vendor import (
     VendorApplicationListItem,
@@ -28,6 +37,9 @@ from app.schemas.vendor import (
     VendorProductUpdate,
     VendorProfileRead,
     VendorStoreRead,
+    VendorVoucherGiftPayload,
+    VendorVoucherRead,
+    VendorVoucherUpsert,
 )
 from app.services.media_service import remove_media_file, save_image_upload, save_image_uploads
 
@@ -457,11 +469,12 @@ async def create_vendor_product(
         size_options=normalize_list(payload.size_options),
         specifications=normalize_list(payload.specifications),
         stock=payload.stock,
-        status="active",
+        status="pending",
         store_id=store.id,
         vendor_user_id=user.id,
         audience_slug=(store.audience_slugs or [None])[0],
         section=None,
+        is_active=False,
     )
     db.add(product)
     db.commit()
@@ -493,6 +506,7 @@ async def update_vendor_product(
     data = payload.model_dump(exclude_unset=True)
     if "name" in data:
         data["title"] = data.pop("name")
+    data.pop("status", None)
 
     previous_image_urls = list(product.image_urls or ([] if not product.image_url else [product.image_url]))
     next_gallery_urls = data.pop("image_urls", None)
@@ -535,6 +549,10 @@ async def update_vendor_product(
         if store:
             product.audience_slug = (store.audience_slugs or [product.audience_slug])[0]
 
+    if product.status != "suspended":
+        product.status = "pending"
+    product.is_active = False
+
     db.commit()
     db.refresh(product)
     return serialize_vendor_product(product)
@@ -561,6 +579,100 @@ def delete_vendor_product(db: Session, user: User, product_id: str) -> None:
 def list_vendor_orders(db: Session, user: User) -> list[VendorOrderRead]:
     require_vendor_access(user)
     return list_vendor_orders_payloads(db, user)
+
+
+def _vendor_voucher_stats_map(
+    db: Session,
+    voucher_ids: list[uuid.UUID],
+) -> dict[uuid.UUID, dict[str, float | int]]:
+    if not voucher_ids:
+        return {}
+
+    rows = db.execute(
+        select(
+            VoucherRedemption.voucher_id,
+            func.count(VoucherRedemption.id),
+            func.count(func.distinct(VoucherRedemption.user_id)),
+            func.coalesce(func.sum(VoucherRedemption.discount_amount), 0),
+        )
+        .where(VoucherRedemption.voucher_id.in_(voucher_ids))
+        .group_by(VoucherRedemption.voucher_id)
+    ).all()
+    return {
+        voucher_id: {
+            "redemption_count": int(redemption_count),
+            "unique_user_count": int(unique_user_count),
+            "total_discount_amount": float(total_discount_amount or 0),
+        }
+        for voucher_id, redemption_count, unique_user_count, total_discount_amount in rows
+    }
+
+
+def _serialize_vendor_voucher(
+    voucher: Voucher,
+    *,
+    redemption_count: int = 0,
+    unique_user_count: int = 0,
+    total_discount_amount: float = 0,
+) -> VendorVoucherRead:
+    return VendorVoucherRead(
+        id=voucher.id,
+        code=voucher.code,
+        title=voucher.title,
+        description=voucher.description,
+        issuer_name=voucher.issuer_name,
+        availability=voucher.availability,
+        reward_text=voucher.reward_text,
+        discount_type=voucher.discount_type,
+        discount_value=round(voucher.discount_value, 2),
+        min_subtotal=round(voucher.min_subtotal, 2),
+        max_discount=round(voucher.max_discount, 2) if voucher.max_discount is not None else None,
+        usage_limit=voucher.usage_limit,
+        per_user_limit=voucher.per_user_limit,
+        is_active=voucher.is_active,
+        status=voucher_status(
+            voucher,
+            now=datetime.now(UTC),
+            overall_count=redemption_count,
+        ),
+        redemption_count=redemption_count,
+        unique_user_count=unique_user_count,
+        total_discount_amount=round(total_discount_amount, 2),
+        starts_at=voucher.starts_at,
+        ends_at=voucher.ends_at,
+        created_at=voucher.created_at,
+    )
+
+
+def _get_vendor_voucher(db: Session, user: User, voucher_id: str) -> Voucher:
+    store = get_vendor_store(db, user)
+    if not store:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No managed store was found for this vendor.",
+        )
+
+    try:
+        normalized_id = uuid.UUID(str(voucher_id))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="That store promotion was not found.",
+        ) from exc
+
+    voucher = db.scalar(
+        select(Voucher).where(
+            Voucher.id == normalized_id,
+            Voucher.scope == "store",
+            Voucher.store_id == store.id,
+        )
+    )
+    if not voucher:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="That store promotion was not found.",
+        )
+    return voucher
 
 
 def update_vendor_order_status(
@@ -662,6 +774,205 @@ def update_vendor_order_status(
     raise HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,
         detail="That order was not found for this vendor.",
+    )
+
+
+def list_vendor_vouchers(db: Session, user: User) -> list[VendorVoucherRead]:
+    require_vendor_access(user)
+    store = get_vendor_store(db, user)
+    if not store:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No managed store was found for this vendor.",
+        )
+
+    vouchers = list(
+        db.scalars(
+            select(Voucher)
+            .where(
+                Voucher.scope == "store",
+                Voucher.store_id == store.id,
+            )
+            .order_by(Voucher.created_at.desc(), Voucher.title.asc())
+        ).all()
+    )
+    stats_map = _vendor_voucher_stats_map(db, [voucher.id for voucher in vouchers])
+    return [
+        _serialize_vendor_voucher(
+            voucher,
+            redemption_count=int(stats_map.get(voucher.id, {}).get("redemption_count", 0)),
+            unique_user_count=int(stats_map.get(voucher.id, {}).get("unique_user_count", 0)),
+            total_discount_amount=float(
+                stats_map.get(voucher.id, {}).get("total_discount_amount", 0)
+            ),
+        )
+        for voucher in vouchers
+    ]
+
+
+def create_vendor_voucher(
+    db: Session,
+    user: User,
+    payload: VendorVoucherUpsert,
+) -> VendorVoucherRead:
+    require_vendor_access(user)
+    store = get_vendor_store(db, user)
+    if not store:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No managed store was found for this vendor.",
+        )
+
+    validate_voucher_configuration(
+        scope="store",
+        availability=payload.availability,
+        discount_type=payload.discount_type,
+        discount_value=payload.discount_value,
+        starts_at=payload.starts_at,
+        ends_at=payload.ends_at,
+        usage_limit=payload.usage_limit,
+        per_user_limit=payload.per_user_limit,
+        store_id=store.id,
+    )
+    discount_value = 0 if payload.discount_type == "free_shipping" else round(payload.discount_value, 2)
+    voucher = Voucher(
+        code=payload.code,
+        title=payload.title,
+        description=payload.description,
+        issuer_name=payload.issuer_name or store.title,
+        scope="store",
+        availability=payload.availability,
+        store_id=store.id,
+        reward_text=build_voucher_reward_text(payload.discount_type, discount_value),
+        discount_type=payload.discount_type,
+        discount_value=discount_value,
+        min_subtotal=round(payload.min_subtotal, 2),
+        max_discount=round(payload.max_discount, 2) if payload.max_discount is not None else None,
+        usage_limit=payload.usage_limit,
+        per_user_limit=payload.per_user_limit,
+        is_active=payload.is_active,
+        starts_at=payload.starts_at,
+        ends_at=payload.ends_at,
+    )
+    db.add(voucher)
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="That voucher code already exists.",
+        ) from exc
+    db.refresh(voucher)
+    return _serialize_vendor_voucher(voucher)
+
+
+def update_vendor_voucher(
+    db: Session,
+    user: User,
+    voucher_id: str,
+    payload: VendorVoucherUpsert,
+) -> VendorVoucherRead:
+    require_vendor_access(user)
+    store = get_vendor_store(db, user)
+    if not store:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No managed store was found for this vendor.",
+        )
+
+    validate_voucher_configuration(
+        scope="store",
+        availability=payload.availability,
+        discount_type=payload.discount_type,
+        discount_value=payload.discount_value,
+        starts_at=payload.starts_at,
+        ends_at=payload.ends_at,
+        usage_limit=payload.usage_limit,
+        per_user_limit=payload.per_user_limit,
+        store_id=store.id,
+    )
+    voucher = _get_vendor_voucher(db, user, voucher_id)
+    discount_value = 0 if payload.discount_type == "free_shipping" else round(payload.discount_value, 2)
+    voucher.code = payload.code
+    voucher.title = payload.title
+    voucher.description = payload.description
+    voucher.issuer_name = payload.issuer_name or store.title
+    voucher.availability = payload.availability
+    voucher.reward_text = build_voucher_reward_text(payload.discount_type, discount_value)
+    voucher.discount_type = payload.discount_type
+    voucher.discount_value = discount_value
+    voucher.min_subtotal = round(payload.min_subtotal, 2)
+    voucher.max_discount = round(payload.max_discount, 2) if payload.max_discount is not None else None
+    voucher.usage_limit = payload.usage_limit
+    voucher.per_user_limit = payload.per_user_limit
+    voucher.is_active = payload.is_active
+    voucher.starts_at = payload.starts_at
+    voucher.ends_at = payload.ends_at
+
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="That voucher code already exists.",
+        ) from exc
+
+    db.refresh(voucher)
+    stats_map = _vendor_voucher_stats_map(db, [voucher.id])
+    stats = stats_map.get(voucher.id, {})
+    return _serialize_vendor_voucher(
+        voucher,
+        redemption_count=int(stats.get("redemption_count", 0)),
+        unique_user_count=int(stats.get("unique_user_count", 0)),
+        total_discount_amount=float(stats.get("total_discount_amount", 0)),
+    )
+
+
+def archive_vendor_voucher(db: Session, user: User, voucher_id: str) -> None:
+    require_vendor_access(user)
+    voucher = _get_vendor_voucher(db, user, voucher_id)
+    voucher.is_active = False
+    db.commit()
+
+
+def gift_vendor_voucher(
+    db: Session,
+    user: User,
+    voucher_id: str,
+    payload: VendorVoucherGiftPayload,
+) -> VendorVoucherRead:
+    require_vendor_access(user)
+    voucher = _get_vendor_voucher(db, user, voucher_id)
+    recipient = db.scalar(select(User).where(User.email == payload.recipient_email))
+    if not recipient:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="That shopper account was not found.",
+        )
+    if not recipient.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="That shopper account is not currently active.",
+        )
+
+    assign_voucher_to_user(
+        db,
+        voucher=voucher,
+        recipient=recipient,
+        source="gift",
+        assigned_by_user_id=user.id,
+        note=payload.note,
+    )
+
+    stats_map = _vendor_voucher_stats_map(db, [voucher.id])
+    stats = stats_map.get(voucher.id, {})
+    return _serialize_vendor_voucher(
+        voucher,
+        redemption_count=int(stats.get("redemption_count", 0)),
+        unique_user_count=int(stats.get("unique_user_count", 0)),
+        total_discount_amount=float(stats.get("total_discount_amount", 0)),
     )
 
 
