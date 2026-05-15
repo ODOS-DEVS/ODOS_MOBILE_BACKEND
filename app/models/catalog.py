@@ -63,6 +63,12 @@ class Product(Base):
     specifications: Mapped[list[str] | None] = mapped_column(ARRAY(String(255)), nullable=True)
     placement_tags: Mapped[list[str] | None] = mapped_column(ARRAY(String(50)), nullable=True)
     description: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    is_returnable: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        server_default="true",
+        nullable=False,
+    )
     stock: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     status: Mapped[str] = mapped_column(String(30), default="active", server_default="active", nullable=False)
     store_id: Mapped[str | None] = mapped_column(

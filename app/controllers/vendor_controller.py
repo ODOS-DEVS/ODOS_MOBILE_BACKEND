@@ -1,3 +1,4 @@
+import logging
 import uuid
 from datetime import UTC, datetime
 
@@ -41,8 +42,15 @@ from app.schemas.vendor import (
     VendorVoucherRead,
     VendorVoucherUpsert,
 )
+from app.schemas.order import OrderRead
+from app.services.email_service import (
+    send_vendor_application_approved_email,
+    send_vendor_application_pending_email,
+)
 from app.services.media_service import remove_media_file, save_image_upload, save_image_uploads
+from app.services.realtime_service import realtime_manager
 
+logger = logging.getLogger(__name__)
 VENDOR_ACTIVE_ORDER_STATUSES = {"pending", "confirmed", "processing", "ready"}
 VENDOR_ALLOWED_STATUSES = {
     "pending",
@@ -103,6 +111,46 @@ def build_unique_store_slug(db: Session, title: str, store_id: str | None = None
             return candidate
         suffix += 1
         candidate = f"{base_slug}-{suffix}"
+
+
+def _dispatch_vendor_application_pending_email(
+    *,
+    user: User,
+    application: VendorApplication,
+) -> None:
+    try:
+        send_vendor_application_pending_email(
+            to_email=user.email,
+            to_name=user.full_name,
+            store_name=application.store_name,
+            business_category=application.business_category,
+            submitted_at_label=(
+                application.submitted_at or application.created_at or datetime.now(UTC)
+            ).strftime("%d %b %Y, %I:%M %p UTC"),
+        )
+    except Exception:
+        logger.exception(
+            "Failed to send vendor application pending email to %s",
+            user.email,
+        )
+
+
+def _dispatch_vendor_application_approved_email(
+    *,
+    user: User,
+    application: VendorApplication,
+) -> None:
+    try:
+        send_vendor_application_approved_email(
+            to_email=user.email,
+            to_name=user.full_name,
+            store_name=application.store_name,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to send vendor application approved email to %s",
+            user.email,
+        )
 
 
 def require_admin(user: User) -> None:
@@ -223,9 +271,44 @@ def serialize_vendor_product(product: Product) -> VendorProductRead:
         color_options=product.color_options,
         size_options=product.size_options,
         specifications=product.specifications,
+        is_returnable=product.is_returnable,
         status=product.status,
         created_at=product.created_at,
         updated_at=product.updated_at,
+    )
+
+
+def broadcast_catalog_product_change(
+    product: Product,
+    *,
+    status: str | None = None,
+    is_active: bool | None = None,
+) -> None:
+    realtime_manager.broadcast_event_sync(
+        "catalog.product.changed",
+        {
+            "product_id": product.id,
+            "store_id": product.store_id,
+            "status": status if status is not None else product.status,
+            "is_active": is_active if is_active is not None else product.is_active,
+            "category": product.category,
+            "subcategory": product.subcategory,
+            "audience_slug": product.audience_slug,
+            "section": product.section,
+        },
+    )
+
+
+def broadcast_catalog_store_change(store: Store) -> None:
+    realtime_manager.broadcast_event_sync(
+        "catalog.store.changed",
+        {
+            "store_id": store.id,
+            "status": store.status,
+            "market_slug": store.market_slug,
+            "category": store.category,
+            "audience_slugs": store.audience_slugs,
+        },
     )
 
 
@@ -369,6 +452,7 @@ async def submit_vendor_application(
     db.commit()
     db.refresh(application)
     db.refresh(user)
+    _dispatch_vendor_application_pending_email(user=user, application=application)
 
     return application
 
@@ -468,6 +552,7 @@ async def create_vendor_product(
         color_options=normalize_list(payload.color_options),
         size_options=normalize_list(payload.size_options),
         specifications=normalize_list(payload.specifications),
+        is_returnable=payload.is_returnable,
         stock=payload.stock,
         status="pending",
         store_id=store.id,
@@ -479,8 +564,20 @@ async def create_vendor_product(
     db.add(product)
     db.commit()
     db.refresh(product)
-
-    return serialize_vendor_product(product)
+    broadcast_catalog_product_change(product)
+    serialized_product = serialize_vendor_product(product)
+    realtime_manager.publish_user_event_sync(
+        str(user.id),
+        "vendor.product.updated",
+        serialized_product.model_dump(mode="json"),
+    )
+    dashboard = fetch_vendor_dashboard(db, user)
+    realtime_manager.publish_user_event_sync(
+        str(user.id),
+        "vendor.dashboard.updated",
+        dashboard.model_dump(mode="json"),
+    )
+    return serialized_product
 
 
 async def update_vendor_product(
@@ -555,7 +652,20 @@ async def update_vendor_product(
 
     db.commit()
     db.refresh(product)
-    return serialize_vendor_product(product)
+    broadcast_catalog_product_change(product)
+    serialized_product = serialize_vendor_product(product)
+    realtime_manager.publish_user_event_sync(
+        str(user.id),
+        "vendor.product.updated",
+        serialized_product.model_dump(mode="json"),
+    )
+    dashboard = fetch_vendor_dashboard(db, user)
+    realtime_manager.publish_user_event_sync(
+        str(user.id),
+        "vendor.dashboard.updated",
+        dashboard.model_dump(mode="json"),
+    )
+    return serialized_product
 
 
 def delete_vendor_product(db: Session, user: User, product_id: str) -> None:
@@ -572,8 +682,26 @@ def delete_vendor_product(db: Session, user: User, product_id: str) -> None:
             detail="That vendor product was not found.",
         )
 
+    deleted_store_id = product.store_id
+    deleted_category = product.category
+    deleted_subcategory = product.subcategory
+    deleted_audience_slug = product.audience_slug
+    deleted_section = product.section
     db.delete(product)
     db.commit()
+    realtime_manager.broadcast_event_sync(
+        "catalog.product.changed",
+        {
+            "product_id": product_id,
+            "store_id": deleted_store_id,
+            "status": "deleted",
+            "is_active": False,
+            "category": deleted_category,
+            "subcategory": deleted_subcategory,
+            "audience_slug": deleted_audience_slug,
+            "section": deleted_section,
+        },
+    )
 
 
 def list_vendor_orders(db: Session, user: User) -> list[VendorOrderRead]:
@@ -765,10 +893,26 @@ def update_vendor_order_status(
     )
     db.commit()
     db.refresh(order)
+    realtime_manager.publish_user_event_sync(
+        str(order.user_id),
+        "order.updated",
+        OrderRead.model_validate(order).model_dump(mode="json"),
+    )
 
     vendor_orders = list_vendor_orders_payloads(db, user)
     for vendor_order in vendor_orders:
         if str(vendor_order.id) == order_id:
+            realtime_manager.publish_user_event_sync(
+                str(user.id),
+                "vendor.order.updated",
+                vendor_order.model_dump(mode="json"),
+            )
+            dashboard = fetch_vendor_dashboard(db, user)
+            realtime_manager.publish_user_event_sync(
+                str(user.id),
+                "vendor.dashboard.updated",
+                dashboard.model_dump(mode="json"),
+            )
             return vendor_order
 
     raise HTTPException(
@@ -1035,6 +1179,7 @@ async def update_vendor_store(
 
     db.commit()
     db.refresh(store)
+    broadcast_catalog_store_change(store)
     return serialize_vendor_store(store)
 
 
@@ -1150,6 +1295,10 @@ def approve_vendor_application(
     )
     db.commit()
     db.refresh(application)
+    if store:
+        db.refresh(store)
+        broadcast_catalog_store_change(store)
+    _dispatch_vendor_application_approved_email(user=applicant, application=application)
     return application
 
 

@@ -163,6 +163,7 @@ async def add_vendor_product(
     color_options: Annotated[str | None, Form(max_length=255)] = None,
     size_options: Annotated[str | None, Form(max_length=255)] = None,
     specifications: Annotated[str | None, Form(max_length=3000)] = None,
+    is_returnable: Annotated[bool, Form()] = True,
     images: list[UploadFile] | None = File(default=None),
 ):
     payload = VendorProductCreate(
@@ -179,6 +180,7 @@ async def add_vendor_product(
         color_options=_split_csv_values(color_options),
         size_options=_split_csv_values(size_options),
         specifications=_split_multiline_values(specifications),
+        is_returnable=is_returnable,
     )
     return await create_vendor_product(db, current_user, payload, images)
 
@@ -202,6 +204,7 @@ async def patch_vendor_product(
     color_options: Annotated[str | None, Form(max_length=255)] = None,
     size_options: Annotated[str | None, Form(max_length=255)] = None,
     specifications: Annotated[str | None, Form(max_length=3000)] = None,
+    is_returnable: Annotated[bool | None, Form()] = None,
     status_value: Annotated[str | None, Form(alias="status", max_length=30)] = None,
     images: list[UploadFile] | None = File(default=None),
 ):
@@ -220,6 +223,7 @@ async def patch_vendor_product(
         color_options=_split_csv_values(color_options),
         size_options=_split_csv_values(size_options),
         specifications=_split_multiline_values(specifications),
+        is_returnable=is_returnable,
         status=status_value,
     )
     return await update_vendor_product(db, current_user, product_id, payload, images)

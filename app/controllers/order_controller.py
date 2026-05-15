@@ -8,12 +8,76 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.controllers.notification_controller import create_notification_event
+from app.controllers.vendor_controller import fetch_vendor_dashboard, list_vendor_orders_payloads
 from app.controllers.voucher_controller import build_voucher_quote
-from app.models import CartItem, Order, OrderItem, User, VoucherRedemption
-from app.schemas.order import OrderCreate
+from app.models import CartItem, Order, OrderItem, Product, ReturnRequest, User, VoucherRedemption
+from app.schemas.order import OrderCreate, OrderRead, ReturnRequestCreate, ReturnRequestRead
+from app.services.realtime_service import realtime_manager
 from app.services.push_service import send_expo_push_notification
 
 logger = logging.getLogger(__name__)
+OPEN_RETURN_REQUEST_STATUSES = {"requested", "under_review", "approved"}
+
+
+def _serialize_order(order: Order) -> dict:
+    return OrderRead.model_validate(order).model_dump(mode="json")
+
+
+def _serialize_return_request(request: ReturnRequest) -> ReturnRequestRead:
+    return ReturnRequestRead.model_validate(request)
+
+
+def _broadcast_order_realtime(db: Session, order: Order) -> None:
+    realtime_manager.publish_user_event_sync(
+        str(order.user_id),
+        "order.updated",
+        _serialize_order(order),
+    )
+
+    vendor_user_ids = list(
+        dict.fromkeys(
+            str(vendor_user_id)
+            for vendor_user_id in db.scalars(
+                select(Product.vendor_user_id).where(
+                    Product.id.in_([item.product_id for item in order.items if item.product_id]),
+                    Product.vendor_user_id.is_not(None),
+                )
+            ).all()
+            if vendor_user_id
+        )
+    )
+
+    for vendor_user_id in vendor_user_ids:
+        vendor_user = db.get(User, vendor_user_id)
+        if not vendor_user:
+            continue
+
+        vendor_order = next(
+            (
+                item
+                for item in list_vendor_orders_payloads(db, vendor_user)
+                if str(item.id) == str(order.id)
+            ),
+            None,
+        )
+        if vendor_order:
+            realtime_manager.publish_user_event_sync(
+                str(vendor_user.id),
+                "vendor.order.updated",
+                vendor_order.model_dump(mode="json"),
+            )
+
+        try:
+            dashboard = fetch_vendor_dashboard(db, vendor_user)
+        except HTTPException:
+            dashboard = None
+
+        if dashboard:
+            realtime_manager.publish_user_event_sync(
+                str(vendor_user.id),
+                "vendor.dashboard.updated",
+                dashboard.model_dump(mode="json"),
+            )
 
 
 def _generate_order_number(db: Session) -> str:
@@ -54,6 +118,14 @@ def _dispatch_order_push(
 def create_order(db: Session, user: User, payload: OrderCreate) -> Order:
     computed_subtotal = 0.0
     voucher_quote = None
+    product_returnability_map = {
+        product_id: bool(is_returnable)
+        for product_id, is_returnable in db.execute(
+            select(Product.id, Product.is_returnable).where(
+                Product.id.in_([item.product_id for item in payload.items]),
+            )
+        ).all()
+    }
     if payload.voucher_code:
         voucher_quote = build_voucher_quote(
             db,
@@ -102,6 +174,7 @@ def create_order(db: Session, user: User, payload: OrderCreate) -> Order:
                 quantity=item.quantity,
                 unit_price=item.unit_price,
                 line_total=line_total,
+                is_returnable=product_returnability_map.get(item.product_id, True),
                 selected_color=item.selected_color,
                 selected_size=item.selected_size,
             )
@@ -149,7 +222,7 @@ def create_order(db: Session, user: User, payload: OrderCreate) -> Order:
 
     created_order = db.scalar(
         select(Order)
-        .options(selectinload(Order.items))
+        .options(selectinload(Order.items), selectinload(Order.return_requests))
         .where(Order.id == order.id, Order.user_id == user.id)
     )
     if not created_order:
@@ -179,6 +252,7 @@ def create_order(db: Session, user: User, payload: OrderCreate) -> Order:
     )
     db.commit()
     db.refresh(created_order)
+    _broadcast_order_realtime(db, created_order)
 
     return created_order
 
@@ -187,7 +261,7 @@ def list_orders(db: Session, user: User) -> list[Order]:
     return list(
         db.scalars(
             select(Order)
-            .options(selectinload(Order.items))
+            .options(selectinload(Order.items), selectinload(Order.return_requests))
             .where(Order.user_id == user.id)
             .order_by(Order.placed_at.desc(), Order.created_at.desc())
         ).all()
@@ -197,7 +271,7 @@ def list_orders(db: Session, user: User) -> list[Order]:
 def get_order(db: Session, user: User, order_id: str) -> Order:
     order = db.scalar(
         select(Order)
-        .options(selectinload(Order.items))
+        .options(selectinload(Order.items), selectinload(Order.return_requests))
         .where(Order.id == order_id, Order.user_id == user.id)
     )
     if not order:
@@ -207,6 +281,104 @@ def get_order(db: Session, user: User, order_id: str) -> Order:
         )
 
     return order
+
+
+def create_return_request(
+    db: Session,
+    user: User,
+    order_id: str,
+    payload: ReturnRequestCreate,
+) -> ReturnRequestRead:
+    order = get_order(db, user, order_id)
+
+    if order.status != "delivered":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Returns can only be requested after an order has been delivered.",
+        )
+
+    order_item = next((item for item in order.items if item.id == payload.order_item_id), None)
+    if not order_item:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="That order item was not found.",
+        )
+
+    if not order_item.is_returnable:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This product is not eligible for returns or exchanges.",
+        )
+
+    if payload.quantity > order_item.quantity:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Return quantity cannot be greater than the delivered quantity.",
+        )
+
+    existing_open_request = db.scalar(
+        select(ReturnRequest).where(
+            ReturnRequest.order_item_id == order_item.id,
+            ReturnRequest.user_id == user.id,
+            ReturnRequest.status.in_(OPEN_RETURN_REQUEST_STATUSES),
+        )
+    )
+    if existing_open_request:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="There is already an active return request for this item.",
+        )
+
+    refund_amount = None
+    if payload.request_type == "refund":
+        refund_amount = round(order_item.unit_price * payload.quantity, 2)
+
+    return_request = ReturnRequest(
+        order_id=order.id,
+        order_item_id=order_item.id,
+        user_id=user.id,
+        request_type=payload.request_type,
+        status="requested",
+        quantity=payload.quantity,
+        reason=payload.reason,
+        details=payload.details,
+        evidence_image_urls=payload.evidence_image_urls,
+        refund_amount=refund_amount,
+    )
+    db.add(return_request)
+    db.commit()
+
+    refreshed_request = db.scalar(
+        select(ReturnRequest)
+        .options(
+            selectinload(ReturnRequest.order).selectinload(Order.items),
+            selectinload(ReturnRequest.order).selectinload(Order.return_requests),
+        )
+        .where(ReturnRequest.id == return_request.id)
+    )
+    if not refreshed_request:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Your return request was created, but we couldn't reload it.",
+        )
+
+    create_notification_event(
+        db,
+        user,
+        kind="return_requested",
+        title="Return request submitted",
+        body=f"We've received your {payload.request_type} request for {order_item.title}.",
+        icon="refresh-circle-outline",
+        accent="warning",
+        action_label="View order",
+        route_type="order",
+        route_target_id=str(order.id),
+        image_key=order_item.image_key,
+    )
+    db.commit()
+    db.refresh(refreshed_request)
+    _broadcast_order_realtime(db, refreshed_request.order)
+    return _serialize_return_request(refreshed_request)
 
 
 def cancel_order(
@@ -252,6 +424,7 @@ def cancel_order(
     )
     db.commit()
     db.refresh(order)
+    _broadcast_order_realtime(db, order)
     return order
 
 
@@ -293,6 +466,7 @@ def confirm_order_delivery(db: Session, user: User, order_id: str) -> Order:
     )
     db.commit()
     db.refresh(order)
+    _broadcast_order_realtime(db, order)
     return order
 
 

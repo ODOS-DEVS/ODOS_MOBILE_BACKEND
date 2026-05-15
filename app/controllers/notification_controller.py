@@ -4,6 +4,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import NotificationEvent, NotificationRead, Order, User
+from app.schemas.notification import NotificationEventRead
+from app.services.realtime_service import realtime_manager
 
 
 def create_notification_event(
@@ -34,6 +36,11 @@ def create_notification_event(
     )
     db.add(event)
     db.flush()
+    realtime_manager.publish_user_event_sync(
+        str(user.id),
+        "notification.created",
+        NotificationEventRead.model_validate(event).model_dump(mode="json"),
+    )
     return event
 
 
