@@ -188,6 +188,7 @@ class VendorProductCreate(BaseModel):
     color_options: list[str] | None = None
     size_options: list[str] | None = None
     specifications: list[str] | None = None
+    is_returnable: bool = True
 
     @field_validator(
         "name",
@@ -241,6 +242,7 @@ class VendorProductUpdate(BaseModel):
     color_options: list[str] | None = None
     size_options: list[str] | None = None
     specifications: list[str] | None = None
+    is_returnable: bool | None = None
     status: str | None = Field(default=None, min_length=1, max_length=30)
 
     @field_validator(
@@ -304,6 +306,7 @@ class VendorProductRead(BaseModel):
     color_options: list[str] | None = None
     size_options: list[str] | None = None
     specifications: list[str] | None = None
+    is_returnable: bool
     status: str
     created_at: datetime
     updated_at: datetime

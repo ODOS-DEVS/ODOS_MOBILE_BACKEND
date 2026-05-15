@@ -1,4 +1,5 @@
 from pathlib import Path
+import asyncio
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,16 +12,24 @@ from app.routes import (
     auth,
     cart,
     catalog,
+    chat,
     health,
     notifications,
     orders,
+    realtime,
     reviews,
     vouchers,
     vendor,
     wishlist,
 )
+from app.services.realtime_service import realtime_manager
 
 app = FastAPI(title="ODOS Mobile Backend")
+
+
+@app.on_event("startup")
+async def on_startup() -> None:
+    realtime_manager.bind_loop(asyncio.get_running_loop())
 
 app.add_middleware(
     CORSMiddleware,
@@ -38,8 +47,10 @@ app.include_router(auth.router, prefix="/api/auth")
 app.include_router(account.router, prefix="/api")
 app.include_router(cart.router, prefix="/api")
 app.include_router(catalog.router, prefix="/api")
+app.include_router(chat.router, prefix="/api")
 app.include_router(notifications.router, prefix="/api")
 app.include_router(orders.router, prefix="/api")
+app.include_router(realtime.router, prefix="/api")
 app.include_router(reviews.router, prefix="/api")
 app.include_router(vouchers.router, prefix="/api")
 app.include_router(vendor.router, prefix="/api")

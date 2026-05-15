@@ -87,9 +87,49 @@ class OrderItemRead(BaseModel):
     quantity: int
     unit_price: float
     line_total: float
+    is_returnable: bool
     selected_color: str | None
     selected_size: str | None
     created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class ReturnRequestCreate(BaseModel):
+    order_item_id: uuid.UUID
+    request_type: Literal["refund", "exchange", "return"]
+    quantity: int = Field(default=1, ge=1, le=99)
+    reason: str = Field(min_length=2, max_length=160)
+    details: str | None = Field(default=None, max_length=1000)
+    evidence_image_urls: list[str] | None = None
+
+    @field_validator("reason", "details", mode="before")
+    @classmethod
+    def strip_return_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        cleaned_value = value.strip()
+        return cleaned_value or None
+
+
+class ReturnRequestRead(BaseModel):
+    id: uuid.UUID
+    order_id: uuid.UUID
+    order_item_id: uuid.UUID
+    user_id: uuid.UUID
+    request_type: str
+    status: str
+    quantity: int
+    reason: str
+    details: str | None
+    evidence_image_urls: list[str] | None
+    admin_note: str | None
+    refund_amount: float | None
+    reviewed_by_user_id: uuid.UUID | None
+    reviewed_at: datetime | None
+    resolved_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -124,5 +164,6 @@ class OrderRead(BaseModel):
     created_at: datetime
     updated_at: datetime
     items: list[OrderItemRead]
+    return_requests: list[ReturnRequestRead] = []
 
     model_config = ConfigDict(from_attributes=True)

@@ -1,5 +1,12 @@
 from app.schemas.catalog import CategoryRead, MarketRead, ProductRead, StoreRead
-from app.schemas.order import OrderCreate, OrderItemCreate, OrderItemRead, OrderRead
+from app.schemas.order import (
+    OrderCreate,
+    OrderItemCreate,
+    OrderItemRead,
+    OrderRead,
+    ReturnRequestCreate,
+    ReturnRequestRead,
+)
 from app.schemas.user import (
     AuthToken,
     GoogleAuthRequest,
@@ -21,6 +28,8 @@ __all__ = [
     "OrderItemRead",
     "OrderRead",
     "ProductRead",
+    "ReturnRequestCreate",
+    "ReturnRequestRead",
     "StoreRead",
     "UserCreate",
     "UserLogin",

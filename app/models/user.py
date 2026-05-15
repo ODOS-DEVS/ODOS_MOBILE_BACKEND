@@ -200,14 +200,39 @@ class User(Base):
         back_populates="user",
         cascade="all, delete-orphan",
     )
+    customer_chat_threads: Mapped[list["ChatThread"]] = relationship(
+        foreign_keys="ChatThread.customer_user_id",
+        back_populates="customer_user",
+    )
+    vendor_chat_threads: Mapped[list["ChatThread"]] = relationship(
+        foreign_keys="ChatThread.vendor_user_id",
+        back_populates="vendor_user",
+    )
+    sent_chat_messages: Mapped[list["ChatMessage"]] = relationship(
+        foreign_keys="ChatMessage.sender_user_id",
+        back_populates="sender_user",
+    )
+    received_chat_messages: Mapped[list["ChatMessage"]] = relationship(
+        foreign_keys="ChatMessage.recipient_user_id",
+        back_populates="recipient_user",
+    )
     reviews: Mapped[list["Review"]] = relationship(
         back_populates="user",
         cascade="all, delete-orphan",
         foreign_keys="Review.user_id",
     )
+    return_requests: Mapped[list["ReturnRequest"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+        foreign_keys="ReturnRequest.user_id",
+    )
     moderated_reviews: Mapped[list["Review"]] = relationship(
         foreign_keys="Review.moderated_by_user_id",
         back_populates="moderated_by_user",
+    )
+    reviewed_return_requests: Mapped[list["ReturnRequest"]] = relationship(
+        foreign_keys="ReturnRequest.reviewed_by_user_id",
+        back_populates="reviewed_by_user",
     )
     notification_events: Mapped[list["NotificationEvent"]] = relationship(
         back_populates="user",

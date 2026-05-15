@@ -20,6 +20,7 @@ from app.controllers.admin_controller import (
     get_admin_me,
     get_admin_order,
     get_admin_product,
+    get_admin_return_request,
     get_admin_store,
     get_admin_user,
     get_admin_vendor,
@@ -28,6 +29,7 @@ from app.controllers.admin_controller import (
     list_admin_notifications,
     list_admin_orders,
     list_admin_products,
+    list_admin_return_requests,
     list_admin_reviews,
     list_admin_stores,
     list_admin_users,
@@ -42,6 +44,7 @@ from app.controllers.admin_controller import (
     update_admin_profile,
     update_admin_product,
     update_admin_product_status,
+    update_admin_return_request,
     update_admin_store_status,
     update_admin_user_status,
     update_admin_vendor_status,
@@ -63,16 +66,21 @@ from app.schemas.admin import (
     AdminMarketRead,
     AdminMarketUpsert,
     AdminNotificationRead,
+    AdminOrderDetailRead,
     AdminOrderRead,
     AdminOrderStatusUpdate,
     AdminProductCreate,
     AdminProductRead,
     AdminProductStatusUpdate,
+    AdminReturnRequestRead,
+    AdminReturnRequestUpdate,
     AdminReviewModerationUpdate,
     AdminReviewRead,
+    AdminStoreDetailRead,
     AdminStoreRead,
     AdminStoreUpsert,
     AdminStoreStatusUpdate,
+    AdminUserDetailRead,
     AdminUserRead,
     AdminUserStatusUpdate,
     AdminVendorRead,
@@ -176,7 +184,7 @@ def get_users(
     return list_admin_users(db, current_user)
 
 
-@router.get("/users/{user_id}", response_model=AdminUserRead)
+@router.get("/users/{user_id}", response_model=AdminUserDetailRead)
 def get_user(
     user_id: str,
     current_user: Annotated[User, Depends(get_current_user)],
@@ -262,7 +270,7 @@ def get_stores(
     return list_admin_stores(db, current_user)
 
 
-@router.get("/stores/{store_id}", response_model=AdminStoreRead)
+@router.get("/stores/{store_id}", response_model=AdminStoreDetailRead)
 def get_store(
     store_id: str,
     current_user: Annotated[User, Depends(get_current_user)],
@@ -628,7 +636,7 @@ def get_orders(
     return list_admin_orders(db, current_user)
 
 
-@router.get("/orders/{order_id}", response_model=AdminOrderRead)
+@router.get("/orders/{order_id}", response_model=AdminOrderDetailRead)
 def get_order(
     order_id: str,
     current_user: Annotated[User, Depends(get_current_user)],
@@ -645,6 +653,33 @@ def patch_order_status(
     db: Session = Depends(get_db),
 ):
     return update_admin_order_status(db, current_user, order_id, payload)
+
+
+@router.get("/returns", response_model=list[AdminReturnRequestRead])
+def get_return_requests(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return list_admin_return_requests(db, current_user)
+
+
+@router.get("/returns/{request_id}", response_model=AdminReturnRequestRead)
+def get_return_request(
+    request_id: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return get_admin_return_request(db, current_user, request_id)
+
+
+@router.patch("/returns/{request_id}", response_model=AdminReturnRequestRead)
+def patch_return_request(
+    request_id: str,
+    payload: AdminReturnRequestUpdate,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return update_admin_return_request(db, current_user, request_id, payload)
 
 
 @router.get("/notifications", response_model=list[AdminNotificationRead])

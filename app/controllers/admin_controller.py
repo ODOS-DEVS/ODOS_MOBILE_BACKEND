@@ -9,12 +9,17 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.controllers.auth_controller import build_auth_token, login_user
+from app.controllers.notification_controller import create_notification_event
 from app.core.security import hash_password
 from app.core.catalog_taxonomy import ODOS_CATEGORY_TAXONOMY
 from app.controllers.vendor_controller import (
     approve_vendor_application,
+    broadcast_catalog_product_change,
+    broadcast_catalog_store_change,
+    fetch_vendor_dashboard,
     list_vendor_applications,
     reject_vendor_application,
+    serialize_vendor_product,
 )
 from app.controllers.review_controller import recompute_product_review_metrics
 from app.controllers.voucher_controller import (
@@ -24,21 +29,29 @@ from app.controllers.voucher_controller import (
     voucher_status,
 )
 from app.services.media_service import remove_media_file, save_image_upload, save_image_uploads
+from app.services.realtime_service import realtime_manager
 from app.models import (
+    CartItem,
     Category,
     Market,
     NotificationEvent,
     NotificationRead,
     Order,
+    OrderItem,
     Product,
+    ReturnRequest,
     Review,
+    SavedAddress,
+    SavedPaymentMethod,
     Store,
     User,
+    UserAuthAccount,
     UserRole,
     VendorApplication,
     VendorStatus,
     Voucher,
     VoucherRedemption,
+    WishlistItem,
 )
 from app.schemas.admin import (
     AdminBootstrapStatusRead,
@@ -49,18 +62,31 @@ from app.schemas.admin import (
     AdminMarketRead,
     AdminMarketUpsert,
     AdminNotificationRead,
+    AdminOrderDetailRead,
+    AdminOrderItemRead,
     AdminOrderRead,
     AdminOrderStatusUpdate,
+    AdminReturnRequestRead,
+    AdminReturnRequestUpdate,
     AdminProductCreate,
     AdminProductRead,
     AdminProductStatusUpdate,
+    AdminUserAddressRead,
+    AdminUserDetailRead,
+    AdminUserPaymentMethodRead,
     AdminReviewModerationUpdate,
     AdminReviewRead,
+    AdminStoreDetailRead,
+    AdminStoreProductRead,
     AdminStoreRead,
+    AdminStoreStatsRead,
+    AdminUserStatsRead,
     AdminStoreUpsert,
     AdminStoreStatusUpdate,
+    AdminUserStoreSummaryRead,
     AdminUserRead,
     AdminUserStatusUpdate,
+    AdminUserVendorApplicationRead,
     AdminVendorRead,
     AdminVendorStatusUpdate,
     AdminVoucherRead,
@@ -81,6 +107,14 @@ SUPPORTED_ORDER_STATUSES = {
     "out_for_delivery",
     "delivered",
     "cancelled",
+}
+SUPPORTED_RETURN_REQUEST_STATUSES = {
+    "requested",
+    "under_review",
+    "approved",
+    "rejected",
+    "refunded",
+    "exchanged",
 }
 
 
@@ -229,6 +263,149 @@ def _serialize_user(user: User) -> AdminUserRead:
     )
 
 
+def _serialize_saved_address(address: SavedAddress) -> AdminUserAddressRead:
+    return AdminUserAddressRead(
+        id=address.id,
+        label=address.label,
+        full_name=address.full_name,
+        phone=address.phone,
+        street=address.street,
+        city=address.city,
+        region=address.region,
+        is_default=address.is_default,
+        created_at=address.created_at,
+        updated_at=address.updated_at,
+    )
+
+
+def _serialize_saved_payment_method(method: SavedPaymentMethod) -> AdminUserPaymentMethodRead:
+    return AdminUserPaymentMethodRead(
+        id=method.id,
+        type=method.type.value if hasattr(method.type, "value") else str(method.type),
+        label=method.label,
+        is_default=method.is_default,
+        card_name=method.card_name,
+        card_last4=method.card_last4,
+        expiry=method.expiry,
+        network=method.network,
+        phone=method.phone,
+        created_at=method.created_at,
+        updated_at=method.updated_at,
+    )
+
+
+def _serialize_user_store_summary(store: Store) -> AdminUserStoreSummaryRead:
+    return AdminUserStoreSummaryRead(
+        id=store.id,
+        name=store.title,
+        slug=store.slug,
+        status=store.status,
+        logo_image=store.image_url,
+        banner_image=store.image_banner_url,
+        market_id=store.market_id,
+        location=store.address,
+        region=store.region or "",
+        city=store.city or "",
+        created_at=store.created_at,
+        updated_at=store.updated_at,
+    )
+
+
+def _serialize_vendor_application_detail(
+    application: VendorApplication,
+) -> AdminUserVendorApplicationRead:
+    return AdminUserVendorApplicationRead(
+        id=application.id,
+        status=application.status,
+        business_name=application.business_name,
+        business_category=application.business_category,
+        business_description=application.business_description,
+        phone_number=application.phone_number,
+        whatsapp_number=application.whatsapp_number,
+        region=application.region,
+        city=application.city,
+        market_id=application.market_id,
+        store_location=application.store_location,
+        store_name=application.store_name,
+        store_description=application.store_description,
+        ghana_card_number=application.ghana_card_number,
+        business_registration_number=application.business_registration_number,
+        logo_image_url=application.logo_image_url,
+        banner_image_url=application.banner_image_url,
+        shop_image_url=application.shop_image_url,
+        rejection_reason=application.rejection_reason,
+        reviewed_at=application.reviewed_at,
+        submitted_at=application.submitted_at,
+        created_at=application.created_at,
+        updated_at=application.updated_at,
+    )
+
+
+def _serialize_user_detail(db: Session, user: User) -> AdminUserDetailRead:
+    stores = list(
+        db.scalars(select(Store).where(Store.vendor_user_id == user.id).order_by(Store.created_at.desc())).all()
+    )
+    orders = sorted(user.orders, key=lambda order: order.created_at, reverse=True)
+    reviews = sorted(user.reviews, key=lambda review: review.updated_at, reverse=True)
+
+    return AdminUserDetailRead(
+        id=user.id,
+        full_name=user.full_name,
+        email=user.email,
+        phone_number=user.phone_number,
+        avatar_url=user.avatar_url,
+        roles=user.roles,
+        vendor_status=user.vendor_status,
+        account_status=_account_status(user),
+        joined_at=user.created_at,
+        date_of_birth=user.date_of_birth,
+        gender=user.gender,
+        city=user.city,
+        region=user.region,
+        allow_notifications=user.allow_notifications,
+        discount_notifications=user.discount_notifications,
+        store_notifications=user.store_notifications,
+        system_notifications=user.system_notifications,
+        location_notifications=user.location_notifications,
+        location_updates=user.location_updates,
+        vendor_rejection_reason=user.vendor_rejection_reason,
+        is_verified=user.is_verified,
+        last_login_at=user.last_login_at,
+        updated_at=user.updated_at,
+        auth_providers=sorted({account.provider for account in user.auth_accounts if account.provider}),
+        addresses=[
+            _serialize_saved_address(address)
+            for address in sorted(
+                user.saved_addresses,
+                key=lambda item: (not item.is_default, item.created_at),
+            )
+        ],
+        payment_methods=[
+            _serialize_saved_payment_method(method)
+            for method in sorted(
+                user.saved_payment_methods,
+                key=lambda item: (not item.is_default, item.created_at),
+            )
+        ],
+        vendor_application=_serialize_vendor_application_detail(user.vendor_application)
+        if user.vendor_application
+        else None,
+        stores=[_serialize_user_store_summary(store) for store in stores],
+        stats=AdminUserStatsRead(
+            total_orders=len(user.orders),
+            total_reviews=len(user.reviews),
+            total_saved_addresses=len(user.saved_addresses),
+            total_saved_payment_methods=len(user.saved_payment_methods),
+            total_cart_items=len(user.cart_items),
+            total_wishlist_items=len(user.wishlist_items),
+            total_notifications=len(user.notification_events),
+            total_spent=float(sum(order.total_amount for order in user.orders)),
+            last_order_at=orders[0].created_at if orders else None,
+            last_review_at=reviews[0].updated_at if reviews else None,
+        ),
+    )
+
+
 def _serialize_store(store: Store) -> AdminStoreRead:
     return AdminStoreRead(
         id=store.id,
@@ -246,6 +423,86 @@ def _serialize_store(store: Store) -> AdminStoreRead:
         logo_image=store.image_url,
         status=store.status,
         created_at=store.created_at,
+    )
+
+
+def _serialize_store_product(product: Product) -> AdminStoreProductRead:
+    return AdminStoreProductRead(
+        id=product.id,
+        name=product.title,
+        status=product.status,
+        price=product.price,
+        old_price=product.old_price,
+        discount=product.discount,
+        stock=product.stock,
+        category=product.category or "",
+        subcategory=product.subcategory,
+        images=product.image_urls or ([product.image_url] if product.image_url else []),
+        created_at=product.created_at,
+        updated_at=product.updated_at,
+    )
+
+
+def _store_activity_summary(
+    db: Session,
+    products: list[Product],
+) -> AdminStoreStatsRead:
+    total_products = len(products)
+    active_products = sum(1 for product in products if product.status == "active")
+    pending_products = sum(1 for product in products if product.status == "pending")
+    hidden_products = sum(1 for product in products if product.status in {"hidden", "suspended"})
+
+    product_ids = {product.id for product in products}
+    if not product_ids:
+        return AdminStoreStatsRead(
+            total_products=total_products,
+            active_products=active_products,
+            pending_products=pending_products,
+            hidden_products=hidden_products,
+            total_orders=0,
+            total_sales=0.0,
+        )
+
+    orders = list(db.scalars(select(Order).options(selectinload(Order.items))).all())
+    total_orders = 0
+    total_sales = 0.0
+
+    for order in orders:
+        matching_items = [item for item in order.items if item.product_id in product_ids]
+        if not matching_items:
+            continue
+        total_orders += 1
+        if order.vendor_status in {"confirmed", "processing", "ready", "delivered"}:
+            total_sales += sum(item.line_total for item in matching_items)
+
+    return AdminStoreStatsRead(
+        total_products=total_products,
+        active_products=active_products,
+        pending_products=pending_products,
+        hidden_products=hidden_products,
+        total_orders=total_orders,
+        total_sales=round(total_sales, 2),
+    )
+
+
+def _serialize_store_detail(
+    db: Session,
+    store: Store,
+    *,
+    vendor: User | None = None,
+    market: Market | None = None,
+    products: list[Product],
+) -> AdminStoreDetailRead:
+    base = _serialize_store(store)
+    return AdminStoreDetailRead(
+        **base.model_dump(),
+        vendor_name=vendor.full_name if vendor else None,
+        vendor_email=vendor.email if vendor else None,
+        vendor_phone_number=vendor.phone_number if vendor else None,
+        market_name=market.title if market else None,
+        updated_at=store.updated_at,
+        products=[_serialize_store_product(product) for product in products],
+        stats=_store_activity_summary(db, products),
     )
 
 
@@ -345,6 +602,95 @@ def _serialize_order(db: Session, order: Order) -> AdminOrderRead:
         status=order.vendor_status or order.status,
         payment_status=_payment_status(order),
         created_at=order.created_at,
+    )
+
+
+def _serialize_order_item(item: OrderItem) -> AdminOrderItemRead:
+    return AdminOrderItemRead(
+        id=item.id,
+        product_id=item.product_id,
+        title=item.title,
+        category=item.category,
+        image_url=item.image_url,
+        image_key=item.image_key,
+        quantity=item.quantity,
+        unit_price=round(item.unit_price, 2),
+        line_total=round(item.line_total, 2),
+        selected_color=item.selected_color,
+        selected_size=item.selected_size,
+    )
+
+
+def _serialize_return_request(db: Session, request: ReturnRequest) -> AdminReturnRequestRead:
+    order = request.order
+    order_item = request.order_item
+    reviewed_by = request.reviewed_by_user
+    return AdminReturnRequestRead(
+        id=request.id,
+        order_id=request.order_id,
+        order_number=order.order_number,
+        order_item_id=request.order_item_id,
+        product_id=order_item.product_id,
+        product_title=order_item.title,
+        product_image_url=order_item.image_url,
+        product_image_key=order_item.image_key,
+        store_name=_store_name_lookup(db, order),
+        user_id=request.user_id,
+        customer_name=order.address_full_name,
+        customer_email=order.user.email,
+        request_type=request.request_type,
+        status=request.status,
+        quantity=request.quantity,
+        reason=request.reason,
+        details=request.details,
+        evidence_image_urls=request.evidence_image_urls,
+        admin_note=request.admin_note,
+        refund_amount=round(request.refund_amount, 2) if request.refund_amount is not None else None,
+        reviewed_by_user_id=request.reviewed_by_user_id,
+        reviewed_by_name=reviewed_by.full_name if reviewed_by else None,
+        reviewed_at=request.reviewed_at,
+        resolved_at=request.resolved_at,
+        created_at=request.created_at,
+        updated_at=request.updated_at,
+    )
+
+
+def _serialize_order_detail(db: Session, order: Order) -> AdminOrderDetailRead:
+    base = _serialize_order(db, order)
+    return AdminOrderDetailRead(
+        **base.model_dump(),
+        customer_id=order.user_id,
+        customer_email=order.user.email,
+        customer_phone_number=order.user.phone_number,
+        customer_avatar_url=order.user.avatar_url,
+        source=order.source,
+        internal_status=order.status,
+        vendor_status=order.vendor_status,
+        subtotal_amount=round(order.subtotal_amount, 2),
+        shipping_amount=round(order.shipping_amount, 2),
+        discount_amount=round(order.discount_amount, 2),
+        progress=order.progress,
+        tracking_eta=order.tracking_eta,
+        cancellation_reason=order.cancellation_reason,
+        address_full_name=order.address_full_name,
+        address_phone=order.address_phone,
+        address_street=order.address_street,
+        address_city=order.address_city,
+        address_region=order.address_region,
+        payment_type=order.payment_type,
+        payment_label=order.payment_label,
+        payment_network=order.payment_network,
+        payment_phone=order.payment_phone,
+        payment_last4=order.payment_last4,
+        voucher_id=order.voucher_id,
+        voucher_code=order.voucher_code,
+        voucher_title=order.voucher_title,
+        placed_at=order.placed_at,
+        delivered_at=order.delivered_at,
+        cancelled_at=order.cancelled_at,
+        updated_at=order.updated_at,
+        items=[_serialize_order_item(item) for item in order.items],
+        return_requests=[_serialize_return_request(db, request) for request in order.return_requests],
     )
 
 
@@ -750,12 +1096,26 @@ def list_admin_users(db: Session, current_user: User) -> list[AdminUserRead]:
     return [_serialize_user(user) for user in users]
 
 
-def get_admin_user(db: Session, current_user: User, user_id: str) -> AdminUserRead:
+def get_admin_user(db: Session, current_user: User, user_id: str) -> AdminUserDetailRead:
     require_admin(current_user)
-    user = db.scalar(select(User).where(User.id == user_id))
+    user = db.scalar(
+        select(User)
+        .options(
+            selectinload(User.auth_accounts),
+            selectinload(User.vendor_application),
+            selectinload(User.saved_addresses),
+            selectinload(User.saved_payment_methods),
+            selectinload(User.orders),
+            selectinload(User.reviews),
+            selectinload(User.cart_items),
+            selectinload(User.wishlist_items),
+            selectinload(User.notification_events),
+        )
+        .where(User.id == user_id)
+    )
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
-    return _serialize_user(user)
+    return _serialize_user_detail(db, user)
 
 
 def update_admin_user_status(
@@ -837,12 +1197,17 @@ def list_admin_stores(db: Session, current_user: User) -> list[AdminStoreRead]:
     return [_serialize_store(store) for store in stores]
 
 
-def get_admin_store(db: Session, current_user: User, store_id: str) -> AdminStoreRead:
+def get_admin_store(db: Session, current_user: User, store_id: str) -> AdminStoreDetailRead:
     require_admin(current_user)
     store = db.scalar(select(Store).where(Store.id == store_id))
     if not store:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Store not found.")
-    return _serialize_store(store)
+    vendor = db.scalar(select(User).where(User.id == store.vendor_user_id)) if store.vendor_user_id else None
+    market = db.scalar(select(Market).where(Market.id == store.market_id)) if store.market_id else None
+    products = list(
+        db.scalars(select(Product).where(Product.store_id == store.id).order_by(Product.created_at.desc())).all()
+    )
+    return _serialize_store_detail(db, store, vendor=vendor, market=market, products=products)
 
 
 def update_admin_store_status(
@@ -863,6 +1228,7 @@ def update_admin_store_status(
     store.is_active = payload.status == "active"
     db.commit()
     db.refresh(store)
+    broadcast_catalog_store_change(store)
     return _serialize_store(store)
 
 
@@ -914,6 +1280,7 @@ async def create_admin_store(
     db.add(store)
     db.commit()
     db.refresh(store)
+    broadcast_catalog_store_change(store)
     return _serialize_store(store)
 
 
@@ -1171,9 +1538,22 @@ async def create_admin_product(
     db.add(product)
     db.commit()
     db.refresh(product)
+    broadcast_catalog_product_change(product)
     vendor = None
     if product.vendor_user_id:
         vendor = db.scalar(select(User).where(User.id == product.vendor_user_id))
+        if vendor:
+            realtime_manager.publish_user_event_sync(
+                str(vendor.id),
+                "vendor.product.updated",
+                serialize_vendor_product(product).model_dump(mode="json"),
+            )
+            dashboard = fetch_vendor_dashboard(db, vendor)
+            realtime_manager.publish_user_event_sync(
+                str(vendor.id),
+                "vendor.dashboard.updated",
+                dashboard.model_dump(mode="json"),
+            )
     return _serialize_product(product, store=store, vendor=vendor)
 
 
@@ -1237,9 +1617,22 @@ async def update_admin_product(
 
     db.commit()
     db.refresh(product)
+    broadcast_catalog_product_change(product)
     vendor = None
     if product.vendor_user_id:
         vendor = db.scalar(select(User).where(User.id == product.vendor_user_id))
+        if vendor:
+            realtime_manager.publish_user_event_sync(
+                str(vendor.id),
+                "vendor.product.updated",
+                serialize_vendor_product(product).model_dump(mode="json"),
+            )
+            dashboard = fetch_vendor_dashboard(db, vendor)
+            realtime_manager.publish_user_event_sync(
+                str(vendor.id),
+                "vendor.dashboard.updated",
+                dashboard.model_dump(mode="json"),
+            )
     return _serialize_product(
         product,
         store=store,
@@ -1265,12 +1658,25 @@ def update_admin_product_status(
     product.is_active = payload.status == "active"
     db.commit()
     db.refresh(product)
+    broadcast_catalog_product_change(product)
     store = None
     if product.store_id:
         store = db.scalar(select(Store).where(Store.id == product.store_id))
     vendor = None
     if product.vendor_user_id:
         vendor = db.scalar(select(User).where(User.id == product.vendor_user_id))
+        if vendor:
+            realtime_manager.publish_user_event_sync(
+                str(vendor.id),
+                "vendor.product.updated",
+                serialize_vendor_product(product).model_dump(mode="json"),
+            )
+            dashboard = fetch_vendor_dashboard(db, vendor)
+            realtime_manager.publish_user_event_sync(
+                str(vendor.id),
+                "vendor.dashboard.updated",
+                dashboard.model_dump(mode="json"),
+            )
     return _serialize_product(
         product,
         store=store,
@@ -1593,14 +1999,141 @@ def list_admin_orders(db: Session, current_user: User) -> list[AdminOrderRead]:
     return [_serialize_order(db, order) for order in orders]
 
 
-def get_admin_order(db: Session, current_user: User, order_id: str) -> AdminOrderRead:
+def get_admin_order(db: Session, current_user: User, order_id: str) -> AdminOrderDetailRead:
     require_admin(current_user)
     order = db.scalar(
-        select(Order).options(selectinload(Order.items)).where(Order.id == order_id)
+        select(Order)
+        .options(
+            selectinload(Order.items),
+            selectinload(Order.user),
+            selectinload(Order.return_requests).selectinload(ReturnRequest.order_item),
+            selectinload(Order.return_requests).selectinload(ReturnRequest.reviewed_by_user),
+        )
+        .where(Order.id == order_id)
     )
     if not order:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found.")
-    return _serialize_order(db, order)
+    return _serialize_order_detail(db, order)
+
+
+def list_admin_return_requests(db: Session, current_user: User) -> list[AdminReturnRequestRead]:
+    require_admin(current_user)
+    requests = list(
+        db.scalars(
+            select(ReturnRequest)
+            .options(
+                selectinload(ReturnRequest.order).selectinload(Order.items),
+                selectinload(ReturnRequest.order).selectinload(Order.user),
+                selectinload(ReturnRequest.order_item),
+                selectinload(ReturnRequest.reviewed_by_user),
+            )
+            .order_by(ReturnRequest.created_at.desc())
+        ).all()
+    )
+    return [_serialize_return_request(db, request) for request in requests]
+
+
+def get_admin_return_request(
+    db: Session,
+    current_user: User,
+    request_id: str,
+) -> AdminReturnRequestRead:
+    require_admin(current_user)
+    request = db.scalar(
+        select(ReturnRequest)
+        .options(
+            selectinload(ReturnRequest.order).selectinload(Order.items),
+            selectinload(ReturnRequest.order).selectinload(Order.user),
+            selectinload(ReturnRequest.order_item),
+            selectinload(ReturnRequest.reviewed_by_user),
+        )
+        .where(ReturnRequest.id == request_id)
+    )
+    if not request:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Return request not found.",
+        )
+
+    return _serialize_return_request(db, request)
+
+
+def update_admin_return_request(
+    db: Session,
+    current_user: User,
+    request_id: str,
+    payload: AdminReturnRequestUpdate,
+) -> AdminReturnRequestRead:
+    require_admin(current_user)
+    if payload.status not in SUPPORTED_RETURN_REQUEST_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unsupported return request status.",
+        )
+
+    request = db.scalar(
+        select(ReturnRequest)
+        .options(
+            selectinload(ReturnRequest.order).selectinload(Order.items),
+            selectinload(ReturnRequest.order).selectinload(Order.user),
+            selectinload(ReturnRequest.order).selectinload(Order.return_requests),
+            selectinload(ReturnRequest.order_item),
+            selectinload(ReturnRequest.reviewed_by_user),
+        )
+        .where(ReturnRequest.id == request_id)
+    )
+    if not request:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Return request not found.",
+        )
+
+    request.status = payload.status
+    request.admin_note = payload.admin_note
+    request.reviewed_by_user_id = current_user.id
+    request.reviewed_at = datetime.now(UTC)
+
+    if payload.refund_amount is not None:
+        request.refund_amount = round(payload.refund_amount, 2)
+    elif payload.status == "refunded" and request.refund_amount is None:
+        request.refund_amount = round(request.order_item.unit_price * request.quantity, 2)
+
+    if payload.status in {"rejected", "refunded", "exchanged"}:
+        request.resolved_at = datetime.now(UTC)
+    else:
+        request.resolved_at = None
+
+    db.commit()
+    db.refresh(request)
+
+    status_copy = {
+        "requested": "Return request reopened",
+        "under_review": "Return request under review",
+        "approved": "Return approved",
+        "rejected": "Return request declined",
+        "refunded": "Refund completed",
+        "exchanged": "Exchange completed",
+    }
+    create_notification_event(
+        db,
+        request.order.user,
+        kind="return_updated",
+        title=status_copy.get(payload.status, "Return request updated"),
+        body=f"{request.order_item.title}: {payload.status.replace('_', ' ')}.",
+        icon="swap-horizontal-outline",
+        accent="warning" if payload.status in {"requested", "under_review"} else "success" if payload.status in {"approved", "refunded", "exchanged"} else "warning",
+        action_label="View order",
+        route_type="order",
+        route_target_id=str(request.order_id),
+        image_key=request.order_item.image_key,
+    )
+    db.commit()
+    db.refresh(request)
+
+    from app.controllers.order_controller import _broadcast_order_realtime
+
+    _broadcast_order_realtime(db, request.order)
+    return _serialize_return_request(db, request)
 
 
 def update_admin_order_status(

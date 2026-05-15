@@ -1,8 +1,8 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, UniqueConstraint, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint, func
+from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -90,6 +90,11 @@ class Order(Base):
         cascade="all, delete-orphan",
         order_by="Review.updated_at.desc()",
     )
+    return_requests: Mapped[list["ReturnRequest"]] = relationship(
+        back_populates="order",
+        cascade="all, delete-orphan",
+        order_by="ReturnRequest.created_at.desc()",
+    )
 
 
 class OrderItem(Base):
@@ -114,6 +119,12 @@ class OrderItem(Base):
     quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     unit_price: Mapped[float] = mapped_column(Float, nullable=False)
     line_total: Mapped[float] = mapped_column(Float, nullable=False)
+    is_returnable: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        server_default="true",
+        nullable=False,
+    )
     selected_color: Mapped[str | None] = mapped_column(String(60), nullable=True)
     selected_size: Mapped[str | None] = mapped_column(String(60), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -123,6 +134,83 @@ class OrderItem(Base):
     )
 
     order: Mapped["Order"] = relationship(back_populates="items")
+    return_requests: Mapped[list["ReturnRequest"]] = relationship(
+        back_populates="order_item",
+        cascade="all, delete-orphan",
+        order_by="ReturnRequest.created_at.desc()",
+    )
+
+
+class ReturnRequest(Base):
+    __tablename__ = "return_requests"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    order_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("orders.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    order_item_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("order_items.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    request_type: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        default="requested",
+        server_default="requested",
+        index=True,
+    )
+    quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    reason: Mapped[str] = mapped_column(String(160), nullable=False)
+    details: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    evidence_image_urls: Mapped[list[str] | None] = mapped_column(ARRAY(String(500)), nullable=True)
+    admin_note: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    refund_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
+    reviewed_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    order: Mapped["Order"] = relationship(back_populates="return_requests")
+    order_item: Mapped["OrderItem"] = relationship(back_populates="return_requests")
+    user: Mapped["User"] = relationship(
+        foreign_keys=[user_id],
+        back_populates="return_requests",
+    )
+    reviewed_by_user: Mapped["User | None"] = relationship(
+        foreign_keys=[reviewed_by_user_id],
+        back_populates="reviewed_return_requests",
+    )
 
 
 class Review(Base):

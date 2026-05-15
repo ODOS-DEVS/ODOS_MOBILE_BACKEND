@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -27,6 +27,110 @@ class AdminUserRead(BaseModel):
     vendor_status: VendorStatus
     account_status: str
     joined_at: datetime
+
+
+class AdminUserAddressRead(BaseModel):
+    id: uuid.UUID
+    label: str | None
+    full_name: str
+    phone: str
+    street: str
+    city: str
+    region: str
+    is_default: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class AdminUserPaymentMethodRead(BaseModel):
+    id: uuid.UUID
+    type: str
+    label: str
+    is_default: bool
+    card_name: str | None
+    card_last4: str | None
+    expiry: str | None
+    network: str | None
+    phone: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class AdminUserStoreSummaryRead(BaseModel):
+    id: str
+    name: str
+    slug: str
+    status: str
+    logo_image: str | None
+    banner_image: str | None
+    market_id: str | None
+    location: str | None
+    region: str
+    city: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class AdminUserVendorApplicationRead(BaseModel):
+    id: uuid.UUID
+    status: VendorStatus
+    business_name: str
+    business_category: str
+    business_description: str
+    phone_number: str
+    whatsapp_number: str | None
+    region: str
+    city: str
+    market_id: str | None
+    store_location: str | None
+    store_name: str
+    store_description: str | None
+    ghana_card_number: str | None
+    business_registration_number: str | None
+    logo_image_url: str | None
+    banner_image_url: str | None
+    shop_image_url: str | None
+    rejection_reason: str | None
+    reviewed_at: datetime | None
+    submitted_at: datetime
+    created_at: datetime
+    updated_at: datetime
+
+
+class AdminUserStatsRead(BaseModel):
+    total_orders: int
+    total_reviews: int
+    total_saved_addresses: int
+    total_saved_payment_methods: int
+    total_cart_items: int
+    total_wishlist_items: int
+    total_notifications: int
+    total_spent: float
+    last_order_at: datetime | None
+    last_review_at: datetime | None
+
+
+class AdminUserDetailRead(AdminUserRead):
+    date_of_birth: date | None = None
+    gender: str | None
+    city: str | None
+    region: str | None
+    allow_notifications: bool
+    discount_notifications: bool
+    store_notifications: bool
+    system_notifications: bool
+    location_notifications: bool
+    location_updates: bool
+    vendor_rejection_reason: str | None
+    is_verified: bool
+    last_login_at: datetime | None
+    updated_at: datetime
+    auth_providers: list[str]
+    addresses: list[AdminUserAddressRead]
+    payment_methods: list[AdminUserPaymentMethodRead]
+    vendor_application: AdminUserVendorApplicationRead | None = None
+    stores: list[AdminUserStoreSummaryRead]
+    stats: AdminUserStatsRead
 
 
 class AdminUserStatusUpdate(BaseModel):
@@ -78,6 +182,40 @@ class AdminStoreRead(BaseModel):
     logo_image: str | None
     status: str
     created_at: datetime
+
+
+class AdminStoreProductRead(BaseModel):
+    id: str
+    name: str
+    status: str
+    price: int
+    old_price: int | None = None
+    discount: str | None = None
+    stock: int
+    category: str
+    subcategory: str | None = None
+    images: list[str]
+    created_at: datetime
+    updated_at: datetime
+
+
+class AdminStoreStatsRead(BaseModel):
+    total_products: int
+    active_products: int
+    pending_products: int
+    hidden_products: int
+    total_orders: int
+    total_sales: float
+
+
+class AdminStoreDetailRead(AdminStoreRead):
+    vendor_name: str | None = None
+    vendor_email: str | None = None
+    vendor_phone_number: str | None = None
+    market_name: str | None = None
+    updated_at: datetime
+    products: list[AdminStoreProductRead]
+    stats: AdminStoreStatsRead
 
 
 class AdminStoreStatusUpdate(BaseModel):
@@ -418,6 +556,84 @@ class AdminOrderRead(BaseModel):
     created_at: datetime
 
 
+class AdminOrderItemRead(BaseModel):
+    id: uuid.UUID
+    product_id: str
+    title: str
+    category: str | None
+    image_url: str | None
+    image_key: str | None
+    quantity: int
+    unit_price: float
+    line_total: float
+    selected_color: str | None
+    selected_size: str | None
+
+
+class AdminReturnRequestRead(BaseModel):
+    id: uuid.UUID
+    order_id: uuid.UUID
+    order_number: str
+    order_item_id: uuid.UUID
+    product_id: str
+    product_title: str
+    product_image_url: str | None
+    product_image_key: str | None
+    store_name: str
+    user_id: uuid.UUID
+    customer_name: str
+    customer_email: str
+    request_type: str
+    status: str
+    quantity: int
+    reason: str
+    details: str | None
+    evidence_image_urls: list[str] | None
+    admin_note: str | None
+    refund_amount: float | None
+    reviewed_by_user_id: uuid.UUID | None
+    reviewed_by_name: str | None
+    reviewed_at: datetime | None
+    resolved_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class AdminOrderDetailRead(AdminOrderRead):
+    customer_id: uuid.UUID
+    customer_email: str
+    customer_phone_number: str | None
+    customer_avatar_url: str | None
+    source: str
+    internal_status: str
+    vendor_status: str
+    subtotal_amount: float
+    shipping_amount: float
+    discount_amount: float
+    progress: float | None
+    tracking_eta: str | None
+    cancellation_reason: str | None
+    address_full_name: str
+    address_phone: str
+    address_street: str
+    address_city: str
+    address_region: str
+    payment_type: str
+    payment_label: str
+    payment_network: str | None
+    payment_phone: str | None
+    payment_last4: str | None
+    voucher_id: uuid.UUID | None
+    voucher_code: str | None
+    voucher_title: str | None
+    placed_at: datetime
+    delivered_at: datetime | None
+    cancelled_at: datetime | None
+    updated_at: datetime
+    items: list[AdminOrderItemRead]
+    return_requests: list[AdminReturnRequestRead]
+
+
 class AdminOrderStatusUpdate(BaseModel):
     status: str = Field(min_length=1, max_length=30)
 
@@ -425,6 +641,20 @@ class AdminOrderStatusUpdate(BaseModel):
     @classmethod
     def normalize_status(cls, value: str) -> str:
         return value.strip().lower()
+
+
+class AdminReturnRequestUpdate(BaseModel):
+    status: str = Field(min_length=1, max_length=30)
+    admin_note: str | None = Field(default=None, max_length=1000)
+    refund_amount: float | None = Field(default=None, ge=0)
+
+    @field_validator("status", "admin_note", mode="before")
+    @classmethod
+    def normalize_return_fields(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        cleaned = value.strip()
+        return cleaned or None
 
 
 class AdminNotificationRead(BaseModel):
