@@ -1324,7 +1324,14 @@ async def create_admin_store(
         is_active=payload.status == "active",
     )
     db.add(store)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A store with that name already exists.",
+        ) from exc
     db.refresh(store)
     broadcast_catalog_store_change(store)
     return _serialize_store(store)
@@ -1356,7 +1363,14 @@ async def create_admin_market(
     if image_file:
         market.image_url = await save_image_upload(image_file, "markets")
     db.add(market)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A market with that name already exists.",
+        ) from exc
     db.refresh(market)
     broadcast_catalog_market_change(market)
     return _serialize_market(market)
@@ -1382,7 +1396,14 @@ async def update_admin_market(
             remove_media_file(market.image_url)
         market.image_url = await save_image_upload(image_file, "markets")
     market.is_active = payload.status != "disabled"
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A market with that name already exists.",
+        ) from exc
     db.refresh(market)
     broadcast_catalog_market_change(market)
     return _serialize_market(market)
@@ -1427,7 +1448,14 @@ async def create_admin_category(
         is_active=payload.status != "disabled",
     )
     db.add(category)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A category with that name already exists.",
+        ) from exc
     db.refresh(category)
     broadcast_catalog_category_change(category)
     return _serialize_category(category)
@@ -1458,7 +1486,14 @@ async def update_admin_category(
             remove_media_file(category.image_url)
         category.image_url = await save_image_upload(image_file, folder="categories")
     category.is_active = payload.status != "disabled"
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A category with that name already exists.",
+        ) from exc
     db.refresh(category)
     broadcast_catalog_category_change(category)
     return _serialize_category(category)
