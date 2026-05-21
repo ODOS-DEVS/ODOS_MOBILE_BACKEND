@@ -24,6 +24,12 @@ class Settings(BaseSettings):
     email_verification_code_expire_minutes: int = 10
     password_reset_code_expire_minutes: int = 10
     password_reset_token_expire_minutes: int = 15
+    vendor_commission_rate: float = 0.10
+    vendor_withdrawal_minimum: float = 20.0
+    paystack_secret_key: str = ""
+    paystack_public_key: str = ""
+    paystack_webhook_secret: str = ""
+    paystack_currency: str = "GHS"
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -63,6 +69,13 @@ class Settings(BaseSettings):
             self.cloudinary_cloud_name.strip()
             and self.cloudinary_api_key.strip()
             and self.cloudinary_api_secret.strip()
+        )
+
+    @property
+    def paystack_is_configured(self) -> bool:
+        return bool(
+            self.paystack_secret_key.strip()
+            and self.paystack_public_key.strip()
         )
 
 

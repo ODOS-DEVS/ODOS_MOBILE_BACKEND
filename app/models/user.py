@@ -200,6 +200,10 @@ class User(Base):
         back_populates="user",
         cascade="all, delete-orphan",
     )
+    payment_transactions: Mapped[list["PaymentTransaction"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
     customer_chat_threads: Mapped[list["ChatThread"]] = relationship(
         foreign_keys="ChatThread.customer_user_id",
         back_populates="customer_user",
@@ -241,6 +245,23 @@ class User(Base):
     notification_reads: Mapped[list["NotificationRead"]] = relationship(
         back_populates="user",
         cascade="all, delete-orphan",
+    )
+    vendor_wallet: Mapped["VendorWallet | None"] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
+    vendor_wallet_transactions: Mapped[list["VendorWalletTransaction"]] = relationship(
+        foreign_keys="VendorWalletTransaction.vendor_user_id",
+        back_populates="vendor_user",
+    )
+    vendor_withdrawal_requests: Mapped[list["VendorWithdrawalRequest"]] = relationship(
+        foreign_keys="VendorWithdrawalRequest.vendor_user_id",
+        back_populates="vendor_user",
+    )
+    reviewed_vendor_withdrawal_requests: Mapped[list["VendorWithdrawalRequest"]] = relationship(
+        foreign_keys="VendorWithdrawalRequest.reviewed_by_user_id",
+        back_populates="reviewed_by_user",
     )
 
     def __repr__(self) -> str:

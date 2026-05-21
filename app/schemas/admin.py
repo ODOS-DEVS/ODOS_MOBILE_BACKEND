@@ -620,6 +620,8 @@ class AdminOrderDetailRead(AdminOrderRead):
     address_region: str
     payment_type: str
     payment_label: str
+    payment_provider: str
+    payment_reference: str | None
     payment_network: str | None
     payment_phone: str | None
     payment_last4: str | None
@@ -627,8 +629,10 @@ class AdminOrderDetailRead(AdminOrderRead):
     voucher_code: str | None
     voucher_title: str | None
     placed_at: datetime
+    paid_at: datetime | None
     delivered_at: datetime | None
     cancelled_at: datetime | None
+    refunded_at: datetime | None
     updated_at: datetime
     items: list[AdminOrderItemRead]
     return_requests: list[AdminReturnRequestRead]
@@ -653,6 +657,54 @@ class AdminReturnRequestUpdate(BaseModel):
     def normalize_return_fields(cls, value: str | None) -> str | None:
         if value is None:
             return value
+        cleaned = value.strip()
+        return cleaned or None
+
+
+class AdminVendorWithdrawalRequestRead(BaseModel):
+    id: uuid.UUID
+    wallet_id: uuid.UUID
+    vendor_user_id: uuid.UUID
+    vendor_name: str
+    vendor_email: str
+    store_name: str | None = None
+    currency: str
+    status: str
+    amount: float
+    note: str | None = None
+    admin_note: str | None = None
+    payout_method_type: str
+    payout_account_name: str
+    payout_account_number_masked: str
+    payout_provider: str | None = None
+    paystack_transfer_reference: str | None = None
+    paystack_transfer_code: str | None = None
+    transfer_failure_reason: str | None = None
+    transfer_initiated_at: datetime | None = None
+    wallet_available_balance: float
+    wallet_pending_withdrawal_balance: float
+    reviewed_by_user_id: uuid.UUID | None = None
+    reviewed_by_name: str | None = None
+    reviewed_at: datetime | None = None
+    paid_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class AdminVendorWithdrawalUpdate(BaseModel):
+    status: str = Field(min_length=2, max_length=30)
+    admin_note: str | None = Field(default=None, max_length=255)
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def normalize_withdrawal_status(cls, value: str) -> str:
+        return value.strip().lower()
+
+    @field_validator("admin_note", mode="before")
+    @classmethod
+    def strip_withdrawal_admin_note(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         cleaned = value.strip()
         return cleaned or None
 

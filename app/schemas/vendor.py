@@ -76,6 +76,10 @@ class VendorDashboardRead(BaseModel):
     completed_orders: int
     total_sales: float
     currency: str = "GHS"
+    available_balance: float = 0
+    pending_withdrawal_balance: float = 0
+    lifetime_earnings: float = 0
+    total_commission: float = 0
 
 
 class VendorStoreRead(BaseModel):
@@ -167,6 +171,103 @@ class VendorVoucherGiftPayload(BaseModel):
     @field_validator("note", mode="before")
     @classmethod
     def strip_note(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+
+class VendorWalletTransactionRead(BaseModel):
+    id: uuid.UUID
+    kind: str
+    title: str
+    amount: float
+    gross_amount: float | None = None
+    commission_amount: float | None = None
+    balance_after: float
+    order_id: uuid.UUID | None = None
+    return_request_id: uuid.UUID | None = None
+    withdrawal_request_id: uuid.UUID | None = None
+    created_at: datetime
+
+
+class VendorWithdrawalRequestRead(BaseModel):
+    id: uuid.UUID
+    status: str
+    amount: float
+    note: str | None = None
+    admin_note: str | None = None
+    payout_method_type: str
+    payout_account_name: str
+    payout_account_number_masked: str
+    payout_provider: str | None = None
+    transfer_failure_reason: str | None = None
+    reviewed_by_user_id: uuid.UUID | None = None
+    reviewed_by_name: str | None = None
+    reviewed_at: datetime | None = None
+    paid_at: datetime | None = None
+    transfer_initiated_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class VendorWalletRead(BaseModel):
+    id: uuid.UUID
+    vendor_user_id: uuid.UUID
+    currency: str
+    available_balance: float
+    pending_withdrawal_balance: float
+    lifetime_earnings: float
+    total_withdrawn: float
+    total_commission: float
+    payout_method_type: str | None = None
+    payout_account_name: str | None = None
+    payout_account_number_masked: str | None = None
+    payout_provider: str | None = None
+    recent_transactions: list[VendorWalletTransactionRead]
+    withdrawal_requests: list[VendorWithdrawalRequestRead]
+
+
+class VendorPayoutInstitutionRead(BaseModel):
+    code: str
+    name: str
+    payout_method_type: str
+    currency: str
+
+
+class VendorWalletPayoutDetailsUpdate(BaseModel):
+    payout_method_type: str = Field(min_length=2, max_length=30)
+    payout_account_name: str = Field(min_length=2, max_length=120)
+    payout_account_number: str = Field(min_length=4, max_length=80)
+    payout_provider: str = Field(min_length=2, max_length=120)
+
+    @field_validator(
+        "payout_method_type",
+        "payout_account_name",
+        "payout_account_number",
+        "payout_provider",
+        mode="before",
+    )
+    @classmethod
+    def strip_payout_fields(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+    @field_validator("payout_method_type", mode="after")
+    @classmethod
+    def normalize_payout_method(cls, value: str) -> str:
+        return value.lower().replace(" ", "_")
+
+
+class VendorWithdrawalCreate(BaseModel):
+    amount: float = Field(gt=0)
+    note: str | None = Field(default=None, max_length=255)
+
+    @field_validator("note", mode="before")
+    @classmethod
+    def strip_withdrawal_note(cls, value: str | None) -> str | None:
         if value is None:
             return None
         cleaned = value.strip()

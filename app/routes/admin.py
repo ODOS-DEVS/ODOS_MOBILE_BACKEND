@@ -18,6 +18,7 @@ from app.controllers.admin_controller import (
     get_admin_bootstrap_status,
     get_admin_dashboard,
     get_admin_me,
+    get_admin_finance_overview_payload,
     get_admin_order,
     get_admin_product,
     get_admin_return_request,
@@ -28,6 +29,8 @@ from app.controllers.admin_controller import (
     list_admin_markets,
     list_admin_notifications,
     list_admin_orders,
+    list_admin_payment_transactions_payload,
+    list_admin_platform_ledger_entries_payload,
     list_admin_products,
     list_admin_return_requests,
     list_admin_reviews,
@@ -50,10 +53,19 @@ from app.controllers.admin_controller import (
     update_admin_vendor_status,
     update_admin_voucher,
 )
+from app.schemas.payment import (
+    AdminFinanceOverviewRead,
+    AdminPaymentTransactionRead,
+    AdminPlatformLedgerEntryRead,
+)
 from app.controllers.vendor_controller import (
     approve_vendor_application,
     list_vendor_applications,
     reject_vendor_application,
+)
+from app.controllers.wallet_controller import (
+    list_admin_vendor_withdrawal_requests,
+    update_admin_vendor_withdrawal_request,
 )
 from app.core.auth import get_current_user
 from app.core.database import get_db
@@ -83,6 +95,8 @@ from app.schemas.admin import (
     AdminUserDetailRead,
     AdminUserRead,
     AdminUserStatusUpdate,
+    AdminVendorWithdrawalRequestRead,
+    AdminVendorWithdrawalUpdate,
     AdminVendorRead,
     AdminVendorStatusUpdate,
     AdminVoucherRead,
@@ -636,6 +650,30 @@ def get_orders(
     return list_admin_orders(db, current_user)
 
 
+@router.get("/finance/overview", response_model=AdminFinanceOverviewRead)
+def get_finance_overview(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return get_admin_finance_overview_payload(db, current_user)
+
+
+@router.get("/finance/payments", response_model=list[AdminPaymentTransactionRead])
+def get_finance_payments(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return list_admin_payment_transactions_payload(db, current_user)
+
+
+@router.get("/finance/ledger", response_model=list[AdminPlatformLedgerEntryRead])
+def get_finance_ledger(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return list_admin_platform_ledger_entries_payload(db, current_user)
+
+
 @router.get("/orders/{order_id}", response_model=AdminOrderDetailRead)
 def get_order(
     order_id: str,
@@ -680,6 +718,35 @@ def patch_return_request(
     db: Session = Depends(get_db),
 ):
     return update_admin_return_request(db, current_user, request_id, payload)
+
+
+@router.get(
+    "/payouts/withdrawals",
+    response_model=list[AdminVendorWithdrawalRequestRead],
+)
+def get_vendor_withdrawal_requests(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return list_admin_vendor_withdrawal_requests(db, current_user)
+
+
+@router.patch(
+    "/payouts/withdrawals/{request_id}",
+    response_model=AdminVendorWithdrawalRequestRead,
+)
+def patch_vendor_withdrawal_request(
+    request_id: str,
+    payload: AdminVendorWithdrawalUpdate,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return update_admin_vendor_withdrawal_request(
+        db,
+        current_user,
+        request_id,
+        payload,
+    )
 
 
 @router.get("/notifications", response_model=list[AdminNotificationRead])

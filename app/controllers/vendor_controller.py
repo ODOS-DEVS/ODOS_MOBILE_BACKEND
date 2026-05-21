@@ -14,6 +14,10 @@ from app.controllers.voucher_controller import (
     validate_voucher_configuration,
     voucher_status,
 )
+from app.controllers.wallet_controller import (
+    publish_vendor_wallet_updates,
+    settle_vendor_wallets_for_order,
+)
 from app.models import (
     Market,
     Order,
@@ -23,6 +27,7 @@ from app.models import (
     UserRole,
     VendorApplication,
     VendorStatus,
+    VendorWallet,
     Voucher,
     VoucherRedemption,
 )
@@ -313,13 +318,6 @@ def broadcast_catalog_store_change(store: Store) -> None:
 
 
 def list_vendor_orders_payloads(db: Session, user: User) -> list[VendorOrderRead]:
-    vendor_products = list(
-        db.scalars(select(Product).where(Product.vendor_user_id == user.id)).all()
-    )
-    vendor_product_map = {product.id: product for product in vendor_products}
-    if not vendor_product_map:
-        return []
-
     orders = list(
         db.scalars(
             select(Order)
@@ -331,7 +329,9 @@ def list_vendor_orders_payloads(db: Session, user: User) -> list[VendorOrderRead
     payloads: list[VendorOrderRead] = []
     for order in orders:
         matching_items = [
-            item for item in order.items if item.product_id in vendor_product_map
+            item
+            for item in order.items
+            if item.vendor_user_id == user.id
         ]
         if not matching_items:
             continue
@@ -484,6 +484,9 @@ def fetch_vendor_dashboard(db: Session, user: User) -> VendorDashboardRead:
         db.scalars(select(Product).where(Product.vendor_user_id == user.id)).all()
     )
     orders = list_vendor_orders_payloads(db, user)
+    wallet = db.scalar(
+        select(VendorWallet).where(VendorWallet.vendor_user_id == user.id)
+    )
 
     return VendorDashboardRead(
         store_name=store.title,
@@ -502,6 +505,12 @@ def fetch_vendor_dashboard(db: Session, user: User) -> VendorDashboardRead:
             ),
             2,
         ),
+        available_balance=round(wallet.available_balance, 2) if wallet else 0,
+        pending_withdrawal_balance=round(wallet.pending_withdrawal_balance, 2)
+        if wallet
+        else 0,
+        lifetime_earnings=round(wallet.lifetime_earnings, 2) if wallet else 0,
+        total_commission=round(wallet.total_commission, 2) if wallet else 0,
     )
 
 
@@ -830,12 +839,14 @@ def update_vendor_order_status(
 
     matching_items = []
     for item in order.items:
-        owns_item = db.scalar(
-            select(Product.id).where(
-                Product.id == item.product_id,
-                Product.vendor_user_id == user.id,
+        owns_item = item.vendor_user_id == user.id
+        if not owns_item:
+            owns_item = db.scalar(
+                select(Product.id).where(
+                    Product.id == item.product_id,
+                    Product.vendor_user_id == user.id,
+                )
             )
-        )
         if owns_item:
             matching_items.append(item)
 
@@ -846,6 +857,7 @@ def update_vendor_order_status(
         )
 
     order.vendor_status = next_status
+    changed_wallet_vendor_ids: set[uuid.UUID] = set()
     if next_status == "delivered":
         order.status = "delivered"
         order.progress = 1
@@ -853,6 +865,11 @@ def update_vendor_order_status(
         order.delivered_at = datetime.now(UTC)
         order.cancelled_at = None
         order.cancellation_reason = None
+        changed_wallet_vendor_ids = settle_vendor_wallets_for_order(
+            db,
+            order,
+            vendor_scope={user.id},
+        )
     elif next_status == "cancelled":
         order.status = "cancelled"
         order.progress = 0
@@ -893,6 +910,8 @@ def update_vendor_order_status(
     )
     db.commit()
     db.refresh(order)
+    for vendor_user_id in changed_wallet_vendor_ids:
+        publish_vendor_wallet_updates(vendor_user_id)
     realtime_manager.publish_user_event_sync(
         str(order.user_id),
         "order.updated",

@@ -16,6 +16,7 @@ from app.routes import (
     health,
     notifications,
     orders,
+    payments,
     realtime,
     reviews,
     vouchers,
@@ -50,6 +51,7 @@ app.include_router(catalog.router, prefix="/api")
 app.include_router(chat.router, prefix="/api")
 app.include_router(notifications.router, prefix="/api")
 app.include_router(orders.router, prefix="/api")
+app.include_router(payments.router, prefix="/api")
 app.include_router(realtime.router, prefix="/api")
 app.include_router(reviews.router, prefix="/api")
 app.include_router(vouchers.router, prefix="/api")

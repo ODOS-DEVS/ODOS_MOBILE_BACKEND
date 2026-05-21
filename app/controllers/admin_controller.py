@@ -9,6 +9,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.controllers.auth_controller import build_auth_token, login_user
+from app.controllers.finance_controller import (
+    get_admin_finance_overview,
+    list_admin_payment_transactions,
+    list_admin_platform_ledger_entries,
+    record_refund_adjustments,
+)
 from app.controllers.notification_controller import create_notification_event
 from app.core.security import hash_password
 from app.core.catalog_taxonomy import ODOS_CATEGORY_TAXONOMY
@@ -22,6 +28,13 @@ from app.controllers.vendor_controller import (
     serialize_vendor_product,
 )
 from app.controllers.review_controller import recompute_product_review_metrics
+from app.controllers.wallet_controller import (
+    list_admin_vendor_withdrawal_requests,
+    publish_vendor_wallet_updates,
+    reverse_vendor_wallet_for_return_request,
+    settle_vendor_wallets_for_order,
+    update_admin_vendor_withdrawal_request,
+)
 from app.controllers.voucher_controller import (
     SUPPORTED_VOUCHER_DISCOUNT_TYPES,
     build_voucher_reward_text,
@@ -68,6 +81,8 @@ from app.schemas.admin import (
     AdminOrderStatusUpdate,
     AdminReturnRequestRead,
     AdminReturnRequestUpdate,
+    AdminVendorWithdrawalRequestRead,
+    AdminVendorWithdrawalUpdate,
     AdminProductCreate,
     AdminProductRead,
     AdminProductStatusUpdate,
@@ -92,6 +107,11 @@ from app.schemas.admin import (
     AdminVoucherRead,
     AdminVoucherUpsert,
     NotificationMarkReadResponse,
+)
+from app.schemas.payment import (
+    AdminFinanceOverviewRead,
+    AdminPaymentTransactionRead,
+    AdminPlatformLedgerEntryRead,
 )
 from app.schemas.user import AuthToken, UserCreate, UserLogin
 
@@ -164,9 +184,7 @@ def _notification_type(kind: str) -> str:
 
 
 def _payment_status(order: Order) -> str:
-    if order.status == "cancelled":
-        return "refunded"
-    return "paid"
+    return order.payment_status
 
 
 def _voucher_status(voucher: Voucher, redemption_count: int) -> str:
@@ -679,6 +697,8 @@ def _serialize_order_detail(db: Session, order: Order) -> AdminOrderDetailRead:
         address_region=order.address_region,
         payment_type=order.payment_type,
         payment_label=order.payment_label,
+        payment_provider=order.payment_provider,
+        payment_reference=order.payment_reference,
         payment_network=order.payment_network,
         payment_phone=order.payment_phone,
         payment_last4=order.payment_last4,
@@ -686,8 +706,10 @@ def _serialize_order_detail(db: Session, order: Order) -> AdminOrderDetailRead:
         voucher_code=order.voucher_code,
         voucher_title=order.voucher_title,
         placed_at=order.placed_at,
+        paid_at=order.paid_at,
         delivered_at=order.delivered_at,
         cancelled_at=order.cancelled_at,
+        refunded_at=order.refunded_at,
         updated_at=order.updated_at,
         items=[_serialize_order_item(item) for item in order.items],
         return_requests=[_serialize_return_request(db, request) for request in order.return_requests],
@@ -2103,6 +2125,11 @@ def update_admin_return_request(
     else:
         request.resolved_at = None
 
+    changed_wallet_vendor_id: uuid.UUID | None = None
+    if payload.status == "refunded":
+        changed_wallet_vendor_id = reverse_vendor_wallet_for_return_request(db, request)
+        record_refund_adjustments(db, request)
+
     db.commit()
     db.refresh(request)
 
@@ -2129,6 +2156,8 @@ def update_admin_return_request(
     )
     db.commit()
     db.refresh(request)
+    if changed_wallet_vendor_id:
+        publish_vendor_wallet_updates(changed_wallet_vendor_id)
 
     from app.controllers.order_controller import _broadcast_order_realtime
 
@@ -2153,13 +2182,20 @@ def update_admin_order_status(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found.")
 
     order.vendor_status = payload.status
+    changed_wallet_vendor_ids: set[uuid.UUID] = set()
     if payload.status == "delivered":
+        if order.payment_status != "paid":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Only paid orders can be marked as delivered.",
+            )
         order.status = "delivered"
         order.delivered_at = datetime.now(UTC)
         order.cancelled_at = None
         order.cancellation_reason = None
         order.progress = 1
         order.tracking_eta = None
+        changed_wallet_vendor_ids = settle_vendor_wallets_for_order(db, order)
     elif payload.status == "cancelled":
         order.status = "cancelled"
         order.cancelled_at = datetime.now(UTC)
@@ -2183,7 +2219,30 @@ def update_admin_order_status(
 
     db.commit()
     db.refresh(order)
+    for vendor_user_id in changed_wallet_vendor_ids:
+        publish_vendor_wallet_updates(vendor_user_id)
     return _serialize_order(db, order)
+
+
+def get_admin_finance_overview_payload(
+    db: Session,
+    current_user: User,
+) -> AdminFinanceOverviewRead:
+    return get_admin_finance_overview(db, current_user)
+
+
+def list_admin_payment_transactions_payload(
+    db: Session,
+    current_user: User,
+) -> list[AdminPaymentTransactionRead]:
+    return list_admin_payment_transactions(db, current_user)
+
+
+def list_admin_platform_ledger_entries_payload(
+    db: Session,
+    current_user: User,
+) -> list[AdminPlatformLedgerEntryRead]:
+    return list_admin_platform_ledger_entries(db, current_user)
 
 
 def list_admin_notifications(db: Session, current_user: User) -> list[AdminNotificationRead]:

@@ -139,6 +139,9 @@ class OrderRead(BaseModel):
     order_number: str
     source: str
     status: str
+    payment_status: str
+    payment_provider: str
+    payment_reference: str | None
     subtotal_amount: float
     shipping_amount: float
     total_amount: float
@@ -159,8 +162,10 @@ class OrderRead(BaseModel):
     voucher_title: str | None
     discount_amount: float
     placed_at: datetime
+    paid_at: datetime | None
     delivered_at: datetime | None
     cancelled_at: datetime | None
+    refunded_at: datetime | None
     created_at: datetime
     updated_at: datetime
     items: list[OrderItemRead]
