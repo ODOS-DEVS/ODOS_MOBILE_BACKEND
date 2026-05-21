@@ -1435,11 +1435,28 @@ async def update_admin_category(
     return _serialize_category(category)
 
 
-def delete_admin_category(db: Session, current_user: User, category_id: str) -> None:
+def delete_admin_category(
+    db: Session,
+    current_user: User,
+    category_id: str,
+    *,
+    permanent: bool = False,
+) -> None:
     require_admin(current_user)
     category = db.scalar(select(Category).where(Category.id == category_id))
     if not category:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Category not found.")
+    if permanent:
+        if category.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Disable this category before deleting it permanently.",
+            )
+        if category.image_url:
+            remove_media_file(category.image_url)
+        db.delete(category)
+        db.commit()
+        return
     category.is_active = False
     db.commit()
 
