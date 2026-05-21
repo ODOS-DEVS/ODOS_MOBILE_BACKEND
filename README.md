@@ -93,6 +93,14 @@ BREVO_SENDER_EMAIL=your-verified-sender@example.com
 EMAIL_VERIFICATION_CODE_EXPIRE_MINUTES=10
 PASSWORD_RESET_CODE_EXPIRE_MINUTES=10
 PASSWORD_RESET_TOKEN_EXPIRE_MINUTES=15
+
+VENDOR_COMMISSION_RATE=0.10
+VENDOR_WITHDRAWAL_MINIMUM=20.0
+
+PAYSTACK_SECRET_KEY=sk_test_replace_me
+PAYSTACK_PUBLIC_KEY=pk_test_replace_me
+PAYSTACK_WEBHOOK_SECRET=replace-with-paystack-webhook-secret
+PAYSTACK_CURRENCY=GHS
 ```
 
 ## Database
@@ -145,6 +153,9 @@ Recommended deploy flow:
    - `GOOGLE_CLIENT_IDS`
    - `BREVO_API_KEY`
    - `BREVO_SENDER_EMAIL`
+   - `PAYSTACK_SECRET_KEY`
+   - `PAYSTACK_PUBLIC_KEY`
+   - `PAYSTACK_WEBHOOK_SECRET`
 5. Deploy the Blueprint.
 
 Important notes:
@@ -153,6 +164,7 @@ Important notes:
 - `SECRET_KEY` is generated automatically by Render.
 - For stakeholder testing, set `CORS_ORIGINS` to include your Vercel admin URL.
 - Cloudinary is strongly recommended for deployment because uploaded images should not rely on Render's ephemeral filesystem.
+- Paystack checkout and webhooks require the Paystack keys above before online payments can be used safely.
 
 After deploy, your API base URL will look like:
 

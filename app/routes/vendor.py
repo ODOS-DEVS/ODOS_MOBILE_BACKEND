@@ -22,6 +22,12 @@ from app.controllers.vendor_controller import (
     update_vendor_store,
     update_vendor_voucher,
 )
+from app.controllers.wallet_controller import (
+    create_vendor_withdrawal_request,
+    fetch_vendor_wallet,
+    list_vendor_payout_institutions,
+    update_vendor_payout_details,
+)
 from app.core.auth import get_current_user
 from app.core.database import get_db
 from app.models import User
@@ -39,6 +45,11 @@ from app.schemas.vendor import (
     VendorVoucherGiftPayload,
     VendorVoucherRead,
     VendorVoucherUpsert,
+    VendorPayoutInstitutionRead,
+    VendorWalletPayoutDetailsUpdate,
+    VendorWalletRead,
+    VendorWithdrawalCreate,
+    VendorWithdrawalRequestRead,
 )
 
 router = APIRouter(prefix="/vendor", tags=["vendor"])
@@ -136,6 +147,44 @@ def get_vendor_dashboard(
     db: Session = Depends(get_db),
 ):
     return fetch_vendor_dashboard(db, current_user)
+
+
+@router.get("/wallet", response_model=VendorWalletRead)
+def get_vendor_wallet(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return fetch_vendor_wallet(db, current_user)
+
+
+@router.get("/wallet/payout-institutions", response_model=list[VendorPayoutInstitutionRead])
+def get_vendor_wallet_payout_institutions(
+    payout_method_type: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+):
+    return list_vendor_payout_institutions(current_user, payout_method_type)
+
+
+@router.patch("/wallet/payout-details", response_model=VendorWalletRead)
+def patch_vendor_wallet_payout_details(
+    payload: VendorWalletPayoutDetailsUpdate,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return update_vendor_payout_details(db, current_user, payload)
+
+
+@router.post(
+    "/wallet/withdrawals",
+    response_model=VendorWithdrawalRequestRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def post_vendor_wallet_withdrawal(
+    payload: VendorWithdrawalCreate,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return create_vendor_withdrawal_request(db, current_user, payload)
 
 
 @router.get("/products", response_model=list[VendorProductRead])

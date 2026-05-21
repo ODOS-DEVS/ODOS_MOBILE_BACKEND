@@ -3,7 +3,14 @@ from app.models.chat import ChatMessage, ChatThread, ChatThreadType, SupportChat
 from app.models.notification import NotificationEvent, NotificationRead
 from app.models.catalog import Category, Market, Product, Store
 from app.models.order import Order, OrderItem, ReturnRequest, Review
+from app.models.payment import (
+    PaymentTransaction,
+    PaymentWebhookEvent,
+    PlatformLedgerEntry,
+    PlatformTreasuryAccount,
+)
 from app.models.voucher import Voucher, VoucherAssignment, VoucherRedemption
+from app.models.wallet import VendorWallet, VendorWalletTransaction, VendorWithdrawalRequest
 from app.models.user import (
     AuthProvider,
     CartItem,
@@ -28,8 +35,12 @@ __all__ = [
     "NotificationRead",
     "Order",
     "OrderItem",
+    "PaymentTransaction",
+    "PaymentWebhookEvent",
     "ReturnRequest",
     "PaymentMethodType",
+    "PlatformLedgerEntry",
+    "PlatformTreasuryAccount",
     "Product",
     "Review",
     "SavedAddress",
@@ -38,6 +49,9 @@ __all__ = [
     "User",
     "UserAuthAccount",
     "UserRole",
+    "VendorWallet",
+    "VendorWalletTransaction",
+    "VendorWithdrawalRequest",
     "VendorApplication",
     "VendorStatus",
     "VoucherAssignment",

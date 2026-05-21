@@ -24,7 +24,13 @@ class Order(Base):
         index=True,
     )
     source: Mapped[str] = mapped_column(String(30), nullable=False, default="buy_now")
-    status: Mapped[str] = mapped_column(String(30), nullable=False, default="processing", index=True)
+    status: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        default="pending_payment",
+        server_default="pending_payment",
+        index=True,
+    )
     vendor_status: Mapped[str] = mapped_column(
         String(30),
         nullable=False,
@@ -47,6 +53,21 @@ class Order(Base):
 
     payment_type: Mapped[str] = mapped_column(String(30), nullable=False)
     payment_label: Mapped[str] = mapped_column(String(120), nullable=False)
+    payment_status: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        default="pending",
+        server_default="pending",
+        index=True,
+    )
+    payment_provider: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        default="paystack",
+        server_default="paystack",
+        index=True,
+    )
+    payment_reference: Mapped[str | None] = mapped_column(String(80), nullable=True, unique=True, index=True)
     payment_network: Mapped[str | None] = mapped_column(String(60), nullable=True)
     payment_phone: Mapped[str | None] = mapped_column(String(30), nullable=True)
     payment_last4: Mapped[str | None] = mapped_column(String(4), nullable=True)
@@ -65,8 +86,10 @@ class Order(Base):
         server_default=func.now(),
         nullable=False,
     )
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    refunded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -80,6 +103,11 @@ class Order(Base):
     )
 
     user: Mapped["User"] = relationship(back_populates="orders")
+    payment_transaction: Mapped["PaymentTransaction | None"] = relationship(
+        back_populates="order",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
     items: Mapped[list["OrderItem"]] = relationship(
         back_populates="order",
         cascade="all, delete-orphan",
@@ -112,6 +140,13 @@ class OrderItem(Base):
         index=True,
     )
     product_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    vendor_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    store_id: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     category: Mapped[str | None] = mapped_column(String(120), nullable=True)
     image_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
