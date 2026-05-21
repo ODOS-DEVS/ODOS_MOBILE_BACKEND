@@ -452,8 +452,9 @@ def remove_category(
     category_id: str,
     current_user: Annotated[User, Depends(get_current_user)],
     db: Session = Depends(get_db),
+    permanent: bool = False,
 ):
-    delete_admin_category(db, current_user, category_id)
+    delete_admin_category(db, current_user, category_id, permanent=permanent)
     return {"success": True}
 
 
