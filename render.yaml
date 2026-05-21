@@ -39,8 +39,6 @@ services:
         sync: false
       - key: PAYSTACK_WEBHOOK_SECRET
         sync: false
-      - key: PAYSTACK_CURRENCY
-        value: GHS
       - key: EMAIL_VERIFICATION_CODE_EXPIRE_MINUTES
         value: "10"
       - key: PASSWORD_RESET_CODE_EXPIRE_MINUTES
