@@ -550,6 +550,30 @@ def _serialize_category(category: Category) -> AdminCategoryRead:
     )
 
 
+def broadcast_catalog_market_change(market: Market) -> None:
+    realtime_manager.broadcast_event_sync(
+        "catalog.market.changed",
+        {
+            "market_id": market.id,
+            "slug": market.slug,
+            "status": "active" if market.is_active else "disabled",
+            "is_active": market.is_active,
+        },
+    )
+
+
+def broadcast_catalog_category_change(category: Category) -> None:
+    realtime_manager.broadcast_event_sync(
+        "catalog.category.changed",
+        {
+            "category_id": category.id,
+            "slug": category.slug,
+            "status": "active" if category.is_active else "disabled",
+            "is_active": category.is_active,
+        },
+    )
+
+
 def _serialize_product(
     product: Product,
     *,
@@ -1334,6 +1358,7 @@ async def create_admin_market(
     db.add(market)
     db.commit()
     db.refresh(market)
+    broadcast_catalog_market_change(market)
     return _serialize_market(market)
 
 
@@ -1359,6 +1384,7 @@ async def update_admin_market(
     market.is_active = payload.status != "disabled"
     db.commit()
     db.refresh(market)
+    broadcast_catalog_market_change(market)
     return _serialize_market(market)
 
 
@@ -1369,6 +1395,7 @@ def delete_admin_market(db: Session, current_user: User, market_id: str) -> None
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Market not found.")
     market.is_active = False
     db.commit()
+    broadcast_catalog_market_change(market)
 
 
 def list_admin_categories(db: Session, current_user: User) -> list[AdminCategoryRead]:
@@ -1402,6 +1429,7 @@ async def create_admin_category(
     db.add(category)
     db.commit()
     db.refresh(category)
+    broadcast_catalog_category_change(category)
     return _serialize_category(category)
 
 
@@ -1432,6 +1460,7 @@ async def update_admin_category(
     category.is_active = payload.status != "disabled"
     db.commit()
     db.refresh(category)
+    broadcast_catalog_category_change(category)
     return _serialize_category(category)
 
 
@@ -1454,11 +1483,24 @@ def delete_admin_category(
             )
         if category.image_url:
             remove_media_file(category.image_url)
+        deleted_snapshot = Category(
+            id=category.id,
+            slug=category.slug,
+            title=category.title,
+            subtitle=category.subtitle,
+            image_key=category.image_key,
+            image_url=category.image_url,
+            subcategories=category.subcategories,
+            sort_order=category.sort_order,
+            is_active=False,
+        )
         db.delete(category)
         db.commit()
+        broadcast_catalog_category_change(deleted_snapshot)
         return
     category.is_active = False
     db.commit()
+    broadcast_catalog_category_change(category)
 
 
 def list_admin_products(db: Session, current_user: User) -> list[AdminProductRead]:
