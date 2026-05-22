@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.controllers.payment_controller import (
     create_checkout_session,
     handle_paystack_webhook,
+    paystack_checkout_redirect,
     verify_checkout_session,
 )
 from app.core.auth import get_current_user
@@ -22,11 +23,12 @@ router = APIRouter(prefix="/payments", tags=["payments"])
 
 @router.post("/checkout", response_model=CheckoutSessionRead)
 def initialize_checkout_payment(
+    request: Request,
     payload: CheckoutSessionCreate,
     current_user: Annotated[User, Depends(get_current_user)],
     db: Session = Depends(get_db),
 ):
-    return create_checkout_session(db, current_user, payload)
+    return create_checkout_session(db, request, current_user, payload)
 
 
 @router.post("/checkout/{reference}/verify", response_model=PaymentVerificationRead)
@@ -50,3 +52,11 @@ async def receive_paystack_webhook(
         raw_body=raw_body,
         signature=x_paystack_signature,
     )
+
+
+@router.get("/paystack/redirect", name="paystack_checkout_redirect")
+def receive_paystack_redirect(
+    request: Request,
+    return_url: str,
+):
+    return paystack_checkout_redirect(request, return_url=return_url)
