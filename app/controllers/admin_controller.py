@@ -1361,7 +1361,7 @@ async def create_admin_market(
         is_active=payload.status != "disabled",
     )
     if image_file:
-        market.image_url = await save_image_upload(image_file, "markets")
+        market.image_url = await save_image_upload(image_file, folder="markets")
     db.add(market)
     try:
         db.commit()
@@ -1394,7 +1394,7 @@ async def update_admin_market(
     if image_file:
         if market.image_url:
             remove_media_file(market.image_url)
-        market.image_url = await save_image_upload(image_file, "markets")
+        market.image_url = await save_image_upload(image_file, folder="markets")
     market.is_active = payload.status != "disabled"
     try:
         db.commit()

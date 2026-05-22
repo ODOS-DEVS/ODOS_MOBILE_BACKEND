@@ -122,7 +122,7 @@ def _cloudinary_request_error(response: requests.Response) -> HTTPException:
     )
 
 
-async def save_image_upload(upload: UploadFile, *, folder: str) -> str:
+async def save_image_upload(upload: UploadFile, folder: str) -> str:
     _require_cloudinary_configuration()
 
     content_type = upload.content_type or ""
