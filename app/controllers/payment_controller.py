@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import html
 import hashlib
 import json
 import uuid
 from datetime import UTC, datetime
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from fastapi import HTTPException, status
+from fastapi import HTTPException, Request, status
+from fastapi.responses import HTMLResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
@@ -42,6 +44,23 @@ FAILED_PROVIDER_STATUSES = {"failed", "reversed"}
 
 
 def _append_query_params(url: str, **params: str | None) -> str:
+    parsed_url = urlsplit(url)
+    query = dict(parse_qsl(parsed_url.query, keep_blank_values=True))
+    for key, value in params.items():
+        if value is not None:
+            query[key] = value
+    return urlunsplit(
+        (
+            parsed_url.scheme,
+            parsed_url.netloc,
+            parsed_url.path,
+            urlencode(query),
+            parsed_url.fragment,
+        )
+    )
+
+
+def _merge_query_params(url: str, params: dict[str, str | None]) -> str:
     parsed_url = urlsplit(url)
     query = dict(parse_qsl(parsed_url.query, keep_blank_values=True))
     for key, value in params.items():
@@ -308,6 +327,7 @@ def _reconcile_payment_transaction(
 
 def create_checkout_session(
     db: Session,
+    request: Request,
     current_user: User,
     payload: CheckoutSessionCreate,
 ) -> CheckoutSessionRead:
@@ -319,15 +339,23 @@ def create_checkout_session(
         payment_provider="paystack",
         payment_reference=reference,
     )
-    callback_url = _append_query_params(
+    app_callback_url = _append_query_params(
         payload.callback_url or "odosmobileexpo://payments/return",
         orderId=str(order.id),
     )
-    cancel_url = _append_query_params(
+    app_cancel_url = _append_query_params(
         payload.cancel_url or payload.callback_url or "odosmobileexpo://payments/return",
         orderId=str(order.id),
         cancelled="1",
         reference=reference,
+    )
+    callback_url = _append_query_params(
+        str(request.url_for("paystack_checkout_redirect")),
+        return_url=app_callback_url,
+    )
+    cancel_url = _append_query_params(
+        str(request.url_for("paystack_checkout_redirect")),
+        return_url=app_cancel_url,
     )
     paystack_response = initialize_transaction(
         email=current_user.email,
@@ -369,6 +397,82 @@ def create_checkout_session(
         currency=settings.paystack_currency,
         payment_status=order.payment_status,
     )
+
+
+def paystack_checkout_redirect(
+    request: Request,
+    *,
+    return_url: str,
+) -> HTMLResponse:
+    merged_return_url = _merge_query_params(
+        return_url,
+        {
+            key: value
+            for key, value in request.query_params.items()
+            if key != "return_url"
+        },
+    )
+    escaped_return_url = html.escape(merged_return_url, quote=True)
+    html_body = f"""<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="refresh" content="0;url={escaped_return_url}" />
+    <title>Returning to ODOS</title>
+    <style>
+      :root {{
+        color-scheme: light;
+      }}
+      body {{
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background: #f8fafc;
+        color: #0f172a;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }}
+      .card {{
+        width: min(92vw, 28rem);
+        background: #ffffff;
+        border-radius: 1.5rem;
+        padding: 2rem;
+        box-shadow: 0 18px 50px rgba(15, 23, 42, 0.12);
+        text-align: center;
+      }}
+      h1 {{
+        margin: 0 0 0.75rem;
+        font-size: 1.2rem;
+      }}
+      p {{
+        margin: 0 0 1.25rem;
+        color: #475569;
+        line-height: 1.5;
+      }}
+      a {{
+        display: inline-block;
+        padding: 0.85rem 1.2rem;
+        border-radius: 999px;
+        background: #111827;
+        color: #ffffff;
+        text-decoration: none;
+        font-weight: 600;
+      }}
+    </style>
+  </head>
+  <body>
+    <main class="card">
+      <h1>Returning to ODOS</h1>
+      <p>Your payment is done here. We’re sending you back to the app now.</p>
+      <a href="{escaped_return_url}">Return to ODOS</a>
+    </main>
+    <script>
+      window.location.replace({json.dumps(merged_return_url)});
+    </script>
+  </body>
+</html>"""
+    return HTMLResponse(content=html_body)
 
 
 def verify_checkout_session(
