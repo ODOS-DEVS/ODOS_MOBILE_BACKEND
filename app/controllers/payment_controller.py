@@ -37,7 +37,8 @@ from app.services.paystack_service import (
 )
 
 PENDING_PROVIDER_STATUSES = {"pending", "ongoing", "processing", "queued"}
-FAILED_PROVIDER_STATUSES = {"failed", "abandoned", "reversed"}
+CANCELLED_PROVIDER_STATUSES = {"abandoned", "cancelled"}
+FAILED_PROVIDER_STATUSES = {"failed", "reversed"}
 
 
 def _append_query_params(url: str, **params: str | None) -> str:
@@ -64,13 +65,6 @@ def _preferred_channel(payment_type: str) -> str | None:
     if normalized in {"momo", "mobile_money"}:
         return "mobile_money"
     return None
-
-
-def _allowed_channels(payment_type: str) -> list[str] | None:
-    preferred_channel = _preferred_channel(payment_type)
-    if not preferred_channel:
-        return None
-    return [preferred_channel]
 
 
 def _serialize_payment_verification(
@@ -125,13 +119,45 @@ def _mark_payment_as_unsuccessful(
     gateway_response: str | None,
     now: datetime,
 ) -> None:
-    mapped_status = "failed" if provider_status in FAILED_PROVIDER_STATUSES else "pending"
+    if provider_status in CANCELLED_PROVIDER_STATUSES:
+        mapped_status = "cancelled"
+    elif provider_status in FAILED_PROVIDER_STATUSES:
+        mapped_status = "failed"
+    else:
+        mapped_status = "pending"
     payment_transaction.status = mapped_status
     payment_transaction.gateway_response = gateway_response
     payment_transaction.verified_at = now
     payment_transaction.last_checked_at = now
     if order.payment_status != "paid":
-        order.payment_status = mapped_status if mapped_status != "pending" else "pending"
+        order.payment_status = mapped_status
+
+
+def _format_gateway_response(gateway_response: str | None) -> str | None:
+    if not gateway_response:
+        return None
+    cleaned = gateway_response.strip()
+    if not cleaned:
+        return None
+    if cleaned.endswith((".", "!", "?")):
+        return cleaned
+    return f"{cleaned}."
+
+
+def _unsuccessful_payment_message(
+    *,
+    payment_status: str,
+    gateway_response: str | None,
+) -> str:
+    formatted_gateway_response = _format_gateway_response(gateway_response)
+    if payment_status == "cancelled":
+        return formatted_gateway_response or "Payment was cancelled before completion."
+    if payment_status == "pending":
+        return (
+            formatted_gateway_response
+            or "We're still waiting for Paystack to finish confirming this payment."
+        )
+    return formatted_gateway_response or "This payment did not complete successfully."
 
 
 def _apply_successful_payment(
@@ -254,7 +280,10 @@ def _reconcile_payment_transaction(
             order,
             payment_transaction,
             provider_status=provider_status,
-            message="We're still waiting for Paystack to finish confirming this payment.",
+            message=_unsuccessful_payment_message(
+                payment_status=payment_transaction.status,
+                gateway_response=provider_payload.get("gateway_response"),
+            ),
         )
 
     _mark_payment_as_unsuccessful(
@@ -270,7 +299,10 @@ def _reconcile_payment_transaction(
         order,
         payment_transaction,
         provider_status=provider_status or "failed",
-        message="This payment did not complete successfully.",
+        message=_unsuccessful_payment_message(
+            payment_status=payment_transaction.status,
+            gateway_response=provider_payload.get("gateway_response"),
+        ),
     )
 
 
@@ -304,7 +336,7 @@ def create_checkout_session(
         callback_url=callback_url,
         cancel_url=cancel_url,
         currency=settings.paystack_currency,
-        channels=_allowed_channels(payload.payment_type),
+        channels=None,
         metadata={
             "order_id": str(order.id),
             "order_number": order.order_number,
