@@ -40,18 +40,21 @@ def _resolve_websocket_user(token: str | None) -> User | None:
 @router.websocket("/ws")
 async def websocket_events(websocket: WebSocket) -> None:
     token = websocket.query_params.get("token")
-    user = _resolve_websocket_user(token)
-    if not user:
+    user = _resolve_websocket_user(token) if token else None
+    if token and not user:
         await websocket.close(code=4401)
         return
 
-    user_id = str(user.id)
-    await realtime_manager.connect(user_id, websocket)
+    connection_id = str(user.id) if user else f"public:{uuid.uuid4()}"
+    await realtime_manager.connect(connection_id, websocket)
     try:
         await websocket.send_json(
             {
                 "type": "connection.ready",
-                "payload": {"user_id": user_id},
+                "payload": {
+                    "scope": "authenticated" if user else "public",
+                    "user_id": str(user.id) if user else None,
+                },
             }
         )
 
@@ -62,7 +65,7 @@ async def websocket_events(websocket: WebSocket) -> None:
     except Exception:
         pass
     finally:
-        realtime_manager.disconnect(user_id, websocket)
+        realtime_manager.disconnect(connection_id, websocket)
         if websocket.application_state == WebSocketState.CONNECTED:
             try:
                 await websocket.close()
