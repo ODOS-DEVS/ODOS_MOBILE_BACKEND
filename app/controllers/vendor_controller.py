@@ -248,6 +248,9 @@ def serialize_vendor_store(store: Store) -> VendorStoreRead:
         market_id=store.market_id,
         market_slug=store.market_slug,
         location=store.address,
+        phone=store.phone,
+        latitude=store.latitude,
+        longitude=store.longitude,
         region=store.region or "",
         city=store.city or "",
         banner_image_url=store.image_banner_url,
@@ -374,6 +377,8 @@ async def submit_vendor_application(
     city: str,
     market_id: str | None,
     store_location: str | None,
+    store_latitude: float | None,
+    store_longitude: float | None,
     store_name: str,
     store_description: str | None,
     ghana_card_number: str | None,
@@ -412,6 +417,8 @@ async def submit_vendor_application(
     application.city = city.strip()
     application.market_id = market_id.strip() if market_id else None
     application.store_location = store_location.strip() if store_location else None
+    application.store_latitude = store_latitude
+    application.store_longitude = store_longitude
     application.store_name = store_name.strip()
     application.store_description = store_description.strip() if store_description else None
     application.ghana_card_number = (
@@ -1161,6 +1168,9 @@ async def update_vendor_store(
     audience_slugs: list[str] | None,
     market_id: str | None,
     location: str | None,
+    phone: str | None,
+    latitude: float | None,
+    longitude: float | None,
     region: str,
     city: str,
     logo_image: UploadFile | None,
@@ -1183,6 +1193,9 @@ async def update_vendor_store(
     store.market_id = market.id if market else None
     store.market_slug = market.slug if market else None
     store.address = location.strip() if location else None
+    store.phone = phone.strip() if phone else None
+    store.latitude = latitude
+    store.longitude = longitude
     store.region = region.strip()
     store.city = city.strip()
 
@@ -1257,6 +1270,8 @@ def approve_vendor_application(
             image_banner_key="ladiesstore",
             image_banner_url=application.banner_image_url or application.shop_image_url,
             address=application.store_location,
+            latitude=application.store_latitude,
+            longitude=application.store_longitude,
             phone=application.phone_number,
             email=applicant.email,
             city=application.city,
@@ -1281,6 +1296,8 @@ def approve_vendor_application(
             or store.image_banner_url
         )
         store.address = application.store_location
+        store.latitude = application.store_latitude
+        store.longitude = application.store_longitude
         store.phone = application.phone_number
         store.email = applicant.email
         store.city = application.city

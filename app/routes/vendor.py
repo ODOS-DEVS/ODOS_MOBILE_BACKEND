@@ -78,6 +78,15 @@ def _parse_optional_int(value: str | None) -> int | None:
     return int(cleaned)
 
 
+def _parse_optional_float(value: str | None) -> float | None:
+    if value is None:
+        return None
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+    return float(cleaned)
+
+
 @router.post(
     "/applications",
     response_model=VendorApplicationRead,
@@ -96,6 +105,8 @@ async def create_vendor_application(
     whatsapp_number: Annotated[str | None, Form(max_length=30)] = None,
     market_id: Annotated[str | None, Form(max_length=50)] = None,
     store_location: Annotated[str | None, Form(max_length=255)] = None,
+    store_latitude: Annotated[str | None, Form(max_length=32)] = None,
+    store_longitude: Annotated[str | None, Form(max_length=32)] = None,
     store_description: Annotated[str | None, Form(max_length=1000)] = None,
     ghana_card_number: Annotated[str | None, Form(max_length=60)] = None,
     business_registration_number: Annotated[str | None, Form(max_length=120)] = None,
@@ -115,6 +126,8 @@ async def create_vendor_application(
         city=city,
         market_id=market_id,
         store_location=store_location,
+        store_latitude=_parse_optional_float(store_latitude),
+        store_longitude=_parse_optional_float(store_longitude),
         store_name=store_name,
         store_description=store_description,
         ghana_card_number=ghana_card_number,
@@ -373,6 +386,9 @@ async def patch_vendor_store(
     market_id: Annotated[str | None, Form(max_length=50)] = None,
     audience_slugs: Annotated[str | None, Form(max_length=255)] = None,
     location: Annotated[str | None, Form(max_length=255)] = None,
+    phone: Annotated[str | None, Form(max_length=30)] = None,
+    latitude: Annotated[str | None, Form(max_length=32)] = None,
+    longitude: Annotated[str | None, Form(max_length=32)] = None,
     logo_image: UploadFile | None = File(default=None),
     banner_image: UploadFile | None = File(default=None),
 ):
@@ -385,6 +401,9 @@ async def patch_vendor_store(
         audience_slugs=_split_csv_values(audience_slugs),
         market_id=market_id,
         location=location,
+        phone=phone,
+        latitude=_parse_optional_float(latitude),
+        longitude=_parse_optional_float(longitude),
         region=region,
         city=city,
         logo_image=logo_image,
