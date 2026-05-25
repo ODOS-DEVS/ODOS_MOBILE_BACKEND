@@ -8,6 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.controllers.notification_controller import create_notification_event
+from app.core.product_taxonomy import resolve_product_taxonomy
 from app.controllers.voucher_controller import (
     build_voucher_reward_text,
     assign_voucher_to_user,
@@ -273,6 +274,7 @@ def serialize_vendor_product(product: Product) -> VendorProductRead:
         name=product.title,
         description=product.description or "",
         category=product.category or "",
+        category_slug=(product.category_slugs or [None])[0],
         subcategory=product.subcategory,
         price=product.price,
         old_price=product.old_price,
@@ -578,12 +580,25 @@ async def create_vendor_product(
     image_urls = await save_image_uploads(images, folder="products")
     primary_image_url = image_urls[0] if image_urls else payload.image_url
     normalized_placement_tags = normalize_list(payload.placement_tags)
+    (
+        resolved_category,
+        resolved_subcategory,
+        category_slugs,
+        subcategory_slugs,
+    ) = resolve_product_taxonomy(
+        db,
+        category=payload.category,
+        subcategory=payload.subcategory,
+        category_slug=payload.category_slug,
+    )
     product = Product(
         id=generate_product_id(),
         title=payload.name,
         description=payload.description,
-        category=payload.category,
-        subcategory=payload.subcategory,
+        category=resolved_category,
+        subcategory=resolved_subcategory,
+        category_slugs=category_slugs,
+        subcategory_slugs=subcategory_slugs,
         price=payload.price,
         old_price=payload.old_price,
         discount=build_discount(payload.price, payload.old_price),
@@ -666,6 +681,28 @@ async def update_vendor_product(
 
     if "specifications" in data:
         product.specifications = normalize_list(data.pop("specifications"))
+
+    category_slug = data.pop("category_slug", None)
+    if "category" in data or "subcategory" in data or category_slug:
+        next_category = data.get("category", product.category or "")
+        next_subcategory = data.get("subcategory", product.subcategory)
+        (
+            resolved_category,
+            resolved_subcategory,
+            category_slugs,
+            subcategory_slugs,
+        ) = resolve_product_taxonomy(
+            db,
+            category=next_category or "",
+            subcategory=next_subcategory,
+            category_slug=category_slug,
+        )
+        product.category = resolved_category
+        product.subcategory = resolved_subcategory
+        product.category_slugs = category_slugs
+        product.subcategory_slugs = subcategory_slugs
+        data.pop("category", None)
+        data.pop("subcategory", None)
 
     for key, value in data.items():
         setattr(product, key, value)

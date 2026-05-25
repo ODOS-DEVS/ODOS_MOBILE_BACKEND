@@ -122,13 +122,17 @@ def _load_product_snapshot_map(db: Session, payload: OrderCreate) -> dict[str, d
             "is_returnable": bool(is_returnable),
             "vendor_user_id": vendor_user_id,
             "store_id": store_id,
+            "image_url": image_url,
+            "image_key": image_key,
         }
-        for product_id, is_returnable, vendor_user_id, store_id in db.execute(
+        for product_id, is_returnable, vendor_user_id, store_id, image_url, image_key in db.execute(
             select(
                 Product.id,
                 Product.is_returnable,
                 Product.vendor_user_id,
                 Product.store_id,
+                Product.image_url,
+                Product.image_key,
             ).where(Product.id.in_([item.product_id for item in payload.items]))
         ).all()
     }
@@ -207,13 +211,16 @@ def prepare_order_for_checkout(
     for item in payload.items:
         line_total = round(item.unit_price * item.quantity, 2)
         computed_subtotal += line_total
+        product_snapshot = product_snapshot_map.get(item.product_id, {})
+        image_url = item.image_url or product_snapshot.get("image_url")
+        image_key = item.image_key or product_snapshot.get("image_key")
         order.items.append(
             OrderItem(
                 product_id=item.product_id,
                 title=item.title,
                 category=item.category,
-                image_url=item.image_url,
-                image_key=item.image_key,
+                image_url=image_url,
+                image_key=image_key,
                 quantity=item.quantity,
                 unit_price=item.unit_price,
                 line_total=line_total,
