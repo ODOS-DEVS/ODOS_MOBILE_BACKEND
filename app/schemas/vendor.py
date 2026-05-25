@@ -295,6 +295,7 @@ class VendorProductCreate(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     description: str = Field(min_length=1, max_length=1000)
     category: str = Field(min_length=1, max_length=120)
+    category_slug: str | None = Field(default=None, max_length=120)
     subcategory: str | None = Field(default=None, max_length=120)
     price: int = Field(ge=0)
     old_price: int | None = Field(default=None, ge=0)
@@ -312,6 +313,7 @@ class VendorProductCreate(BaseModel):
         "name",
         "description",
         "category",
+        "category_slug",
         "subcategory",
         "image_key",
         "image_url",
@@ -349,6 +351,7 @@ class VendorProductUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     description: str | None = Field(default=None, min_length=1, max_length=1000)
     category: str | None = Field(default=None, min_length=1, max_length=120)
+    category_slug: str | None = Field(default=None, max_length=120)
     subcategory: str | None = Field(default=None, max_length=120)
     price: int | None = Field(default=None, ge=0)
     old_price: int | None = Field(default=None, ge=0)
@@ -367,6 +370,7 @@ class VendorProductUpdate(BaseModel):
         "name",
         "description",
         "category",
+        "category_slug",
         "subcategory",
         "image_key",
         "image_url",
@@ -412,6 +416,7 @@ class VendorProductRead(BaseModel):
     name: str
     description: str
     category: str
+    category_slug: str | None = None
     subcategory: str | None = None
     price: int
     old_price: int | None = None

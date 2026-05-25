@@ -37,7 +37,32 @@ def recompute_product_review_metrics(db: Session, product_id: str) -> None:
         product.reviews = str(int(count))
 
 
-def _serialize_user_review(review: Review) -> UserReviewRead:
+def _resolve_review_item_image(
+    db: Session,
+    *,
+    product_id: str,
+    order_image_key: str | None,
+    order_image_url: str | None,
+) -> tuple[str | None, str | None]:
+    generic_keys = {"", "bag", "odos", "placeholder"}
+    normalized_key = (order_image_key or "").strip().lower()
+
+    if order_image_url:
+        return order_image_key, order_image_url
+
+    if normalized_key and normalized_key not in generic_keys:
+        return order_image_key, order_image_url
+
+    product = db.get(Product, product_id)
+    if not product:
+        return order_image_key, order_image_url
+
+    image_key = product.image_key or order_image_key
+    image_url = product.image_url or order_image_url
+    return image_key, image_url
+
+
+def _serialize_user_review(db: Session, review: Review) -> UserReviewRead:
     order_item = next(
         (item for item in review.order.items if item.product_id == review.product_id),
         None,
@@ -49,6 +74,13 @@ def _serialize_user_review(review: Review) -> UserReviewRead:
             detail="Review data is missing its matching order item.",
         )
 
+    image_key, image_url = _resolve_review_item_image(
+        db,
+        product_id=review.product_id,
+        order_image_key=order_item.image_key,
+        order_image_url=order_item.image_url,
+    )
+
     return UserReviewRead(
         id=review.id,
         order_id=review.order_id,
@@ -56,8 +88,8 @@ def _serialize_user_review(review: Review) -> UserReviewRead:
         product_id=review.product_id,
         title=order_item.title,
         category=order_item.category,
-        image_key=order_item.image_key,
-        image_url=order_item.image_url,
+        image_key=image_key,
+        image_url=image_url,
         rating=review.rating,
         comment=review.comment,
         created_at=review.created_at,
@@ -107,7 +139,7 @@ def list_user_reviews(db: Session, user: User) -> list[UserReviewRead]:
         ).all()
     )
 
-    return [_serialize_user_review(review) for review in reviews]
+    return [_serialize_user_review(db, review) for review in reviews]
 
 
 def upsert_review(db: Session, user: User, payload: ReviewUpsert) -> UserReviewRead:
@@ -174,4 +206,4 @@ def upsert_review(db: Session, user: User, payload: ReviewUpsert) -> UserReviewR
             detail="We couldn't reload the review right now.",
         )
 
-    return _serialize_user_review(created_review)
+    return _serialize_user_review(db, created_review)
