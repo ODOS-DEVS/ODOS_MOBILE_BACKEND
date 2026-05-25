@@ -73,6 +73,8 @@ class StoreRead(BaseModel):
     image_banner_url: str | None
     rating: float | None
     address: str | None
+    latitude: float | None = None
+    longitude: float | None = None
     phone: str | None
     email: str | None
     city: str | None

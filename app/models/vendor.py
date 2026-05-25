@@ -42,6 +42,8 @@ class VendorApplication(Base):
     city: Mapped[str] = mapped_column(String(120), nullable=False)
     market_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
     store_location: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    store_latitude: Mapped[float | None] = mapped_column(nullable=True)
+    store_longitude: Mapped[float | None] = mapped_column(nullable=True)
     store_name: Mapped[str] = mapped_column(String(160), nullable=False)
     store_description: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     ghana_card_number: Mapped[str | None] = mapped_column(String(60), nullable=True)

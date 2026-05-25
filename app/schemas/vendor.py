@@ -19,6 +19,8 @@ class VendorApplicationRead(BaseModel):
     city: str
     market_id: str | None
     store_location: str | None
+    store_latitude: float | None = None
+    store_longitude: float | None = None
     store_name: str
     store_description: str | None
     ghana_card_number: str | None
@@ -93,6 +95,9 @@ class VendorStoreRead(BaseModel):
     market_id: str | None
     market_slug: str | None
     location: str | None
+    phone: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
     region: str
     city: str
     banner_image_url: str | None
