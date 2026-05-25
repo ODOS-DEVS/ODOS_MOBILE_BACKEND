@@ -21,6 +21,12 @@ class VendorApplicationRead(BaseModel):
     store_location: str | None
     store_latitude: float | None = None
     store_longitude: float | None = None
+    store_instagram_url: str | None = None
+    store_facebook_url: str | None = None
+    store_tiktok_url: str | None = None
+    store_twitter_url: str | None = None
+    store_whatsapp_url: str | None = None
+    store_website_url: str | None = None
     store_name: str
     store_description: str | None
     ghana_card_number: str | None
@@ -98,6 +104,12 @@ class VendorStoreRead(BaseModel):
     phone: str | None = None
     latitude: float | None = None
     longitude: float | None = None
+    instagram_url: str | None = None
+    facebook_url: str | None = None
+    tiktok_url: str | None = None
+    twitter_url: str | None = None
+    whatsapp_url: str | None = None
+    website_url: str | None = None
     region: str
     city: str
     banner_image_url: str | None
