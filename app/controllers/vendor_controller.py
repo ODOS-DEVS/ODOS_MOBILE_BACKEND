@@ -251,6 +251,12 @@ def serialize_vendor_store(store: Store) -> VendorStoreRead:
         phone=store.phone,
         latitude=store.latitude,
         longitude=store.longitude,
+        instagram_url=store.instagram_url,
+        facebook_url=store.facebook_url,
+        tiktok_url=store.tiktok_url,
+        twitter_url=store.twitter_url,
+        whatsapp_url=store.whatsapp_url,
+        website_url=store.website_url,
         region=store.region or "",
         city=store.city or "",
         banner_image_url=store.image_banner_url,
@@ -379,6 +385,12 @@ async def submit_vendor_application(
     store_location: str | None,
     store_latitude: float | None,
     store_longitude: float | None,
+    store_instagram_url: str | None,
+    store_facebook_url: str | None,
+    store_tiktok_url: str | None,
+    store_twitter_url: str | None,
+    store_whatsapp_url: str | None,
+    store_website_url: str | None,
     store_name: str,
     store_description: str | None,
     ghana_card_number: str | None,
@@ -419,6 +431,22 @@ async def submit_vendor_application(
     application.store_location = store_location.strip() if store_location else None
     application.store_latitude = store_latitude
     application.store_longitude = store_longitude
+    application.store_instagram_url = (
+        store_instagram_url.strip() if store_instagram_url else None
+    )
+    application.store_facebook_url = (
+        store_facebook_url.strip() if store_facebook_url else None
+    )
+    application.store_tiktok_url = store_tiktok_url.strip() if store_tiktok_url else None
+    application.store_twitter_url = (
+        store_twitter_url.strip() if store_twitter_url else None
+    )
+    application.store_whatsapp_url = (
+        store_whatsapp_url.strip() if store_whatsapp_url else None
+    )
+    application.store_website_url = (
+        store_website_url.strip() if store_website_url else None
+    )
     application.store_name = store_name.strip()
     application.store_description = store_description.strip() if store_description else None
     application.ghana_card_number = (
@@ -1171,6 +1199,12 @@ async def update_vendor_store(
     phone: str | None,
     latitude: float | None,
     longitude: float | None,
+    instagram_url: str | None,
+    facebook_url: str | None,
+    tiktok_url: str | None,
+    twitter_url: str | None,
+    whatsapp_url: str | None,
+    website_url: str | None,
     region: str,
     city: str,
     logo_image: UploadFile | None,
@@ -1196,6 +1230,12 @@ async def update_vendor_store(
     store.phone = phone.strip() if phone else None
     store.latitude = latitude
     store.longitude = longitude
+    store.instagram_url = instagram_url.strip() if instagram_url else None
+    store.facebook_url = facebook_url.strip() if facebook_url else None
+    store.tiktok_url = tiktok_url.strip() if tiktok_url else None
+    store.twitter_url = twitter_url.strip() if twitter_url else None
+    store.whatsapp_url = whatsapp_url.strip() if whatsapp_url else None
+    store.website_url = website_url.strip() if website_url else None
     store.region = region.strip()
     store.city = city.strip()
 
@@ -1272,6 +1312,12 @@ def approve_vendor_application(
             address=application.store_location,
             latitude=application.store_latitude,
             longitude=application.store_longitude,
+            instagram_url=application.store_instagram_url,
+            facebook_url=application.store_facebook_url,
+            tiktok_url=application.store_tiktok_url,
+            twitter_url=application.store_twitter_url,
+            whatsapp_url=application.store_whatsapp_url or application.whatsapp_number,
+            website_url=application.store_website_url,
             phone=application.phone_number,
             email=applicant.email,
             city=application.city,
@@ -1298,6 +1344,12 @@ def approve_vendor_application(
         store.address = application.store_location
         store.latitude = application.store_latitude
         store.longitude = application.store_longitude
+        store.instagram_url = application.store_instagram_url
+        store.facebook_url = application.store_facebook_url
+        store.tiktok_url = application.store_tiktok_url
+        store.twitter_url = application.store_twitter_url
+        store.whatsapp_url = application.store_whatsapp_url or application.whatsapp_number
+        store.website_url = application.store_website_url
         store.phone = application.phone_number
         store.email = applicant.email
         store.city = application.city
