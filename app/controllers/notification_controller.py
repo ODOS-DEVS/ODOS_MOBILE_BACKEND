@@ -8,6 +8,17 @@ from app.schemas.notification import NotificationEventRead
 from app.services.realtime_service import realtime_manager
 
 
+def order_notification_image(order: Order) -> dict[str, str | None]:
+    if not order.items:
+        return {"image_key": None, "image_url": None}
+
+    item = order.items[0]
+    return {
+        "image_key": item.image_key,
+        "image_url": item.image_url,
+    }
+
+
 def create_notification_event(
     db: Session,
     user: User,
@@ -21,6 +32,7 @@ def create_notification_event(
     route_type: str | None = None,
     route_target_id: str | None = None,
     image_key: str | None = None,
+    image_url: str | None = None,
 ) -> NotificationEvent:
     event = NotificationEvent(
         user_id=user.id,
@@ -33,6 +45,7 @@ def create_notification_event(
         route_type=route_type,
         route_target_id=route_target_id,
         image_key=image_key,
+        image_url=image_url,
     )
     db.add(event)
     db.flush()
@@ -91,7 +104,7 @@ def list_notification_events(db: Session, user: User) -> list[NotificationEvent]
         ).all()
     )
     for order in recent_orders:
-        image_key = order.items[0].image_key if order.items else None
+        preview = order_notification_image(order)
         create_notification_event(
             db,
             user,
@@ -103,7 +116,8 @@ def list_notification_events(db: Session, user: User) -> list[NotificationEvent]
             action_label="Track order",
             route_type="order",
             route_target_id=str(order.id),
-            image_key=image_key,
+            image_key=preview["image_key"],
+            image_url=preview["image_url"],
         )
         if order.status == "delivered":
             create_notification_event(
@@ -117,7 +131,8 @@ def list_notification_events(db: Session, user: User) -> list[NotificationEvent]
                 action_label="View receipt",
                 route_type="order",
                 route_target_id=str(order.id),
-                image_key=image_key,
+                image_key=preview["image_key"],
+                image_url=preview["image_url"],
             )
         elif order.status == "cancelled":
             create_notification_event(
@@ -131,7 +146,8 @@ def list_notification_events(db: Session, user: User) -> list[NotificationEvent]
                 action_label="Review order",
                 route_type="order",
                 route_target_id=str(order.id),
-                image_key=image_key,
+                image_key=preview["image_key"],
+                image_url=preview["image_url"],
             )
 
     db.commit()

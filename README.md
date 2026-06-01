@@ -2,13 +2,9 @@
 
 ODOS Mobile Backend is the FastAPI API for the ODOS ecosystem. It serves the mobile shopper app and the admin dashboard, including auth, account data, catalog, stores, orders, notifications, and admin management flows.
 
-Mobile repo:
+Mobile repo: `../odos-mobile-expo`
 
-`/Users/paul/Desktop/DeV/odos-workspace/odos-mobile-expo`
-
-Admin repo:
-
-`/Users/paul/Desktop/DeV/odos-workspace/ODOS_ADMIN`
+Admin repo: `../ODOS_ADMIN`
 
 ## Stack
 
@@ -28,10 +24,10 @@ Admin repo:
 - Google auth backend support
 - Profile, address, and payment-method APIs
 - Wishlist and cart persistence
-- Catalog products, categories, markets, and stores
+- Catalog products, categories, markets, and stores (with geo coordinates and social links)
 - Order creation and lifecycle actions
-- Notification event storage and read state
-- Expo push token registration
+- Notification events with read state, push tokens, and optional **product image URLs** for the activity feed
+- Paystack checkout sessions and webhooks
 - Admin auth, dashboard, vendors, users, orders, notifications, markets, stores, categories, and products
 
 ## New Catalog/Admin Capabilities
@@ -232,13 +228,19 @@ alembic/
 
 ## Verification
 
-Syntax check on changed files:
+Apply migrations after pulling:
 
 ```bash
-python3 -m py_compile app/**/*.py
+alembic upgrade head
 ```
 
-Targeted checks I used for the recent catalog/admin change included `app/routes/admin.py`, `app/controllers/admin_controller.py`, `app/routes/catalog.py`, `app/controllers/catalog_controller.py`, and the latest Alembic migration.
+Syntax check:
+
+```bash
+python3 -m py_compile app/main.py
+```
+
+API docs: `http://127.0.0.1:8000/docs` after `uvicorn` is running.
 
 ## Notes
 

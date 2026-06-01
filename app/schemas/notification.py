@@ -15,6 +15,7 @@ class NotificationEventRead(BaseModel):
     route_type: str | None
     route_target_id: str | None
     image_key: str | None
+    image_url: str | None
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
