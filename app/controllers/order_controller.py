@@ -7,7 +7,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from app.controllers.notification_controller import create_notification_event
+from app.controllers.notification_controller import create_notification_event, order_notification_image
 from app.controllers.vendor_controller import fetch_vendor_dashboard, list_vendor_orders_payloads
 from app.controllers.voucher_controller import build_voucher_quote
 from app.models import CartItem, Order, OrderItem, Product, ReturnRequest, User, VoucherRedemption
@@ -287,6 +287,7 @@ def activate_order_after_payment(
         for cart_item in cart_items:
             db.delete(cart_item)
 
+    preview = order_notification_image(order)
     create_notification_event(
         db,
         user,
@@ -298,7 +299,8 @@ def activate_order_after_payment(
         action_label="Track order",
         route_type="order",
         route_target_id=str(order.id),
-        image_key=order.items[0].image_key if order.items else None,
+        image_key=preview["image_key"],
+        image_url=preview["image_url"],
     )
 
 
@@ -335,6 +337,7 @@ def create_order(db: Session, user: User, payload: OrderCreate) -> Order:
         body=f"Order #{created_order.order_number} is now being prepared.",
         order=created_order,
     )
+    preview = order_notification_image(created_order)
     create_notification_event(
         db,
         user,
@@ -346,7 +349,8 @@ def create_order(db: Session, user: User, payload: OrderCreate) -> Order:
         action_label="Track order",
         route_type="order",
         route_target_id=str(created_order.id),
-        image_key=created_order.items[0].image_key if created_order.items else None,
+        image_key=preview["image_key"],
+        image_url=preview["image_url"],
     )
     db.commit()
     db.refresh(created_order)
@@ -472,6 +476,7 @@ def create_return_request(
         route_type="order",
         route_target_id=str(order.id),
         image_key=order_item.image_key,
+        image_url=order_item.image_url,
     )
     db.commit()
     db.refresh(refreshed_request)
@@ -516,6 +521,7 @@ def cancel_order(
         body=f"Order #{order.order_number} has been cancelled.",
         order=order,
     )
+    preview = order_notification_image(order)
     create_notification_event(
         db,
         user,
@@ -527,7 +533,8 @@ def cancel_order(
         action_label="Review order",
         route_type="order",
         route_target_id=str(order.id),
-        image_key=order.items[0].image_key if order.items else None,
+        image_key=preview["image_key"],
+        image_url=preview["image_url"],
     )
     db.commit()
     db.refresh(order)
@@ -558,6 +565,7 @@ def confirm_order_delivery(db: Session, user: User, order_id: str) -> Order:
         body=f"Order #{order.order_number} has arrived successfully.",
         order=order,
     )
+    preview = order_notification_image(order)
     create_notification_event(
         db,
         user,
@@ -569,7 +577,8 @@ def confirm_order_delivery(db: Session, user: User, order_id: str) -> Order:
         action_label="View receipt",
         route_type="order",
         route_target_id=str(order.id),
-        image_key=order.items[0].image_key if order.items else None,
+        image_key=preview["image_key"],
+        image_url=preview["image_url"],
     )
     db.commit()
     db.refresh(order)

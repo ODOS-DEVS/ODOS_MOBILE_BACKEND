@@ -9,7 +9,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from app.controllers.notification_controller import create_notification_event
+from app.controllers.notification_controller import create_notification_event, order_notification_image
 from app.controllers.finance_controller import record_vendor_payout_paid
 from app.core.config import settings
 from app.models import (
@@ -348,6 +348,7 @@ def settle_vendor_wallets_for_order(
 
         vendor_user = db.get(User, vendor_user_id)
         if vendor_user:
+            preview = order_notification_image(order)
             create_notification_event(
                 db,
                 vendor_user,
@@ -362,7 +363,8 @@ def settle_vendor_wallets_for_order(
                 action_label="View wallet",
                 route_type="vendor_wallet",
                 route_target_id=str(wallet.id),
-                image_key=order.items[0].image_key if order.items else None,
+                image_key=preview["image_key"],
+                image_url=preview["image_url"],
             )
 
         changed_vendor_ids.add(vendor_user_id)
@@ -450,6 +452,7 @@ def reverse_vendor_wallet_for_return_request(
             route_type="vendor_wallet",
             route_target_id=str(wallet.id),
             image_key=request.order_item.image_key,
+            image_url=request.order_item.image_url,
         )
 
     return order_item.vendor_user_id
