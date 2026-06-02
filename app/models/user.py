@@ -132,6 +132,28 @@ class User(Base):
         server_default="false",
         nullable=False,
     )
+    phone_verified: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default="false",
+        nullable=False,
+    )
+    phone_verification_code_hash: Mapped[str | None] = mapped_column(
+        String(128),
+        nullable=True,
+    )
+    phone_verification_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    phone_verification_sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    phone_verification_phone: Mapped[str | None] = mapped_column(
+        String(30),
+        nullable=True,
+    )
     email_verification_code_hash: Mapped[str | None] = mapped_column(
         String(128),
         nullable=True,
