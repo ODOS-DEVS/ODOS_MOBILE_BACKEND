@@ -23,14 +23,14 @@ from app.services.finance_math import amount_to_subunit, round_money
 from app.services.paystack_service import initialize_transaction, verify_transaction
 
 
-def _preferred_channel(payment_type: str | None) -> str | None:
+def _preferred_channel(payment_type: str | None) -> list[str] | None:
     if not payment_type:
         return None
     normalized = payment_type.strip().lower()
     if normalized == "card":
-        return "card"
+        return ["card"]
     if normalized in {"momo", "mobile_money"}:
-        return "mobile_money"
+        return ["mobile_money"]
     return None
 
 
@@ -146,25 +146,44 @@ def initialize_wallet_topup(
         str(request.url_for("paystack_checkout_redirect")),
         return_url=cancel_url,
     )
-    paystack_response = initialize_transaction(
-        email=current_user.email,
-        amount_subunit=amount_to_subunit(amount),
-        reference=reference,
-        callback_url=paystack_callback_url,
-        cancel_url=paystack_cancel_url,
-        currency=wallet.currency,
-        channels=_preferred_channel(payload.payment_type),
-        metadata={
-            "wallet_id": str(wallet.id),
-            "user_id": str(current_user.id),
-            "kind": "customer_wallet_topup",
-            "payment_type": payload.payment_type,
-            "payment_label": payload.payment_label,
-            "payment_network": payload.payment_network,
-            "payment_phone": payload.payment_phone,
-            "payment_last4": payload.payment_last4,
-        },
-    )
+    metadata = {
+        "wallet_id": str(wallet.id),
+        "user_id": str(current_user.id),
+        "kind": "customer_wallet_topup",
+        "payment_type": payload.payment_type,
+        "payment_label": payload.payment_label,
+        "payment_network": payload.payment_network,
+        "payment_phone": payload.payment_phone,
+        "payment_last4": payload.payment_last4,
+    }
+    preferred_channels = _preferred_channel(payload.payment_type)
+    try:
+        paystack_response = initialize_transaction(
+            email=current_user.email,
+            amount_subunit=amount_to_subunit(amount),
+            reference=reference,
+            callback_url=paystack_callback_url,
+            cancel_url=paystack_cancel_url,
+            currency=wallet.currency,
+            channels=preferred_channels,
+            metadata=metadata,
+        )
+    except HTTPException as exc:
+        # Some Paystack setups reject certain channels (for example mobile money),
+        # so we retry without restriction instead of blocking the top-up flow.
+        if preferred_channels and exc.status_code == status.HTTP_502_BAD_GATEWAY:
+            paystack_response = initialize_transaction(
+                email=current_user.email,
+                amount_subunit=amount_to_subunit(amount),
+                reference=reference,
+                callback_url=paystack_callback_url,
+                cancel_url=paystack_cancel_url,
+                currency=wallet.currency,
+                channels=None,
+                metadata=metadata,
+            )
+        else:
+            raise
     response_data = paystack_response.get("data", {})
     topup = CustomerWalletTopUp(
         wallet_id=wallet.id,
@@ -230,6 +249,14 @@ def verify_wallet_topup(
         reference=reference,
         status=topup_status,
         message=message,
+        amount=round_money(topup.amount_subunit / 100),
+        currency=topup.currency,
+        payment_label=(topup.raw_response or {}).get("metadata", {}).get("payment_label")
+        if isinstance((topup.raw_response or {}).get("metadata"), dict)
+        else None,
+        payment_type=(topup.raw_response or {}).get("metadata", {}).get("payment_type")
+        if isinstance((topup.raw_response or {}).get("metadata"), dict)
+        else None,
         wallet=_serialize_wallet(refreshed_wallet),
     )
 
