@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -8,6 +9,11 @@ from app.schemas.order import OrderCreate, OrderRead
 
 class CustomerWalletTopUpCreate(BaseModel):
     amount: float = Field(gt=0)
+    payment_type: Literal["card", "momo"] | None = None
+    payment_label: str | None = Field(default=None, max_length=120)
+    payment_network: str | None = Field(default=None, max_length=60)
+    payment_phone: str | None = Field(default=None, max_length=30)
+    payment_last4: str | None = Field(default=None, min_length=4, max_length=4)
     callback_url: str | None = Field(default=None, max_length=500)
     cancel_url: str | None = Field(default=None, max_length=500)
 
@@ -45,6 +51,13 @@ class CustomerWalletRead(BaseModel):
     recent_transactions: list[CustomerWalletTransactionRead]
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class CustomerWalletTopUpVerificationRead(BaseModel):
+    reference: str
+    status: str
+    message: str
+    wallet: CustomerWalletRead
 
 
 class WalletCheckoutCreate(OrderCreate):

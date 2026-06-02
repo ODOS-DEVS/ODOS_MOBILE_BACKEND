@@ -13,6 +13,7 @@ from app.schemas.customer_wallet import (
     CustomerWalletRead,
     CustomerWalletTopUpCreate,
     CustomerWalletTopUpSessionRead,
+    CustomerWalletTopUpVerificationRead,
     CustomerWalletTransactionRead,
     WalletCheckoutCreate,
     WalletCheckoutRead,
@@ -20,6 +21,17 @@ from app.schemas.customer_wallet import (
 from app.schemas.order import OrderRead
 from app.services.finance_math import amount_to_subunit, round_money
 from app.services.paystack_service import initialize_transaction, verify_transaction
+
+
+def _preferred_channel(payment_type: str | None) -> str | None:
+    if not payment_type:
+        return None
+    normalized = payment_type.strip().lower()
+    if normalized == "card":
+        return "card"
+    if normalized in {"momo", "mobile_money"}:
+        return "mobile_money"
+    return None
 
 
 def _append_query_params(url: str, **params: str | None) -> str:
@@ -133,11 +145,16 @@ def initialize_wallet_topup(
         callback_url=callback_url,
         cancel_url=cancel_url,
         currency=wallet.currency,
-        channels=None,
+        channels=_preferred_channel(payload.payment_type),
         metadata={
             "wallet_id": str(wallet.id),
             "user_id": str(current_user.id),
             "kind": "customer_wallet_topup",
+            "payment_type": payload.payment_type,
+            "payment_label": payload.payment_label,
+            "payment_network": payload.payment_network,
+            "payment_phone": payload.payment_phone,
+            "payment_last4": payload.payment_last4,
         },
     )
     response_data = paystack_response.get("data", {})
@@ -168,7 +185,7 @@ def verify_wallet_topup(
     db: Session,
     current_user: User,
     reference: str,
-) -> CustomerWalletRead:
+) -> CustomerWalletTopUpVerificationRead:
     topup = db.scalar(
         select(CustomerWalletTopUp)
         .options(selectinload(CustomerWalletTopUp.wallet).selectinload(CustomerWallet.transactions))
@@ -182,7 +199,7 @@ def verify_wallet_topup(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="That top up session was not found.",
         )
-    _reconcile_wallet_topup(db, topup)
+    topup_status = _reconcile_wallet_topup(db, topup)
     refreshed_wallet = db.scalar(
         select(CustomerWallet)
         .options(selectinload(CustomerWallet.transactions))
@@ -193,10 +210,23 @@ def verify_wallet_topup(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Top up was processed but wallet reload failed.",
         )
-    return _serialize_wallet(refreshed_wallet)
+    if topup_status == "paid":
+        message = "Wallet funded successfully."
+    elif topup_status == "cancelled":
+        message = "Top-up was cancelled before completion."
+    elif topup_status == "pending":
+        message = "We're still waiting for payment confirmation."
+    else:
+        message = "Top-up was not successful."
+    return CustomerWalletTopUpVerificationRead(
+        reference=reference,
+        status=topup_status,
+        message=message,
+        wallet=_serialize_wallet(refreshed_wallet),
+    )
 
 
-def _reconcile_wallet_topup(db: Session, topup: CustomerWalletTopUp) -> None:
+def _reconcile_wallet_topup(db: Session, topup: CustomerWalletTopUp) -> str:
     verification_response = verify_transaction(topup.reference)
     provider_payload = verification_response.get("data", {})
     provider_status = str(provider_payload.get("status") or "").strip().lower()
@@ -213,15 +243,15 @@ def _reconcile_wallet_topup(db: Session, topup: CustomerWalletTopUp) -> None:
     if amount_subunit != topup.amount_subunit or currency != topup.currency:
         topup.status = "failed"
         db.commit()
-        return
+        return topup.status
     if provider_status != "success":
         topup.status = "cancelled" if provider_status in {"abandoned", "cancelled"} else "pending"
         db.commit()
-        return
+        return topup.status
 
     if topup.status == "paid":
         db.commit()
-        return
+        return topup.status
 
     wallet = topup.wallet
     wallet.available_balance = round_money(wallet.available_balance + (topup.amount_subunit / 100))
@@ -240,6 +270,7 @@ def _reconcile_wallet_topup(db: Session, topup: CustomerWalletTopUp) -> None:
         )
     )
     db.commit()
+    return topup.status
 
 
 def reconcile_wallet_topup_by_reference(db: Session, reference: str) -> uuid.UUID | None:

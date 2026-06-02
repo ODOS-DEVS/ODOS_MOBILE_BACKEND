@@ -16,6 +16,7 @@ from app.schemas.customer_wallet import (
     CustomerWalletRead,
     CustomerWalletTopUpCreate,
     CustomerWalletTopUpSessionRead,
+    CustomerWalletTopUpVerificationRead,
     WalletCheckoutCreate,
     WalletCheckoutRead,
 )
@@ -41,7 +42,7 @@ def create_customer_wallet_topup_session(
     return initialize_wallet_topup(db, request, current_user, payload)
 
 
-@router.post("/customer/topups/{reference}/verify", response_model=CustomerWalletRead)
+@router.post("/customer/topups/{reference}/verify", response_model=CustomerWalletTopUpVerificationRead)
 def verify_customer_wallet_topup(
     reference: str,
     current_user: Annotated[User, Depends(get_current_user)],
