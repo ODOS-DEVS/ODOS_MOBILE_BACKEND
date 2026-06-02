@@ -1,4 +1,4 @@
-from app.routes import admin, account, auth, cart, catalog, chat, health, notifications, orders, payments, realtime, vouchers, vendor, wishlist
+from app.routes import admin, account, auth, cart, catalog, chat, customer_wallet, health, notifications, orders, payments, realtime, vouchers, vendor, wishlist
 
 __all__ = [
     "admin",
@@ -7,6 +7,7 @@ __all__ = [
     "cart",
     "catalog",
     "chat",
+    "customer_wallet",
     "health",
     "notifications",
     "orders",
