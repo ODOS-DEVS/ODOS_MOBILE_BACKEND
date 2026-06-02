@@ -57,6 +57,10 @@ class CustomerWalletTopUpVerificationRead(BaseModel):
     reference: str
     status: str
     message: str
+    amount: float
+    currency: str
+    payment_label: str | None = None
+    payment_type: str | None = None
     wallet: CustomerWalletRead
 
 
