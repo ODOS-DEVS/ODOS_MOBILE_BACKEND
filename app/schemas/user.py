@@ -51,6 +51,25 @@ class VerifyEmailRequest(BaseModel):
     code: str = Field(pattern=r"^\d{6}$")
 
 
+class SendPhoneVerificationRequest(BaseModel):
+    phone_number: str = Field(min_length=7, max_length=30)
+
+    @field_validator("phone_number", mode="before")
+    @classmethod
+    def strip_phone(cls, value: str) -> str:
+        return value.strip()
+
+
+class VerifyPhoneRequest(BaseModel):
+    phone_number: str = Field(min_length=7, max_length=30)
+    code: str = Field(pattern=r"^\d{6}$")
+
+    @field_validator("phone_number", mode="before")
+    @classmethod
+    def strip_phone(cls, value: str) -> str:
+        return value.strip()
+
+
 class ForgotPasswordRequest(BaseModel):
     email: EmailStr
 
@@ -226,6 +245,7 @@ class UserRead(BaseModel):
     vendor_rejection_reason: str | None
     is_active: bool
     is_verified: bool
+    phone_verified: bool
     last_login_at: datetime | None
     created_at: datetime
     updated_at: datetime

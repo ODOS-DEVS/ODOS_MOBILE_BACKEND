@@ -11,10 +11,12 @@ from app.controllers.auth_controller import (
     request_password_reset,
     resend_verification_code,
     reset_password,
+    send_phone_verification_code_for_user,
     signup_user,
     update_user_profile,
     verify_password_reset_code,
     verify_user_email,
+    verify_user_phone,
 )
 from app.core.auth import get_current_user
 from app.core.database import get_db
@@ -32,7 +34,9 @@ from app.schemas.user import (
     UserRead,
     UserUpdate,
     VerifyPasswordResetCodeRequest,
+    SendPhoneVerificationRequest,
     VerifyEmailRequest,
+    VerifyPhoneRequest,
 )
 
 router = APIRouter(tags=["auth"])
@@ -120,6 +124,24 @@ def resend_email_verification_code(
     db: Session = Depends(get_db),
 ):
     return resend_verification_code(db, current_user)
+
+
+@router.post("/phone/send-code", response_model=MessageResponse)
+def send_phone_verification_code_route(
+    payload: SendPhoneVerificationRequest,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return send_phone_verification_code_for_user(db, current_user, payload)
+
+
+@router.post("/phone/verify", response_model=UserRead)
+def verify_phone_route(
+    payload: VerifyPhoneRequest,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return verify_user_phone(db, current_user, payload)
 
 
 @router.get("/me", response_model=UserRead)

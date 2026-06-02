@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.core.auth import raise_account_blocked
 from app.core.config import settings
 from app.core.google_auth import verify_google_identity_token
+from app.core.phone import normalize_ghana_phone
 from app.core.security import (
     create_access_token,
     create_password_reset_token,
@@ -31,9 +32,12 @@ from app.schemas.user import (
     UserLogin,
     UserUpdate,
     VerifyPasswordResetCodeRequest,
+    SendPhoneVerificationRequest,
     VerifyEmailRequest,
+    VerifyPhoneRequest,
 )
 from app.services.email_service import send_email_verification_code, send_password_reset_code
+from app.services.sms_service import send_phone_verification_code
 from app.services.email_service import (
     send_email_verified_success,
     send_password_changed_success,
@@ -83,6 +87,30 @@ def _clear_password_reset_code(user: User) -> None:
     user.password_reset_code_hash = None
     user.password_reset_expires_at = None
     user.password_reset_sent_at = None
+
+
+def _hash_phone_verification_code(phone_number: str, code: str) -> str:
+    return hashlib.sha256(
+        f"{settings.secret_key}:{phone_number}:{code}".encode("utf-8")
+    ).hexdigest()
+
+
+def _set_phone_verification_code(user: User, phone_number: str) -> str:
+    code = _generate_email_verification_code()
+    user.phone_verification_code_hash = _hash_phone_verification_code(phone_number, code)
+    user.phone_verification_expires_at = datetime.now(UTC) + timedelta(
+        minutes=settings.phone_verification_code_expire_minutes
+    )
+    user.phone_verification_sent_at = datetime.now(UTC)
+    user.phone_verification_phone = phone_number
+    return code
+
+
+def _clear_phone_verification_code(user: User) -> None:
+    user.phone_verification_code_hash = None
+    user.phone_verification_expires_at = None
+    user.phone_verification_sent_at = None
+    user.phone_verification_phone = None
 
 
 def _dispatch_email_verification_code(
@@ -498,21 +526,121 @@ def reset_password(
     return MessageResponse(message="Your password has been updated successfully.")
 
 
+def send_phone_verification_code_for_user(
+    db: Session,
+    user: User,
+    payload: SendPhoneVerificationRequest,
+) -> MessageResponse:
+    phone_number = normalize_ghana_phone(payload.phone_number)
+
+    if user.phone_verified and user.phone_number == phone_number:
+        return MessageResponse(message="This phone number is already verified.")
+
+    existing_phone = db.scalar(
+        select(User).where(
+            User.phone_number == phone_number,
+            User.id != user.id,
+        )
+    )
+    if existing_phone:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This phone number is already linked to another account.",
+        )
+
+    code = _set_phone_verification_code(user, phone_number)
+    db.commit()
+    db.refresh(user)
+
+    try:
+        send_phone_verification_code(phone_number=phone_number, code=code)
+    except Exception as exc:
+        logger.exception("Failed to dispatch phone verification SMS")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="We couldn't send a verification code right now. Try again shortly.",
+        ) from exc
+
+    return MessageResponse(
+        message=f"We sent a 6-digit code to {phone_number}."
+    )
+
+
+def verify_user_phone(
+    db: Session,
+    user: User,
+    payload: VerifyPhoneRequest,
+) -> User:
+    phone_number = normalize_ghana_phone(payload.phone_number)
+
+    if (
+        not user.phone_verification_code_hash
+        or not user.phone_verification_expires_at
+        or user.phone_verification_phone != phone_number
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Request a new verification code for this number.",
+        )
+
+    if user.phone_verification_expires_at < datetime.now(UTC):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This verification code has expired. Request a new one.",
+        )
+
+    expected_hash = _hash_phone_verification_code(phone_number, payload.code)
+    if not secrets.compare_digest(expected_hash, user.phone_verification_code_hash):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="That verification code is not correct.",
+        )
+
+    existing_phone = db.scalar(
+        select(User).where(
+            User.phone_number == phone_number,
+            User.id != user.id,
+        )
+    )
+    if existing_phone:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This phone number is already linked to another account.",
+        )
+
+    user.phone_number = phone_number
+    user.phone_verified = True
+    _clear_phone_verification_code(user)
+
+    try:
+        db.commit()
+        db.refresh(user)
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This phone number is already linked to another account.",
+        ) from None
+
+    return user
+
+
 def update_user_profile(db: Session, user: User, payload: UserUpdate) -> User:
     updates = payload.model_dump(exclude_unset=True)
 
-    phone_number = updates.get("phone_number")
-    if phone_number:
-        existing_phone = db.scalar(
-            select(User).where(
-                User.phone_number == phone_number,
-                User.id != user.id,
-            )
-        )
-        if existing_phone:
+    if "phone_number" in updates:
+        requested_phone = updates.pop("phone_number")
+        if requested_phone is None or requested_phone == "":
+            user.phone_number = None
+            user.phone_verified = False
+            _clear_phone_verification_code(user)
+        elif (
+            requested_phone != user.phone_number
+            or not user.phone_verified
+        ):
             raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="A user with this phone number already exists.",
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Verify your phone number before saving it to your profile.",
             )
 
     for field, value in updates.items():
