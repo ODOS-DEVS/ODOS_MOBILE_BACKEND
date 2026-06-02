@@ -138,12 +138,20 @@ def initialize_wallet_topup(
         reference=reference,
         cancelled="1",
     )
+    paystack_callback_url = _append_query_params(
+        str(request.url_for("paystack_checkout_redirect")),
+        return_url=callback_url,
+    )
+    paystack_cancel_url = _append_query_params(
+        str(request.url_for("paystack_checkout_redirect")),
+        return_url=cancel_url,
+    )
     paystack_response = initialize_transaction(
         email=current_user.email,
         amount_subunit=amount_to_subunit(amount),
         reference=reference,
-        callback_url=callback_url,
-        cancel_url=cancel_url,
+        callback_url=paystack_callback_url,
+        cancel_url=paystack_cancel_url,
         currency=wallet.currency,
         channels=_preferred_channel(payload.payment_type),
         metadata={
