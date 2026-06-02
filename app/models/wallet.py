@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, String, UniqueConstraint, func
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, JSON, String, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -228,4 +228,183 @@ class VendorWithdrawalRequest(Base):
     reviewed_by_user: Mapped["User | None"] = relationship(
         foreign_keys=[reviewed_by_user_id],
         back_populates="reviewed_vendor_withdrawal_requests",
+    )
+
+
+class CustomerWallet(Base):
+    __tablename__ = "customer_wallets"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        unique=True,
+        nullable=False,
+        index=True,
+    )
+    currency: Mapped[str] = mapped_column(String(10), nullable=False, default="GHS", server_default="GHS")
+    available_balance: Mapped[float] = mapped_column(Float, nullable=False, default=0, server_default="0")
+    lifetime_topups: Mapped[float] = mapped_column(Float, nullable=False, default=0, server_default="0")
+    lifetime_spend: Mapped[float] = mapped_column(Float, nullable=False, default=0, server_default="0")
+    lifetime_refunds: Mapped[float] = mapped_column(Float, nullable=False, default=0, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    user: Mapped["User"] = relationship(back_populates="customer_wallet")
+    transactions: Mapped[list["CustomerWalletTransaction"]] = relationship(
+        back_populates="wallet",
+        cascade="all, delete-orphan",
+        order_by="CustomerWalletTransaction.created_at.desc()",
+    )
+    topups: Mapped[list["CustomerWalletTopUp"]] = relationship(
+        back_populates="wallet",
+        cascade="all, delete-orphan",
+        order_by="CustomerWalletTopUp.created_at.desc()",
+    )
+
+
+class CustomerWalletTransaction(Base):
+    __tablename__ = "customer_wallet_transactions"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    wallet_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("customer_wallets.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    order_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("orders.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    topup_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("customer_wallet_topups.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    kind: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    title: Mapped[str] = mapped_column(String(160), nullable=False)
+    amount: Mapped[float] = mapped_column(Float, nullable=False)
+    balance_after: Mapped[float] = mapped_column(Float, nullable=False)
+    metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    wallet: Mapped["CustomerWallet"] = relationship(back_populates="transactions")
+    user: Mapped["User"] = relationship(
+        foreign_keys=[user_id],
+        back_populates="customer_wallet_transactions",
+    )
+    order: Mapped["Order | None"] = relationship()
+    topup: Mapped["CustomerWalletTopUp | None"] = relationship(back_populates="transaction")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "order_id",
+            "kind",
+            name="uq_customer_wallet_tx_user_order_kind",
+        ),
+        UniqueConstraint(
+            "user_id",
+            "topup_id",
+            "kind",
+            name="uq_customer_wallet_tx_user_topup_kind",
+        ),
+    )
+
+
+class CustomerWalletTopUp(Base):
+    __tablename__ = "customer_wallet_topups"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    wallet_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("customer_wallets.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    provider: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        default="paystack",
+        server_default="paystack",
+        index=True,
+    )
+    reference: Mapped[str] = mapped_column(String(80), nullable=False, unique=True, index=True)
+    access_code: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    authorization_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    amount_subunit: Mapped[int] = mapped_column(Integer, nullable=False)
+    currency: Mapped[str] = mapped_column(String(10), nullable=False, default="GHS", server_default="GHS")
+    status: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        default="pending",
+        server_default="pending",
+        index=True,
+    )
+    provider_transaction_id: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    gateway_response: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    raw_response: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    wallet: Mapped["CustomerWallet"] = relationship(back_populates="topups")
+    user: Mapped["User"] = relationship(
+        foreign_keys=[user_id],
+        back_populates="customer_wallet_topups",
+    )
+    transaction: Mapped["CustomerWalletTransaction | None"] = relationship(
+        back_populates="topup",
+        uselist=False,
     )

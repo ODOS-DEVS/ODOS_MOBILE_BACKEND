@@ -10,7 +10,14 @@ from app.models.payment import (
     PlatformTreasuryAccount,
 )
 from app.models.voucher import Voucher, VoucherAssignment, VoucherRedemption
-from app.models.wallet import VendorWallet, VendorWalletTransaction, VendorWithdrawalRequest
+from app.models.wallet import (
+    CustomerWallet,
+    CustomerWalletTopUp,
+    CustomerWalletTransaction,
+    VendorWallet,
+    VendorWalletTransaction,
+    VendorWithdrawalRequest,
+)
 from app.models.user import (
     AuthProvider,
     CartItem,
@@ -29,6 +36,9 @@ __all__ = [
     "ChatMessage",
     "ChatThread",
     "ChatThreadType",
+    "CustomerWallet",
+    "CustomerWalletTopUp",
+    "CustomerWalletTransaction",
     "SupportChatStatus",
     "Market",
     "NotificationEvent",

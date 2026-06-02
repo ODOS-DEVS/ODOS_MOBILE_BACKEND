@@ -263,6 +263,19 @@ class User(Base):
         foreign_keys="VendorWithdrawalRequest.reviewed_by_user_id",
         back_populates="reviewed_by_user",
     )
+    customer_wallet: Mapped["CustomerWallet | None"] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+        uselist=False,
+    )
+    customer_wallet_transactions: Mapped[list["CustomerWalletTransaction"]] = relationship(
+        foreign_keys="CustomerWalletTransaction.user_id",
+        back_populates="user",
+    )
+    customer_wallet_topups: Mapped[list["CustomerWalletTopUp"]] = relationship(
+        foreign_keys="CustomerWalletTopUp.user_id",
+        back_populates="user",
+    )
 
     def __repr__(self) -> str:
         return f"User(id={self.id!s}, email={self.email!r}, role={self.role.value!r})"

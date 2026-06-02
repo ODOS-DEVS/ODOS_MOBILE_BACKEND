@@ -13,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.controllers.finance_controller import record_payment_collection
+from app.controllers.customer_wallet_controller import reconcile_wallet_topup_by_reference
 from app.controllers.order_controller import (
     _broadcast_order_realtime,
     _dispatch_order_push,
@@ -552,6 +553,8 @@ def handle_paystack_webhook(
                     payment_transaction,
                     verification_response.get("data", {}),
                 )
+            else:
+                reconcile_wallet_topup_by_reference(db, reference)
         elif event_type in {"transfer.success", "transfer.failed", "transfer.reversed"} and reference:
             changed_vendor_id = reconcile_paystack_transfer_event(
                 db,
