@@ -218,6 +218,10 @@ class User(Base):
         back_populates="user",
         cascade="all, delete-orphan",
     )
+    verified_phones: Mapped[list["UserVerifiedPhone"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
     orders: Mapped[list["Order"]] = relationship(
         back_populates="user",
         cascade="all, delete-orphan",

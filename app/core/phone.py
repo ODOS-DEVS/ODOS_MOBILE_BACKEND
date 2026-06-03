@@ -31,3 +31,9 @@ def is_valid_ghana_phone(value: str) -> bool:
     except HTTPException:
         return False
     return True
+
+
+def to_international_ghana_phone(value: str) -> str:
+    """Arkesel-style international number: 233XXXXXXXXX (digits only, no +)."""
+    local = normalize_ghana_phone(value)
+    return f"233{local[1:]}"

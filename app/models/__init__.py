@@ -27,6 +27,7 @@ from app.models.user import (
     VendorStatus,
     WishlistItem,
 )
+from app.models.user_verified_phone import UserVerifiedPhone
 from app.models.vendor import VendorApplication
 
 __all__ = [
@@ -58,6 +59,7 @@ __all__ = [
     "Store",
     "User",
     "UserAuthAccount",
+    "UserVerifiedPhone",
     "UserRole",
     "VendorWallet",
     "VendorWalletTransaction",

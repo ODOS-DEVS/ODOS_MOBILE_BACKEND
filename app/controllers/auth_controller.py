@@ -37,6 +37,12 @@ from app.schemas.user import (
     VerifyPhoneRequest,
 )
 from app.services.email_service import send_email_verification_code, send_password_reset_code
+from app.services.arkesel_service import ArkeselSmsError, verify_otp as verify_arkesel_otp
+from app.services.phone_verification_service import (
+    is_phone_verified_for_user,
+    list_verified_phones,
+    record_verified_phone,
+)
 from app.services.sms_service import send_phone_verification_code
 from app.services.email_service import (
     send_email_verified_success,
@@ -93,6 +99,15 @@ def _hash_phone_verification_code(phone_number: str, code: str) -> str:
     return hashlib.sha256(
         f"{settings.secret_key}:{phone_number}:{code}".encode("utf-8")
     ).hexdigest()
+
+
+def _set_phone_verification_pending(user: User, phone_number: str) -> None:
+    user.phone_verification_code_hash = None
+    user.phone_verification_expires_at = datetime.now(UTC) + timedelta(
+        minutes=settings.phone_verification_code_expire_minutes
+    )
+    user.phone_verification_sent_at = datetime.now(UTC)
+    user.phone_verification_phone = phone_number
 
 
 def _set_phone_verification_code(user: User, phone_number: str) -> str:
@@ -574,8 +589,7 @@ def verify_user_phone(
     phone_number = normalize_ghana_phone(payload.phone_number)
 
     if (
-        not user.phone_verification_code_hash
-        or not user.phone_verification_expires_at
+        not user.phone_verification_expires_at
         or user.phone_verification_phone != phone_number
     ):
         raise HTTPException(
@@ -589,27 +603,46 @@ def verify_user_phone(
             detail="This verification code has expired. Request a new one.",
         )
 
-    expected_hash = _hash_phone_verification_code(phone_number, payload.code)
-    if not secrets.compare_digest(expected_hash, user.phone_verification_code_hash):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="That verification code is not correct.",
-        )
+    if settings.arkesel_is_configured:
+        try:
+            verify_arkesel_otp(phone_number=phone_number, code=payload.code)
+        except ArkeselSmsError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
+    else:
+        if not user.phone_verification_code_hash:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Request a new verification code for this number.",
+            )
+        expected_hash = _hash_phone_verification_code(phone_number, payload.code)
+        if not secrets.compare_digest(
+            expected_hash, user.phone_verification_code_hash
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="That verification code is not correct.",
+            )
 
-    existing_phone = db.scalar(
-        select(User).where(
-            User.phone_number == phone_number,
-            User.id != user.id,
+    if payload.link_to_profile:
+        existing_phone = db.scalar(
+            select(User).where(
+                User.phone_number == phone_number,
+                User.id != user.id,
+            )
         )
-    )
-    if existing_phone:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="This phone number is already linked to another account.",
-        )
+        if existing_phone:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This phone number is already linked to another account.",
+            )
 
-    user.phone_number = phone_number
-    user.phone_verified = True
+        user.phone_number = phone_number
+        user.phone_verified = True
+
+    record_verified_phone(db, user, phone_number)
     _clear_phone_verification_code(user)
 
     try:
@@ -623,6 +656,10 @@ def verify_user_phone(
         ) from None
 
     return user
+
+
+def get_user_verified_phones(db: Session, user: User) -> list[str]:
+    return list_verified_phones(db, user)
 
 
 def update_user_profile(db: Session, user: User, payload: UserUpdate) -> User:

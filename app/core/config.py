@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     brevo_sender_email: str = ""
     email_verification_code_expire_minutes: int = 10
     phone_verification_code_expire_minutes: int = 10
+    arkesel_api_key: str = ""
+    arkesel_sender_id: str = "ODOS"
+    arkesel_otp_message: str = "Your ODOS verification code is %otp_code%. Do not share it."
     password_reset_code_expire_minutes: int = 10
     password_reset_token_expire_minutes: int = 15
     vendor_commission_rate: float = 0.10
@@ -70,6 +73,14 @@ class Settings(BaseSettings):
             self.cloudinary_cloud_name.strip()
             and self.cloudinary_api_key.strip()
             and self.cloudinary_api_secret.strip()
+        )
+
+    @property
+    def arkesel_is_configured(self) -> bool:
+        return bool(
+            self.arkesel_api_key.strip()
+            and self.arkesel_sender_id.strip()
+            and "%otp_code%" in self.arkesel_otp_message
         )
 
     @property
