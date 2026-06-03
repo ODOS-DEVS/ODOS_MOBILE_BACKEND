@@ -53,6 +53,17 @@ class Settings(BaseSettings):
             return "postgresql+psycopg://" + normalized[len("postgresql://") :]
         return normalized
 
+    @field_validator("redis_url", mode="before")
+    @classmethod
+    def normalize_redis_url(cls, value: str | None) -> str:
+        if not value:
+            return ""
+
+        normalized = str(value).strip().strip('"').strip("'")
+        if normalized.upper().startswith("REDIS_URL="):
+            normalized = normalized.split("=", 1)[1].strip()
+        return normalized
+
     @property
     def google_client_id_list(self) -> list[str]:
         return [item.strip() for item in self.google_client_ids.split(",") if item.strip()]
