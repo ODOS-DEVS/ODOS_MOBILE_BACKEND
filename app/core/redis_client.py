@@ -1,4 +1,5 @@
 import logging
+import ssl
 from typing import TYPE_CHECKING
 
 from app.core.config import settings
@@ -37,12 +38,15 @@ def get_redis():
         return None
 
     try:
-        client = redis.Redis.from_url(
-            settings.redis_url,
-            decode_responses=True,
-            socket_connect_timeout=2,
-            socket_timeout=2,
-        )
+        connection_kwargs = {
+            "decode_responses": True,
+            "socket_connect_timeout": 5,
+            "socket_timeout": 5,
+        }
+        if settings.redis_url.startswith("rediss://"):
+            connection_kwargs["ssl_cert_reqs"] = ssl.CERT_REQUIRED
+
+        client = redis.Redis.from_url(settings.redis_url, **connection_kwargs)
         client.ping()
         _redis_client = client
         logger.info("Redis connected for rate limiting.")
