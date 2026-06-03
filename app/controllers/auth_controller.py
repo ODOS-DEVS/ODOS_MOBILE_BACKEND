@@ -548,27 +548,44 @@ def send_phone_verification_code_for_user(
 ) -> MessageResponse:
     phone_number = normalize_ghana_phone(payload.phone_number)
 
-    if user.phone_verified and user.phone_number == phone_number:
+    if payload.link_to_profile and user.phone_verified and user.phone_number == phone_number:
         return MessageResponse(message="This phone number is already verified.")
 
-    existing_phone = db.scalar(
-        select(User).where(
-            User.phone_number == phone_number,
-            User.id != user.id,
-        )
-    )
-    if existing_phone:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="This phone number is already linked to another account.",
-        )
+    if (
+        not payload.link_to_profile
+        and is_phone_verified_for_user(db, user, phone_number)
+    ):
+        return MessageResponse(message="This phone number is already verified.")
 
-    code = _set_phone_verification_code(user, phone_number)
+    if payload.link_to_profile:
+        existing_phone = db.scalar(
+            select(User).where(
+                User.phone_number == phone_number,
+                User.id != user.id,
+            )
+        )
+        if existing_phone:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This phone number is already linked to another account.",
+            )
+
+    if settings.arkesel_is_configured:
+        _set_phone_verification_pending(user, phone_number)
+        code = ""
+    else:
+        code = _set_phone_verification_code(user, phone_number)
+
     db.commit()
     db.refresh(user)
 
     try:
         send_phone_verification_code(phone_number=phone_number, code=code)
+    except ArkeselSmsError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
     except Exception as exc:
         logger.exception("Failed to dispatch phone verification SMS")
         raise HTTPException(
