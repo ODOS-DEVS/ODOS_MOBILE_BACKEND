@@ -1,6 +1,9 @@
 import logging
 import ssl
+import time
 from typing import TYPE_CHECKING
+
+import certifi
 
 from app.core.config import settings
 
@@ -10,55 +13,83 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _redis_client: "redis.Redis | None" = None
-_redis_checked = False
+_last_redis_error: str | None = None
 
 
 def redis_is_enabled() -> bool:
     return settings.rate_limit_enabled and bool(settings.redis_url.strip())
 
 
-def get_redis():
-    global _redis_client, _redis_checked
+def _build_redis_client():
+    import redis
+
+    connection_kwargs = {
+        "decode_responses": True,
+        "socket_connect_timeout": 10,
+        "socket_timeout": 10,
+    }
+
+    if settings.redis_url.startswith("rediss://"):
+        connection_kwargs["ssl_cert_reqs"] = ssl.CERT_REQUIRED
+        connection_kwargs["ssl_ca_certs"] = certifi.where()
+
+    client = redis.Redis.from_url(settings.redis_url, **connection_kwargs)
+    client.ping()
+    return client
+
+
+def get_redis(*, force_reconnect: bool = False):
+    global _redis_client, _last_redis_error
 
     if not redis_is_enabled():
         return None
 
+    if _redis_client is not None and not force_reconnect:
+        try:
+            _redis_client.ping()
+            return _redis_client
+        except Exception as exc:
+            logger.warning("Redis ping failed, reconnecting: %s", exc)
+            _redis_client = None
+
     if _redis_client is not None:
         return _redis_client
 
-    if _redis_checked:
-        return None
-
-    _redis_checked = True
-
     try:
-        import redis
+        import redis  # noqa: F401
     except ImportError:
-        logger.warning("Rate limiting disabled: redis package is not installed.")
+        _last_redis_error = "redis package is not installed"
+        logger.warning("Rate limiting disabled: %s.", _last_redis_error)
         return None
 
-    try:
-        connection_kwargs = {
-            "decode_responses": True,
-            "socket_connect_timeout": 5,
-            "socket_timeout": 5,
-        }
-        if settings.redis_url.startswith("rediss://"):
-            connection_kwargs["ssl_cert_reqs"] = ssl.CERT_REQUIRED
+    attempts = 3
+    for attempt in range(1, attempts + 1):
+        try:
+            _redis_client = _build_redis_client()
+            _last_redis_error = None
+            logger.info("Redis connected for rate limiting.")
+            return _redis_client
+        except Exception as exc:
+            _last_redis_error = str(exc)
+            logger.warning(
+                "Redis connection attempt %s/%s failed: %s",
+                attempt,
+                attempts,
+                exc,
+            )
+            if attempt < attempts:
+                time.sleep(0.5 * attempt)
 
-        client = redis.Redis.from_url(settings.redis_url, **connection_kwargs)
-        client.ping()
-        _redis_client = client
-        logger.info("Redis connected for rate limiting.")
-    except Exception as exc:
-        logger.warning("Rate limiting disabled: Redis unavailable (%s).", exc)
-        _redis_client = None
+    _redis_client = None
+    return None
 
-    return _redis_client
+
+def redis_last_error() -> str | None:
+    return _last_redis_error
 
 
 def close_redis() -> None:
-    global _redis_client, _redis_checked
+    global _redis_client, _last_redis_error
 
     if _redis_client is not None:
         try:
@@ -67,4 +98,4 @@ def close_redis() -> None:
             pass
 
     _redis_client = None
-    _redis_checked = False
+    _last_redis_error = None
