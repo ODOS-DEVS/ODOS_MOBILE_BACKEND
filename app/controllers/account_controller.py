@@ -2,8 +2,20 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.phone import normalize_ghana_phone
 from app.models import SavedAddress, SavedPaymentMethod, User
 from app.schemas.account import AddressCreate, AddressUpdate, PaymentMethodCreate
+from app.services.phone_verification_service import is_phone_verified_for_user
+
+
+def _require_verified_phone(db: Session, user: User, phone: str) -> str:
+    normalized = normalize_ghana_phone(phone)
+    if not is_phone_verified_for_user(db, user, normalized):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Verify this phone number with the code we send by SMS before saving.",
+        )
+    return normalized
 
 
 def list_addresses(db: Session, user: User) -> list[SavedAddress]:
@@ -24,9 +36,10 @@ def create_address(db: Session, user: User, payload: AddressCreate) -> SavedAddr
         for address in current_addresses:
             address.is_default = False
 
+    verified_phone = _require_verified_phone(db, user, payload.phone)
     address = SavedAddress(
         user_id=user.id,
-        **payload.model_dump(exclude={"is_default"}),
+        **{**payload.model_dump(exclude={"is_default"}), "phone": verified_phone},
         is_default=should_default,
     )
     db.add(address)
@@ -44,6 +57,13 @@ def update_address(db: Session, user: User, address_id: str, payload: AddressUpd
 
     data = payload.model_dump(exclude_unset=True)
     should_default = data.pop("is_default", None)
+
+    if "phone" in data and data["phone"] is not None:
+        new_phone = normalize_ghana_phone(data["phone"])
+        if new_phone != normalize_ghana_phone(address.phone):
+            data["phone"] = _require_verified_phone(db, user, data["phone"])
+        else:
+            data["phone"] = new_phone
 
     for key, value in data.items():
         setattr(address, key, value)
@@ -111,6 +131,10 @@ def create_payment_method(db: Session, user: User, payload: PaymentMethodCreate)
     card_last4 = digits[-4:] if digits else None
     label = payload.label or (f"**** {card_last4}" if payload.type == "card" else f"{payload.network} MoMo")
 
+    verified_phone = None
+    if payload.type == "momo" and payload.phone:
+        verified_phone = _require_verified_phone(db, user, payload.phone)
+
     payment_method = SavedPaymentMethod(
         user_id=user.id,
         type=payload.type,
@@ -120,7 +144,7 @@ def create_payment_method(db: Session, user: User, payload: PaymentMethodCreate)
         card_last4=card_last4,
         expiry=payload.expiry,
         network=payload.network,
-        phone=payload.phone,
+        phone=verified_phone,
     )
     db.add(payment_method)
     db.commit()

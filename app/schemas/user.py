@@ -53,6 +53,7 @@ class VerifyEmailRequest(BaseModel):
 
 class SendPhoneVerificationRequest(BaseModel):
     phone_number: str = Field(min_length=7, max_length=30)
+    link_to_profile: bool = True
 
     @field_validator("phone_number", mode="before")
     @classmethod
@@ -63,11 +64,16 @@ class SendPhoneVerificationRequest(BaseModel):
 class VerifyPhoneRequest(BaseModel):
     phone_number: str = Field(min_length=7, max_length=30)
     code: str = Field(pattern=r"^\d{6}$")
+    link_to_profile: bool = True
 
     @field_validator("phone_number", mode="before")
     @classmethod
     def strip_phone(cls, value: str) -> str:
         return value.strip()
+
+
+class VerifiedPhonesResponse(BaseModel):
+    phones: list[str]
 
 
 class ForgotPasswordRequest(BaseModel):

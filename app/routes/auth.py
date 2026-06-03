@@ -11,6 +11,7 @@ from app.controllers.auth_controller import (
     request_password_reset,
     resend_verification_code,
     reset_password,
+    get_user_verified_phones,
     send_phone_verification_code_for_user,
     signup_user,
     update_user_profile,
@@ -36,6 +37,7 @@ from app.schemas.user import (
     VerifyPasswordResetCodeRequest,
     SendPhoneVerificationRequest,
     VerifyEmailRequest,
+    VerifiedPhonesResponse,
     VerifyPhoneRequest,
 )
 
@@ -142,6 +144,14 @@ def verify_phone_route(
     db: Session = Depends(get_db),
 ):
     return verify_user_phone(db, current_user, payload)
+
+
+@router.get("/phone/verified", response_model=VerifiedPhonesResponse)
+def list_verified_phones_route(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return VerifiedPhonesResponse(phones=get_user_verified_phones(db, current_user))
 
 
 @router.get("/me", response_model=UserRead)
