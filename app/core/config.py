@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     paystack_public_key: str = ""
     paystack_webhook_secret: str = ""
     paystack_currency: str = "GHS"
+    redis_url: str = ""
+    rate_limit_enabled: bool = True
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -82,6 +84,10 @@ class Settings(BaseSettings):
             and self.arkesel_sender_id.strip()
             and "%otp_code%" in self.arkesel_otp_message
         )
+
+    @property
+    def rate_limit_is_active(self) -> bool:
+        return self.rate_limit_enabled and bool(self.redis_url.strip())
 
     @property
     def paystack_is_configured(self) -> bool:

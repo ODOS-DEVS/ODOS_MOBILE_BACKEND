@@ -21,6 +21,18 @@ from app.controllers.auth_controller import (
 )
 from app.core.auth import get_current_user
 from app.core.database import get_db
+from app.core.rate_limit import (
+    limit_forgot_password,
+    limit_google_auth,
+    limit_login,
+    limit_resend_email_verification,
+    limit_reset_password,
+    limit_send_phone_code,
+    limit_signup,
+    limit_verify_email,
+    limit_verify_phone,
+    limit_verify_reset_code,
+)
 from app.models import User
 from app.schemas.user import (
     AuthToken,
@@ -49,7 +61,12 @@ router = APIRouter(tags=["auth"])
     response_model=UserRead,
     status_code=status.HTTP_201_CREATED,
 )
-def signup(user_data: UserCreate, db: Session = Depends(get_db)):
+def signup(
+    user_data: UserCreate,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    limit_signup(request)
     return signup_user(db, user_data)
 
 
@@ -76,14 +93,17 @@ async def login(
     except ValidationError as exc:
         raise RequestValidationError(exc.errors()) from exc
 
+    limit_login(request, credentials.email)
     return login_user(db, credentials)
 
-  
+
 @router.post("/google", response_model=AuthToken)
 def google_auth(
     payload: GoogleAuthRequest,
+    request: Request,
     db: Session = Depends(get_db),
 ):
+    limit_google_auth(request)
     return google_auth_user(db, payload)
 
 
@@ -93,30 +113,37 @@ def verify_email(
     current_user: Annotated[User, Depends(get_current_user)],
     db: Session = Depends(get_db),
 ):
+    limit_verify_email(current_user)
     return verify_user_email(db, current_user, payload)
 
 
 @router.post("/forgot-password", response_model=MessageResponse)
 def forgot_password(
     payload: ForgotPasswordRequest,
+    request: Request,
     db: Session = Depends(get_db),
 ):
+    limit_forgot_password(request, payload.email)
     return request_password_reset(db, payload)
 
 
 @router.post("/verify-reset-code", response_model=PasswordResetTokenResponse)
 def verify_reset_code(
     payload: VerifyPasswordResetCodeRequest,
+    request: Request,
     db: Session = Depends(get_db),
 ):
+    limit_verify_reset_code(request, payload.email)
     return verify_password_reset_code(db, payload)
 
 
 @router.post("/reset-password", response_model=MessageResponse)
 def reset_password_route(
     payload: ResetPasswordRequest,
+    request: Request,
     db: Session = Depends(get_db),
 ):
+    limit_reset_password(request)
     return reset_password(db, payload)
 
 
@@ -125,6 +152,7 @@ def resend_email_verification_code(
     current_user: Annotated[User, Depends(get_current_user)],
     db: Session = Depends(get_db),
 ):
+    limit_resend_email_verification(current_user)
     return resend_verification_code(db, current_user)
 
 
@@ -134,6 +162,7 @@ def send_phone_verification_code_route(
     current_user: Annotated[User, Depends(get_current_user)],
     db: Session = Depends(get_db),
 ):
+    limit_send_phone_code(current_user, payload.phone_number)
     return send_phone_verification_code_for_user(db, current_user, payload)
 
 
@@ -143,6 +172,7 @@ def verify_phone_route(
     current_user: Annotated[User, Depends(get_current_user)],
     db: Session = Depends(get_db),
 ):
+    limit_verify_phone(current_user)
     return verify_user_phone(db, current_user, payload)
 
 

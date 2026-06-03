@@ -24,6 +24,7 @@ from app.routes import (
     vendor,
     wishlist,
 )
+from app.core.redis_client import close_redis, get_redis
 from app.services.realtime_service import realtime_manager
 
 app = FastAPI(title="ODOS Mobile Backend")
@@ -32,6 +33,12 @@ app = FastAPI(title="ODOS Mobile Backend")
 @app.on_event("startup")
 async def on_startup() -> None:
     realtime_manager.bind_loop(asyncio.get_running_loop())
+    get_redis()
+
+
+@app.on_event("shutdown")
+async def on_shutdown() -> None:
+    close_redis()
 
 app.add_middleware(
     CORSMiddleware,

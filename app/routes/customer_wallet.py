@@ -11,6 +11,7 @@ from app.controllers.customer_wallet_controller import (
 )
 from app.core.auth import get_current_user
 from app.core.database import get_db
+from app.core.rate_limit import limit_wallet_checkout, limit_wallet_topup_checkout
 from app.models import User
 from app.schemas.customer_wallet import (
     CustomerWalletRead,
@@ -39,6 +40,7 @@ def create_customer_wallet_topup_session(
     current_user: Annotated[User, Depends(get_current_user)],
     db: Session = Depends(get_db),
 ):
+    limit_wallet_topup_checkout(current_user)
     return initialize_wallet_topup(db, request, current_user, payload)
 
 
@@ -57,4 +59,5 @@ def checkout_with_customer_wallet(
     current_user: Annotated[User, Depends(get_current_user)],
     db: Session = Depends(get_db),
 ):
+    limit_wallet_checkout(current_user)
     return create_wallet_checkout(db, current_user, payload)
