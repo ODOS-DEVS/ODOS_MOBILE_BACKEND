@@ -50,15 +50,23 @@ def generate_otp(*, phone_number: str) -> None:
         ) from exc
 
     data = response.json() if response.content else {}
+    status = str(data.get("status", "")).lower()
     code = str(data.get("code", ""))
-    if response.status_code >= 400 or code not in {"1000", "1100"}:
+    is_success = (
+        response.status_code < 400
+        and status != "error"
+        and (code in {"1000", "1100"} or status == "success")
+    )
+    if not is_success:
         message = data.get("message") or "Failed to send verification code."
         logger.error(
-            "Arkesel OTP generate failed for %s: status=%s code=%s message=%s",
+            "Arkesel OTP generate failed for %s: http=%s status=%s code=%s message=%s body=%s",
             international_number,
             response.status_code,
+            status,
             code,
             message,
+            data,
         )
         raise ArkeselSmsError(message, status_code=code or None)
 
@@ -84,8 +92,14 @@ def verify_otp(*, phone_number: str, code: str) -> None:
         ) from exc
 
     data = response.json() if response.content else {}
+    status = str(data.get("status", "")).lower()
     status_code = str(data.get("code", ""))
-    if response.status_code >= 400 or status_code != "1100":
+    is_success = (
+        response.status_code < 400
+        and status != "error"
+        and (status_code == "1100" or status == "success")
+    )
+    if not is_success:
         message = data.get("message") or "That verification code is not correct."
         logger.warning(
             "Arkesel OTP verify rejected for %s: status=%s code=%s message=%s",
