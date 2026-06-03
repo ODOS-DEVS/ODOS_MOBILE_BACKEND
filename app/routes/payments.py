@@ -11,6 +11,7 @@ from app.controllers.payment_controller import (
 )
 from app.core.auth import get_current_user
 from app.core.database import get_db
+from app.core.rate_limit import limit_payment_checkout
 from app.models import User
 from app.schemas.payment import (
     CheckoutSessionCreate,
@@ -28,6 +29,7 @@ def initialize_checkout_payment(
     current_user: Annotated[User, Depends(get_current_user)],
     db: Session = Depends(get_db),
 ):
+    limit_payment_checkout(current_user)
     return create_checkout_session(db, request, current_user, payload)
 
 
