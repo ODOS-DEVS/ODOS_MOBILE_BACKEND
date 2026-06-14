@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.controllers.voucher_controller import (
     claim_voucher,
+    list_public_promotions,
     list_store_vouchers,
     list_user_vouchers,
     preview_voucher,
@@ -20,6 +21,13 @@ from app.schemas.voucher import (
 )
 
 router = APIRouter(prefix="/vouchers", tags=["vouchers"])
+
+
+@router.get("/promotions", response_model=list[StoreVoucherRead])
+def get_public_promotions(
+    db: Session = Depends(get_db),
+):
+    return list_public_promotions(db)
 
 
 @router.get("/stores/{store_id}", response_model=list[StoreVoucherRead])

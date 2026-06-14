@@ -300,6 +300,9 @@ def broadcast_catalog_product_change(
     status: str | None = None,
     is_active: bool | None = None,
 ) -> None:
+    from app.core.cache import invalidate_catalog_product
+
+    invalidate_catalog_product(product.id)
     realtime_manager.broadcast_event_sync(
         "catalog.product.changed",
         {
@@ -316,6 +319,9 @@ def broadcast_catalog_product_change(
 
 
 def broadcast_catalog_store_change(store: Store) -> None:
+    from app.core.cache import invalidate_catalog_store
+
+    invalidate_catalog_store(store.id)
     realtime_manager.broadcast_event_sync(
         "catalog.store.changed",
         {
@@ -770,6 +776,9 @@ def delete_vendor_product(db: Session, user: User, product_id: str) -> None:
     deleted_section = product.section
     db.delete(product)
     db.commit()
+    from app.core.cache import invalidate_catalog_product
+
+    invalidate_catalog_product(product_id)
     realtime_manager.broadcast_event_sync(
         "catalog.product.changed",
         {

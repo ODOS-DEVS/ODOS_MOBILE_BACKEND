@@ -16,8 +16,20 @@ _redis_client: "redis.Redis | None" = None
 _last_redis_error: str | None = None
 
 
+def redis_is_configured() -> bool:
+    return bool(settings.redis_url.strip())
+
+
 def redis_is_enabled() -> bool:
-    return settings.rate_limit_enabled and bool(settings.redis_url.strip())
+    return settings.rate_limit_enabled and redis_is_configured()
+
+
+def redis_should_connect() -> bool:
+    if not redis_is_configured():
+        return False
+    if settings.rate_limit_enabled:
+        return True
+    return settings.cache_enabled
 
 
 def _build_redis_client():
@@ -41,7 +53,7 @@ def _build_redis_client():
 def get_redis(*, force_reconnect: bool = False):
     global _redis_client, _last_redis_error
 
-    if not redis_is_enabled():
+    if not redis_should_connect():
         return None
 
     if _redis_client is not None and not force_reconnect:
@@ -67,7 +79,7 @@ def get_redis(*, force_reconnect: bool = False):
         try:
             _redis_client = _build_redis_client()
             _last_redis_error = None
-            logger.info("Redis connected for rate limiting.")
+            logger.info("Redis connected.")
             return _redis_client
         except Exception as exc:
             _last_redis_error = str(exc)

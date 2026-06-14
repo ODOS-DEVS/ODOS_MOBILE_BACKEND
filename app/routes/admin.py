@@ -1,4 +1,5 @@
 from typing import Annotated
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile, status
 from fastapi.exceptions import RequestValidationError
@@ -7,10 +8,14 @@ from sqlalchemy.orm import Session
 
 from app.controllers.admin_controller import (
     archive_admin_voucher,
+    archive_admin_promo_banner,
+    archive_admin_flash_sale_event,
     bootstrap_first_admin,
     create_admin_category,
     create_admin_product,
     create_admin_market,
+    create_admin_promo_banner,
+    create_admin_flash_sale_event,
     create_admin_store,
     create_admin_voucher,
     delete_admin_category,
@@ -27,6 +32,8 @@ from app.controllers.admin_controller import (
     get_admin_vendor,
     list_admin_categories,
     list_admin_markets,
+    list_admin_promo_banners,
+    list_admin_flash_sale_events,
     list_admin_notifications,
     list_admin_orders,
     list_admin_payment_transactions_payload,
@@ -43,6 +50,8 @@ from app.controllers.admin_controller import (
     moderate_admin_review,
     update_admin_category,
     update_admin_market,
+    update_admin_promo_banner,
+    update_admin_flash_sale_event,
     update_admin_order_status,
     update_admin_profile,
     update_admin_product,
@@ -78,6 +87,10 @@ from app.schemas.admin import (
     AdminMarketRead,
     AdminMarketUpsert,
     AdminNotificationRead,
+    AdminPromoBannerRead,
+    AdminPromoBannerUpsert,
+    AdminFlashSaleEventRead,
+    AdminFlashSaleEventUpsert,
     AdminOrderDetailRead,
     AdminOrderRead,
     AdminOrderStatusUpdate,
@@ -125,6 +138,15 @@ def _split_multiline_values(value: str | None) -> list[str] | None:
         return None
     cleaned = [item.strip() for item in value.splitlines() if item.strip()]
     return cleaned or None
+
+
+def _parse_optional_datetime(value: str | None) -> datetime | None:
+    if value is None:
+        return None
+    cleaned = value.strip()
+    if not cleaned:
+        return None
+    return datetime.fromisoformat(cleaned.replace("Z", "+00:00"))
 
 
 @router.get("/auth/bootstrap-status", response_model=AdminBootstrapStatusRead)
@@ -389,6 +411,120 @@ def remove_market(
     db: Session = Depends(get_db),
 ):
     delete_admin_market(db, current_user, market_id)
+    return {"success": True}
+
+
+@router.get("/promo-banners", response_model=list[AdminPromoBannerRead])
+def get_promo_banners(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return list_admin_promo_banners(db, current_user)
+
+
+@router.post("/promo-banners", response_model=AdminPromoBannerRead, status_code=status.HTTP_201_CREATED)
+async def post_promo_banner(
+    title: Annotated[str, Form(min_length=2, max_length=120)],
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+    subtitle: Annotated[str | None, Form(max_length=255)] = None,
+    cta_label: Annotated[str, Form(min_length=2, max_length=80)] = "Browse deals",
+    cta_link: Annotated[str | None, Form(max_length=500)] = None,
+    accent: Annotated[str | None, Form(max_length=20)] = None,
+    sort_order: Annotated[int | None, Form()] = None,
+    status_value: Annotated[str, Form(alias="status", min_length=1, max_length=30)] = "active",
+    starts_at: Annotated[str | None, Form()] = None,
+    ends_at: Annotated[str | None, Form()] = None,
+    image_file: UploadFile | None = File(default=None),
+):
+    payload = AdminPromoBannerUpsert(
+        title=title,
+        subtitle=subtitle,
+        cta_label=cta_label,
+        cta_link=cta_link,
+        accent=accent,
+        sort_order=sort_order,
+        status=status_value,
+        starts_at=_parse_optional_datetime(starts_at),
+        ends_at=_parse_optional_datetime(ends_at),
+    )
+    return await create_admin_promo_banner(db, current_user, payload, image_file)
+
+
+@router.patch("/promo-banners/{banner_id}", response_model=AdminPromoBannerRead)
+async def patch_promo_banner(
+    banner_id: str,
+    title: Annotated[str, Form(min_length=2, max_length=120)],
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+    subtitle: Annotated[str | None, Form(max_length=255)] = None,
+    cta_label: Annotated[str, Form(min_length=2, max_length=80)] = "Browse deals",
+    cta_link: Annotated[str | None, Form(max_length=500)] = None,
+    accent: Annotated[str | None, Form(max_length=20)] = None,
+    sort_order: Annotated[int | None, Form()] = None,
+    status_value: Annotated[str, Form(alias="status", min_length=1, max_length=30)] = "active",
+    starts_at: Annotated[str | None, Form()] = None,
+    ends_at: Annotated[str | None, Form()] = None,
+    image_file: UploadFile | None = File(default=None),
+):
+    payload = AdminPromoBannerUpsert(
+        title=title,
+        subtitle=subtitle,
+        cta_label=cta_label,
+        cta_link=cta_link,
+        accent=accent,
+        sort_order=sort_order,
+        status=status_value,
+        starts_at=_parse_optional_datetime(starts_at),
+        ends_at=_parse_optional_datetime(ends_at),
+    )
+    return await update_admin_promo_banner(db, current_user, banner_id, payload, image_file)
+
+
+@router.delete("/promo-banners/{banner_id}")
+def remove_promo_banner(
+    banner_id: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    archive_admin_promo_banner(db, current_user, banner_id)
+    return {"success": True}
+
+
+@router.get("/flash-sale-events", response_model=list[AdminFlashSaleEventRead])
+def get_flash_sale_events(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return list_admin_flash_sale_events(db, current_user)
+
+
+@router.post("/flash-sale-events", response_model=AdminFlashSaleEventRead, status_code=status.HTTP_201_CREATED)
+def post_flash_sale_event(
+    payload: AdminFlashSaleEventUpsert,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return create_admin_flash_sale_event(db, current_user, payload)
+
+
+@router.patch("/flash-sale-events/{event_id}", response_model=AdminFlashSaleEventRead)
+def patch_flash_sale_event(
+    event_id: str,
+    payload: AdminFlashSaleEventUpsert,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return update_admin_flash_sale_event(db, current_user, event_id, payload)
+
+
+@router.delete("/flash-sale-events/{event_id}")
+def remove_flash_sale_event(
+    event_id: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    archive_admin_flash_sale_event(db, current_user, event_id)
     return {"success": True}
 
 

@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     paystack_currency: str = "GHS"
     redis_url: str = ""
     rate_limit_enabled: bool = True
+    cache_enabled: bool = True
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -99,6 +100,10 @@ class Settings(BaseSettings):
     @property
     def rate_limit_is_active(self) -> bool:
         return self.rate_limit_enabled and bool(self.redis_url.strip())
+
+    @property
+    def cache_is_active(self) -> bool:
+        return self.cache_enabled and bool(self.redis_url.strip())
 
     @property
     def paystack_is_configured(self) -> bool:

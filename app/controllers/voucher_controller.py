@@ -438,6 +438,43 @@ def list_user_vouchers(db: Session, user: User) -> list[VoucherWalletRead]:
     return payloads
 
 
+def list_public_promotions(db: Session) -> list[StoreVoucherRead]:
+    vouchers = list(
+        db.scalars(
+            select(Voucher)
+            .where(
+                Voucher.scope == "odos",
+                Voucher.availability.in_(("auto", "claim")),
+            )
+            .order_by(Voucher.created_at.desc(), Voucher.title.asc())
+        ).all()
+    )
+    if not vouchers:
+        return []
+
+    usage_rows = db.execute(
+        select(VoucherRedemption.voucher_id, func.count(VoucherRedemption.id))
+        .where(VoucherRedemption.voucher_id.in_([voucher.id for voucher in vouchers]))
+        .group_by(VoucherRedemption.voucher_id)
+    ).all()
+    overall_map = {voucher_id: int(count) for voucher_id, count in usage_rows}
+    now = datetime.now(timezone.utc)
+
+    payloads: list[StoreVoucherRead] = []
+    for voucher in vouchers:
+        if voucher_status(voucher, now=now, overall_count=overall_map.get(voucher.id, 0)) != "active":
+            continue
+        payloads.append(
+            _serialize_store_voucher(
+                voucher,
+                store_name=None,
+                claimed=False,
+            )
+        )
+
+    return payloads
+
+
 def list_store_vouchers(
     db: Session,
     store_id: str,
