@@ -12,7 +12,10 @@ ENV/
 # Environment/secrets
 .env
 .env.*
-!.env.example
+.env.example
+
+# Local uploads (use Cloudinary in production)
+uploads/
 
 # Test, coverage, and type-check caches
 .pytest_cache/

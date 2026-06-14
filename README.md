@@ -1,207 +1,110 @@
 # ODOS Mobile Backend
 
-ODOS Mobile Backend is the FastAPI API for the ODOS ecosystem. It serves the mobile shopper app and the admin dashboard, including auth, account data, catalog, stores, orders, notifications, and admin management flows.
+FastAPI API for the ODOS marketplace: mobile shopper app, vendor flows, and admin dashboard.
 
-Mobile repo: `../odos-mobile-expo`
-
-Admin repo: `../ODOS_ADMIN`
+| Repository | GitHub |
+|------------|--------|
+| Mobile app | [ODOS_MOBILE_CLIENT](https://github.com/ODOS-DEVS/ODOS_MOBILE_CLIENT) |
+| Admin dashboard | [ODOS_ADMIN](https://github.com/ODOS-DEVS/ODOS_ADMIN) |
 
 ## Stack
 
-- FastAPI
-- SQLAlchemy 2
-- Alembic
-- PostgreSQL
-- Pydantic Settings
-- JWT auth
-- Brevo transactional email
-- Cloudinary for uploaded media
+- FastAPI · SQLAlchemy 2 · Alembic · PostgreSQL
+- JWT auth · Paystack · Cloudinary · Brevo email · Redis (rate limits + catalog cache)
 
-## Current Backend Coverage
+## Features
 
-- Email/password signup and login
-- Email verification and password reset codes
-- Google auth backend support
-- Profile, address, and payment-method APIs
-- Wishlist and cart persistence
-- Catalog products, categories, markets, and stores (with geo coordinates and social links)
-- Order creation and lifecycle actions
-- Notification events with read state, push tokens, and optional **product image URLs** for the activity feed
-- Paystack checkout sessions and webhooks
-- Admin auth, dashboard, vendors, users, orders, notifications, markets, stores, categories, and products
+- Auth: email/password, Google, email verification, password reset, phone OTP
+- Catalog: categories, markets, stores, products, promo banners, flash sale events
+- Commerce: cart, wishlist, orders, returns, reviews, vouchers, customer wallet
+- Admin: users, vendors, stores, products, orders, finance, notifications
+- Real-time catalog cache invalidation and Redis-backed rate limiting
 
-## New Catalog/Admin Capabilities
-
-- Admin-created stores
-- Category image uploads
-- Category subcategory lists stored in the database
-- Product links to one or more category slugs and one or more subcategory slugs
-- Dynamic ODOS taxonomy seed data in the migration layer
-- Public catalog filtering by category and subcategory for the mobile app
-
-## Prerequisites
+## Requirements
 
 - Python 3.11+
 - PostgreSQL
-- virtualenv support
-- Brevo account if you want real email delivery
+- Optional: Redis (Upstash or Render), Cloudinary, Brevo, Paystack, Arkesel SMS
 
-## Setup
-
-Create and activate a virtual environment:
+## Local setup
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-```
-
-Install dependencies:
-
-```bash
 pip install -r requirements.txt
 ```
 
-Create environment file:
-
-```bash
-cp .env.example .env
-```
-
-## Environment Variables
-
-Example:
+Create `.env` in the project root (never commit this file). Minimum variables:
 
 ```env
-DATABASE_URL=postgresql+psycopg://odos_user:your_password@localhost:5432/odos_mobile
-SECRET_KEY=replace-this-with-a-long-random-secret-at-least-32-characters
-JWT_ALGORITHM=HS256
-ACCESS_TOKEN_EXPIRE_MINUTES=10080
-CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173,https://your-admin-project.vercel.app
-GOOGLE_CLIENT_IDS=your-google-web-client-id.apps.googleusercontent.com,your-google-ios-client-id.apps.googleusercontent.com
-
-CLOUDINARY_CLOUD_NAME=your-cloudinary-cloud-name
-CLOUDINARY_API_KEY=your-cloudinary-api-key
-CLOUDINARY_API_SECRET=your-cloudinary-api-secret
-
-BREVO_API_KEY=your-brevo-api-key
-BREVO_SENDER_NAME=ODOS
-BREVO_SENDER_EMAIL=your-verified-sender@example.com
-EMAIL_VERIFICATION_CODE_EXPIRE_MINUTES=10
-PASSWORD_RESET_CODE_EXPIRE_MINUTES=10
-PASSWORD_RESET_TOKEN_EXPIRE_MINUTES=15
-
-VENDOR_COMMISSION_RATE=0.10
-VENDOR_WITHDRAWAL_MINIMUM=20.0
-
-PAYSTACK_SECRET_KEY=sk_test_replace_me
-PAYSTACK_PUBLIC_KEY=pk_test_replace_me
-PAYSTACK_WEBHOOK_SECRET=replace-with-paystack-webhook-secret
-PAYSTACK_CURRENCY=GHS
+DATABASE_URL=postgresql+psycopg://user:password@localhost:5432/odos_mobile
+SECRET_KEY=replace-with-a-long-random-secret
+CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 ```
 
-## Database
+Common optional variables:
 
-Run migrations:
+```env
+REDIS_URL=
+RATE_LIMIT_ENABLED=true
+CACHE_ENABLED=true
+CLOUDINARY_CLOUD_NAME=
+CLOUDINARY_API_KEY=
+CLOUDINARY_API_SECRET=
+BREVO_API_KEY=
+BREVO_SENDER_EMAIL=
+PAYSTACK_SECRET_KEY=
+PAYSTACK_PUBLIC_KEY=
+PAYSTACK_WEBHOOK_SECRET=
+GOOGLE_CLIENT_IDS=
+```
+
+Apply migrations and run:
 
 ```bash
 alembic upgrade head
-```
-
-Important:
-
-- run migrations before using the latest admin category/store/product features
-- the latest migration seeds the ODOS category taxonomy and adds category/product taxonomy fields
-
-## Run
-
-```bash
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Useful URLs:
+- API docs: http://127.0.0.1:8000/docs
+- Health: http://127.0.0.1:8000/api/health
 
-- `http://127.0.0.1:8000/docs`
-- `http://127.0.0.1:8000/api/health`
+Use `--host 0.0.0.0` when testing from a physical device on the same network.
 
-Use `--host 0.0.0.0` for real-device mobile testing on the same network.
+## Deployment (Render)
 
-## Render Deployment
+This repo includes `render.yaml` for a Blueprint with web service + Postgres.
 
-This repo now includes [render.yaml](/Users/paul/Desktop/DeV/odos-workspace/ODOS_MOBILE_BACKEND/render.yaml:1) so you can deploy the backend from the `odos-backend` GitHub repo with a Render Blueprint.
+1. Connect the GitHub repo in Render and deploy the Blueprint.
+2. Set secrets in Render: `CORS_ORIGINS`, Cloudinary, Brevo, Paystack, Google client IDs.
+3. `DATABASE_URL` and `SECRET_KEY` are provisioned by Render.
+4. Migrations run on startup via `alembic upgrade head`.
 
-What it provisions:
-
-- one FastAPI web service
-- one Render Postgres database
-- automatic `alembic upgrade head` during service startup on the free tier
-- health check at `/api/health`
-
-Recommended deploy flow:
-
-1. Push this repo to the `odos-backend` repository in your GitHub organization.
-2. In Render, choose `New` -> `Blueprint`.
-3. Connect the `odos-backend` repo and select the branch you want to deploy.
-4. When Render reads `render.yaml`, provide the required secret values:
-   - `CORS_ORIGINS`
-   - `CLOUDINARY_CLOUD_NAME`
-   - `CLOUDINARY_API_KEY`
-   - `CLOUDINARY_API_SECRET`
-   - `GOOGLE_CLIENT_IDS`
-   - `BREVO_API_KEY`
-   - `BREVO_SENDER_EMAIL`
-   - `PAYSTACK_SECRET_KEY`
-   - `PAYSTACK_PUBLIC_KEY`
-   - `PAYSTACK_WEBHOOK_SECRET`
-5. Deploy the Blueprint.
-
-Important notes:
-
-- `DATABASE_URL` is wired automatically from the Render Postgres instance.
-- `SECRET_KEY` is generated automatically by Render.
-- For stakeholder testing, set `CORS_ORIGINS` to include your Vercel admin URL.
-- Cloudinary is strongly recommended for deployment because uploaded images should not rely on Render's ephemeral filesystem.
-- Paystack checkout and webhooks require the Paystack keys above before online payments can be used safely.
-
-After deploy, your API base URL will look like:
+Production API base URL:
 
 ```text
-https://your-backend-service.onrender.com/api
+https://odos-backend.onrender.com/api
 ```
 
-Current deployed backend:
+Add your admin and any web client origins to `CORS_ORIGINS`.
 
-- API docs: `https://odos-backend.onrender.com/docs#/`
-- Health check: `https://odos-backend.onrender.com/api/health`
-- API base URL: `https://odos-backend.onrender.com/api`
+## API overview
 
-## Route Groups
+**Public / shopper**
 
-### Shopper-facing
+- `/api/auth/*` · `/api/account/*` · `/api/cart*` · `/api/wishlist*`
+- `/api/catalog/*` · `/api/orders*` · `/api/notifications*`
+- `/api/vouchers/*` · `/api/payments/*` · `/api/health`
 
-- `/api/auth/*`
-- `/api/account/*`
-- `/api/cart*`
-- `/api/wishlist*`
-- `/api/catalog/*`
-- `/api/orders*`
-- `/api/notifications*`
-- `/api/health`
+**Admin**
 
-### Admin-facing
+- `/api/admin/auth/*` · `/api/admin/dashboard`
+- `/api/admin/users*` · `/api/admin/vendors*` · `/api/admin/stores*`
+- `/api/admin/categories*` · `/api/admin/products*`
+- `/api/admin/promo-banners*` · `/api/admin/flash-sale-events*`
+- `/api/admin/orders*` · `/api/admin/notifications*`
 
-- `/api/admin/auth/*`
-- `/api/admin/dashboard`
-- `/api/admin/users*`
-- `/api/admin/vendors*`
-- `/api/admin/vendor-applications*`
-- `/api/admin/markets*`
-- `/api/admin/stores*`
-- `/api/admin/categories*`
-- `/api/admin/products*`
-- `/api/admin/orders*`
-- `/api/admin/notifications*`
-
-## Project Structure
+## Project structure
 
 ```text
 app/
@@ -211,39 +114,16 @@ app/
   routes/
   schemas/
   services/
-
-alembic/
-  versions/
+alembic/versions/
 ```
-
-## Notable Files
-
-- [app/main.py](/Users/paul/Desktop/DeV/odos-workspace/ODOS_MOBILE_BACKEND/app/main.py:1)
-- [app/routes/admin.py](/Users/paul/Desktop/DeV/odos-workspace/ODOS_MOBILE_BACKEND/app/routes/admin.py:1)
-- [app/controllers/admin_controller.py](/Users/paul/Desktop/DeV/odos-workspace/ODOS_MOBILE_BACKEND/app/controllers/admin_controller.py:1)
-- [app/routes/catalog.py](/Users/paul/Desktop/DeV/odos-workspace/ODOS_MOBILE_BACKEND/app/routes/catalog.py:1)
-- [app/controllers/catalog_controller.py](/Users/paul/Desktop/DeV/odos-workspace/ODOS_MOBILE_BACKEND/app/controllers/catalog_controller.py:1)
-- [app/core/catalog_taxonomy.py](/Users/paul/Desktop/DeV/odos-workspace/ODOS_MOBILE_BACKEND/app/core/catalog_taxonomy.py:1)
-- [alembic/versions/c4d8e1b7a2f0_add_category_media_and_product_taxonomy.py](/Users/paul/Desktop/DeV/odos-workspace/ODOS_MOBILE_BACKEND/alembic/versions/c4d8e1b7a2f0_add_category_media_and_product_taxonomy.py:1)
 
 ## Verification
 
-Apply migrations after pulling:
-
 ```bash
 alembic upgrade head
-```
-
-Syntax check:
-
-```bash
 python3 -m py_compile app/main.py
 ```
 
-API docs: `http://127.0.0.1:8000/docs` after `uvicorn` is running.
+## License
 
-## Notes
-
-- Media uploads are used for category images and store assets.
-- Admin product creation now accepts store assignment plus multiple category/subcategory links.
-- The mobile app uses the backend category taxonomy directly, so category naming and subcategory structure should be managed carefully from admin.
+Proprietary — ODOS-DEVS.
