@@ -1,7 +1,15 @@
 from app.models.account import PaymentMethodType, SavedAddress, SavedPaymentMethod
 from app.models.chat import ChatMessage, ChatThread, ChatThreadType, SupportChatStatus
 from app.models.notification import NotificationEvent, NotificationRead
-from app.models.catalog import Category, Market, Product, Store
+from app.models.catalog import (
+    Category,
+    FlashSaleEvent,
+    FlashSaleEventProduct,
+    Market,
+    Product,
+    PromoBanner,
+    Store,
+)
 from app.models.order import Order, OrderItem, ReturnRequest, Review
 from app.models.payment import (
     PaymentTransaction,
@@ -33,6 +41,8 @@ from app.models.vendor import VendorApplication
 __all__ = [
     "AuthProvider",
     "Category",
+    "FlashSaleEvent",
+    "FlashSaleEventProduct",
     "CartItem",
     "ChatMessage",
     "ChatThread",
@@ -53,6 +63,7 @@ __all__ = [
     "PlatformLedgerEntry",
     "PlatformTreasuryAccount",
     "Product",
+    "PromoBanner",
     "Review",
     "SavedAddress",
     "SavedPaymentMethod",

@@ -1,4 +1,5 @@
 from datetime import datetime
+import uuid
 
 from pydantic import BaseModel, ConfigDict
 
@@ -42,8 +43,26 @@ class ProductRead(BaseModel):
     status: str
     store_id: str | None
     sort_order: int
+    flash_sale_ends_at: datetime | None = None
+    flash_sale_event_slug: str | None = None
+    flash_sale_event_title: str | None = None
     created_at: datetime
     updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class FlashSaleEventRead(BaseModel):
+    id: uuid.UUID
+    slug: str
+    title: str
+    subtitle: str | None = None
+    image_url: str | None = None
+    starts_at: datetime | None = None
+    ends_at: datetime
+    sort_order: int
+    product_count: int = 0
+    seconds_remaining: int = 0
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -54,6 +73,19 @@ class MarketRead(BaseModel):
     title: str
     image_key: str
     image_url: str | None = None
+    sort_order: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PromoBannerRead(BaseModel):
+    id: uuid.UUID
+    title: str
+    subtitle: str | None = None
+    cta_label: str
+    cta_link: str | None = None
+    image_url: str | None = None
+    accent: str | None = None
     sort_order: int
 
     model_config = ConfigDict(from_attributes=True)

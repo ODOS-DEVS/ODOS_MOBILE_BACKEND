@@ -1,7 +1,25 @@
+from datetime import datetime, timezone
+from typing import TypedDict
+
 from sqlalchemy import Select, false, func, or_, select
 from sqlalchemy.orm import Session
 
-from app.models import Category, Market, Product, Store
+from app.models import (
+    Category,
+    FlashSaleEvent,
+    FlashSaleEventProduct,
+    Market,
+    Product,
+    PromoBanner,
+    Store,
+)
+from app.schemas.catalog import FlashSaleEventRead, ProductRead
+
+
+class FlashProductContext(TypedDict):
+    ends_at: datetime
+    slug: str
+    title: str
 
 
 def _normalize_filter_value(value: str) -> str:
@@ -112,6 +130,7 @@ def list_catalog_products(
     audience: str | None = None,
     section: str | None = None,
     placement: str | None = None,
+    flash_event: str | None = None,
     category: str | None = None,
     subcategory: str | None = None,
     store_id: str | None = None,
@@ -152,10 +171,27 @@ def list_catalog_products(
         statement = statement.where(Product.section == section)
 
     if placement:
-        statement = statement.where(
-            (Product.section == placement)
-            | Product.placement_tags.contains([placement])
-        )
+        if flash_event:
+            event_product_ids = _get_flash_event_product_ids(db, flash_event)
+            if event_product_ids:
+                statement = statement.where(Product.id.in_(event_product_ids))
+            else:
+                statement = statement.where(false())
+        elif placement == "flash-sale":
+            live_product_ids = _get_live_flash_event_product_ids(db)
+            if live_product_ids:
+                statement = statement.where(Product.id.in_(live_product_ids))
+            else:
+                statement = statement.where(
+                    (Product.section == placement)
+                    | (Product.section == "flash_sales")
+                    | Product.placement_tags.contains([placement])
+                )
+        else:
+            statement = statement.where(
+                (Product.section == placement)
+                | Product.placement_tags.contains([placement])
+            )
 
     if category:
         category_filters, needs_store_join, slug_variants = _build_category_match_filters(
@@ -252,3 +288,205 @@ def get_store(db: Session, store_id: str) -> Store | None:
             Store.status == "active",
         )
     )
+
+
+def list_promo_banners(db: Session) -> list[PromoBanner]:
+    now = datetime.now(timezone.utc)
+    banners = list(
+        db.scalars(
+            select(PromoBanner)
+            .where(PromoBanner.is_active.is_(True))
+            .order_by(PromoBanner.sort_order.asc(), PromoBanner.created_at.desc())
+        ).all()
+    )
+
+    active_banners: list[PromoBanner] = []
+    for banner in banners:
+        if banner.starts_at and banner.starts_at > now:
+            continue
+        if banner.ends_at and banner.ends_at < now:
+            continue
+        active_banners.append(banner)
+
+    return active_banners
+
+
+def _flash_event_is_live(event: FlashSaleEvent, now: datetime) -> bool:
+    if not event.is_active:
+        return False
+    if event.starts_at and event.starts_at > now:
+        return False
+    if event.ends_at <= now:
+        return False
+    return True
+
+
+def _normalize_event_slug(value: str) -> str:
+    cleaned = "".join(character if character.isalnum() else "-" for character in value.lower().strip())
+    return "-".join(segment for segment in cleaned.split("-") if segment)
+
+
+def _get_live_flash_events(db: Session, *, slug: str | None = None) -> list[FlashSaleEvent]:
+    now = datetime.now(timezone.utc)
+    statement = select(FlashSaleEvent).order_by(
+        FlashSaleEvent.sort_order.asc(),
+        FlashSaleEvent.ends_at.asc(),
+    )
+    if slug:
+        statement = statement.where(FlashSaleEvent.slug == _normalize_event_slug(slug))
+
+    events = list(db.scalars(statement).all())
+    return [event for event in events if _flash_event_is_live(event, now)]
+
+
+def _get_flash_event_product_ids(db: Session, slug: str) -> list[str]:
+    events = _get_live_flash_events(db, slug=slug)
+    if not events:
+        return []
+
+    event = events[0]
+    rows = list(
+        db.scalars(
+            select(FlashSaleEventProduct.product_id)
+            .where(FlashSaleEventProduct.event_id == event.id)
+            .order_by(FlashSaleEventProduct.sort_order.asc(), FlashSaleEventProduct.product_id.asc())
+        ).all()
+    )
+    return rows
+
+
+def _get_live_flash_event_product_ids(db: Session) -> list[str]:
+    events = _get_live_flash_events(db)
+    if not events:
+        return []
+
+    event_ids = [event.id for event in events]
+    rows = list(
+        db.scalars(
+            select(FlashSaleEventProduct.product_id)
+            .where(FlashSaleEventProduct.event_id.in_(event_ids))
+            .order_by(FlashSaleEventProduct.sort_order.asc(), FlashSaleEventProduct.product_id.asc())
+        ).all()
+    )
+
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for product_id in rows:
+        if product_id in seen:
+            continue
+        seen.add(product_id)
+        ordered.append(product_id)
+    return ordered
+
+
+def build_flash_product_context_map(
+    db: Session,
+    product_ids: list[str],
+) -> dict[str, FlashProductContext]:
+    if not product_ids:
+        return {}
+
+    now = datetime.now(timezone.utc)
+    rows = db.execute(
+        select(
+            FlashSaleEventProduct.product_id,
+            FlashSaleEvent.ends_at,
+            FlashSaleEvent.slug,
+            FlashSaleEvent.title,
+        )
+        .join(FlashSaleEvent, FlashSaleEvent.id == FlashSaleEventProduct.event_id)
+        .where(
+            FlashSaleEventProduct.product_id.in_(product_ids),
+            FlashSaleEvent.is_active.is_(True),
+            FlashSaleEvent.ends_at > now,
+            or_(FlashSaleEvent.starts_at.is_(None), FlashSaleEvent.starts_at <= now),
+        )
+        .order_by(FlashSaleEvent.ends_at.asc())
+    ).all()
+
+    context_map: dict[str, FlashProductContext] = {}
+    for product_id, ends_at, slug, title in rows:
+        if product_id in context_map:
+            continue
+        context_map[product_id] = {
+            "ends_at": ends_at,
+            "slug": slug,
+            "title": title,
+        }
+    return context_map
+
+
+def serialize_catalog_products(db: Session, products: list[Product]) -> list[ProductRead]:
+    if not products:
+        return []
+
+    context_map = build_flash_product_context_map(db, [product.id for product in products])
+    serialized: list[ProductRead] = []
+    for product in products:
+        payload = ProductRead.model_validate(product).model_dump()
+        context = context_map.get(product.id)
+        if context:
+            payload["flash_sale_ends_at"] = context["ends_at"]
+            payload["flash_sale_event_slug"] = context["slug"]
+            payload["flash_sale_event_title"] = context["title"]
+        serialized.append(ProductRead.model_validate(payload))
+    return serialized
+
+
+def serialize_catalog_product(db: Session, product: Product | None) -> ProductRead | None:
+    if product is None:
+        return None
+    return serialize_catalog_products(db, [product])[0]
+
+
+def list_active_flash_sale_events(db: Session) -> list[FlashSaleEventRead]:
+    now = datetime.now(timezone.utc)
+    events = _get_live_flash_events(db)
+    if not events:
+        return []
+
+    counts = dict(
+        db.execute(
+            select(FlashSaleEventProduct.event_id, func.count())
+            .where(FlashSaleEventProduct.event_id.in_([event.id for event in events]))
+            .group_by(FlashSaleEventProduct.event_id)
+        ).all()
+    )
+
+    payload: list[FlashSaleEventRead] = []
+    for event in events:
+        seconds_remaining = max(int((event.ends_at - now).total_seconds()), 0)
+        payload.append(
+            FlashSaleEventRead(
+                id=event.id,
+                slug=event.slug,
+                title=event.title,
+                subtitle=event.subtitle,
+                image_url=event.image_url,
+                starts_at=event.starts_at,
+                ends_at=event.ends_at,
+                sort_order=event.sort_order,
+                product_count=int(counts.get(event.id, 0)),
+                seconds_remaining=seconds_remaining,
+            )
+        )
+    return payload
+
+
+def list_flash_sale_event_products(db: Session, slug: str) -> list[ProductRead]:
+    product_ids = _get_flash_event_product_ids(db, slug)
+    if not product_ids:
+        return []
+
+    products = list(
+        db.scalars(
+            select(Product).where(
+                Product.id.in_(product_ids),
+                Product.is_active.is_(True),
+                Product.status == "active",
+            )
+        ).all()
+    )
+    product_map = {product.id: product for product in products}
+    ordered = [product_map[product_id] for product_id in product_ids if product_id in product_map]
+    return serialize_catalog_products(db, ordered)

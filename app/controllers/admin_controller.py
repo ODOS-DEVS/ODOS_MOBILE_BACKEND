@@ -52,6 +52,9 @@ from app.models import (
     Order,
     OrderItem,
     Product,
+    PromoBanner,
+    FlashSaleEvent,
+    FlashSaleEventProduct,
     ReturnRequest,
     Review,
     SavedAddress,
@@ -86,6 +89,10 @@ from app.schemas.admin import (
     AdminProductCreate,
     AdminProductRead,
     AdminProductStatusUpdate,
+    AdminPromoBannerRead,
+    AdminPromoBannerUpsert,
+    AdminFlashSaleEventRead,
+    AdminFlashSaleEventUpsert,
     AdminUserAddressRead,
     AdminUserDetailRead,
     AdminUserPaymentMethodRead,
@@ -551,6 +558,9 @@ def _serialize_category(category: Category) -> AdminCategoryRead:
 
 
 def broadcast_catalog_market_change(market: Market) -> None:
+    from app.core.cache import invalidate_catalog_markets
+
+    invalidate_catalog_markets()
     realtime_manager.broadcast_event_sync(
         "catalog.market.changed",
         {
@@ -563,6 +573,10 @@ def broadcast_catalog_market_change(market: Market) -> None:
 
 
 def broadcast_catalog_category_change(category: Category) -> None:
+    from app.core.cache import invalidate_catalog_categories, invalidate_catalog_products
+
+    invalidate_catalog_categories()
+    invalidate_catalog_products()
     realtime_manager.broadcast_event_sync(
         "catalog.category.changed",
         {
@@ -1417,6 +1431,368 @@ def delete_admin_market(db: Session, current_user: User, market_id: str) -> None
     market.is_active = False
     db.commit()
     broadcast_catalog_market_change(market)
+
+
+def _serialize_promo_banner(banner: PromoBanner) -> AdminPromoBannerRead:
+    return AdminPromoBannerRead(
+        id=banner.id,
+        title=banner.title,
+        subtitle=banner.subtitle,
+        cta_label=banner.cta_label,
+        cta_link=banner.cta_link,
+        image_url=banner.image_url,
+        accent=banner.accent,
+        sort_order=banner.sort_order,
+        status="active" if banner.is_active else "disabled",
+        starts_at=banner.starts_at,
+        ends_at=banner.ends_at,
+        created_at=banner.created_at,
+        updated_at=banner.updated_at,
+    )
+
+
+def broadcast_catalog_promo_banner_change(banner: PromoBanner) -> None:
+    from app.core.cache import invalidate_catalog_promo_banners
+
+    invalidate_catalog_promo_banners()
+    realtime_manager.broadcast_event_sync(
+        "catalog.promo_banner.changed",
+        {
+            "banner_id": str(banner.id),
+            "status": "active" if banner.is_active else "disabled",
+            "is_active": banner.is_active,
+        },
+    )
+
+
+def list_admin_promo_banners(db: Session, current_user: User) -> list[AdminPromoBannerRead]:
+    require_admin(current_user)
+    banners = list(
+        db.scalars(
+            select(PromoBanner).order_by(
+                PromoBanner.sort_order.asc(),
+                PromoBanner.created_at.desc(),
+            )
+        ).all()
+    )
+    return [_serialize_promo_banner(banner) for banner in banners]
+
+
+async def create_admin_promo_banner(
+    db: Session,
+    current_user: User,
+    payload: AdminPromoBannerUpsert,
+    image_file: UploadFile | None = None,
+) -> AdminPromoBannerRead:
+    require_admin(current_user)
+    if payload.starts_at and payload.ends_at and payload.ends_at < payload.starts_at:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="End date must be after the start date.",
+        )
+
+    next_sort_order = payload.sort_order
+    if next_sort_order is None:
+        next_sort_order = (db.scalar(select(func.coalesce(func.max(PromoBanner.sort_order), 0))) or 0) + 1
+
+    banner = PromoBanner(
+        title=payload.title,
+        subtitle=payload.subtitle,
+        cta_label=payload.cta_label or "Browse deals",
+        cta_link=payload.cta_link,
+        accent=payload.accent,
+        sort_order=next_sort_order,
+        is_active=payload.status != "disabled",
+        starts_at=payload.starts_at,
+        ends_at=payload.ends_at,
+    )
+    if image_file:
+        banner.image_url = await save_image_upload(image_file, folder="promo-banners")
+
+    db.add(banner)
+    db.commit()
+    db.refresh(banner)
+    broadcast_catalog_promo_banner_change(banner)
+    return _serialize_promo_banner(banner)
+
+
+async def update_admin_promo_banner(
+    db: Session,
+    current_user: User,
+    banner_id: str,
+    payload: AdminPromoBannerUpsert,
+    image_file: UploadFile | None = None,
+) -> AdminPromoBannerRead:
+    require_admin(current_user)
+    if payload.starts_at and payload.ends_at and payload.ends_at < payload.starts_at:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="End date must be after the start date.",
+        )
+
+    try:
+        normalized_id = uuid.UUID(str(banner_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Promo banner not found.") from exc
+
+    banner = db.scalar(select(PromoBanner).where(PromoBanner.id == normalized_id))
+    if not banner:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Promo banner not found.")
+
+    banner.title = payload.title
+    banner.subtitle = payload.subtitle
+    banner.cta_label = payload.cta_label or "Browse deals"
+    banner.cta_link = payload.cta_link
+    banner.accent = payload.accent
+    if payload.sort_order is not None:
+        banner.sort_order = payload.sort_order
+    banner.is_active = payload.status != "disabled"
+    banner.starts_at = payload.starts_at
+    banner.ends_at = payload.ends_at
+
+    if image_file:
+        if banner.image_url:
+            remove_media_file(banner.image_url)
+        banner.image_url = await save_image_upload(image_file, folder="promo-banners")
+
+    db.commit()
+    db.refresh(banner)
+    broadcast_catalog_promo_banner_change(banner)
+    return _serialize_promo_banner(banner)
+
+
+def archive_admin_promo_banner(db: Session, current_user: User, banner_id: str) -> None:
+    require_admin(current_user)
+    try:
+        normalized_id = uuid.UUID(str(banner_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Promo banner not found.") from exc
+
+    banner = db.scalar(select(PromoBanner).where(PromoBanner.id == normalized_id))
+    if not banner:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Promo banner not found.")
+
+    banner.is_active = False
+    db.commit()
+    broadcast_catalog_promo_banner_change(banner)
+
+
+def _normalize_flash_event_slug(value: str) -> str:
+    cleaned = "".join(character if character.isalnum() else "-" for character in value.lower().strip())
+    return "-".join(segment for segment in cleaned.split("-") if segment)
+
+
+def _serialize_flash_sale_event(
+    db: Session,
+    event: FlashSaleEvent,
+) -> AdminFlashSaleEventRead:
+    product_ids = list(
+        db.scalars(
+            select(FlashSaleEventProduct.product_id)
+            .where(FlashSaleEventProduct.event_id == event.id)
+            .order_by(FlashSaleEventProduct.sort_order.asc(), FlashSaleEventProduct.product_id.asc())
+        ).all()
+    )
+    return AdminFlashSaleEventRead(
+        id=event.id,
+        slug=event.slug,
+        title=event.title,
+        subtitle=event.subtitle,
+        image_url=event.image_url,
+        starts_at=event.starts_at,
+        ends_at=event.ends_at,
+        sort_order=event.sort_order,
+        status="active" if event.is_active else "disabled",
+        product_ids=product_ids,
+        created_at=event.created_at,
+        updated_at=event.updated_at,
+    )
+
+
+def broadcast_catalog_flash_sale_event_change(event: FlashSaleEvent) -> None:
+    from app.core.cache import invalidate_catalog_flash_sale_events
+
+    invalidate_catalog_flash_sale_events()
+    realtime_manager.broadcast_event_sync(
+        "catalog.flash_sale_event.changed",
+        {
+            "event_id": str(event.id),
+            "slug": event.slug,
+            "status": "active" if event.is_active else "disabled",
+            "is_active": event.is_active,
+        },
+    )
+
+
+def _replace_flash_sale_event_products(
+    db: Session,
+    event: FlashSaleEvent,
+    product_ids: list[str],
+) -> None:
+    normalized_ids: list[str] = []
+    seen: set[str] = set()
+    for product_id in product_ids:
+        cleaned = product_id.strip()
+        if not cleaned or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        normalized_ids.append(cleaned)
+
+    if normalized_ids:
+        existing_count = db.scalar(
+            select(func.count())
+            .select_from(Product)
+            .where(
+                Product.id.in_(normalized_ids),
+                Product.is_active.is_(True),
+            )
+        )
+        if existing_count != len(normalized_ids):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="One or more selected products could not be found.",
+            )
+
+    db.execute(
+        FlashSaleEventProduct.__table__.delete().where(
+            FlashSaleEventProduct.event_id == event.id
+        )
+    )
+    for index, product_id in enumerate(normalized_ids):
+        db.add(
+            FlashSaleEventProduct(
+                event_id=event.id,
+                product_id=product_id,
+                sort_order=index + 1,
+            )
+        )
+
+
+def list_admin_flash_sale_events(db: Session, current_user: User) -> list[AdminFlashSaleEventRead]:
+    require_admin(current_user)
+    events = list(
+        db.scalars(
+            select(FlashSaleEvent).order_by(
+                FlashSaleEvent.sort_order.asc(),
+                FlashSaleEvent.ends_at.desc(),
+            )
+        ).all()
+    )
+    return [_serialize_flash_sale_event(db, event) for event in events]
+
+
+def create_admin_flash_sale_event(
+    db: Session,
+    current_user: User,
+    payload: AdminFlashSaleEventUpsert,
+) -> AdminFlashSaleEventRead:
+    require_admin(current_user)
+    slug = _normalize_flash_event_slug(payload.slug)
+    if not slug:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Event slug is required.")
+
+    if payload.starts_at and payload.ends_at < payload.starts_at:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="End date must be after the start date.",
+        )
+
+    existing = db.scalar(select(FlashSaleEvent).where(FlashSaleEvent.slug == slug))
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A flash sale event with this slug already exists.",
+        )
+
+    next_sort_order = payload.sort_order
+    if next_sort_order is None:
+        next_sort_order = (db.scalar(select(func.coalesce(func.max(FlashSaleEvent.sort_order), 0))) or 0) + 1
+
+    event = FlashSaleEvent(
+        slug=slug,
+        title=payload.title,
+        subtitle=payload.subtitle,
+        sort_order=next_sort_order,
+        is_active=payload.status != "disabled",
+        starts_at=payload.starts_at,
+        ends_at=payload.ends_at,
+    )
+    db.add(event)
+    db.flush()
+    _replace_flash_sale_event_products(db, event, payload.product_ids)
+    db.commit()
+    db.refresh(event)
+    broadcast_catalog_flash_sale_event_change(event)
+    return _serialize_flash_sale_event(db, event)
+
+
+def update_admin_flash_sale_event(
+    db: Session,
+    current_user: User,
+    event_id: str,
+    payload: AdminFlashSaleEventUpsert,
+) -> AdminFlashSaleEventRead:
+    require_admin(current_user)
+    slug = _normalize_flash_event_slug(payload.slug)
+    if not slug:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Event slug is required.")
+
+    if payload.starts_at and payload.ends_at < payload.starts_at:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="End date must be after the start date.",
+        )
+
+    try:
+        normalized_id = uuid.UUID(str(event_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flash sale event not found.") from exc
+
+    event = db.scalar(select(FlashSaleEvent).where(FlashSaleEvent.id == normalized_id))
+    if not event:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flash sale event not found.")
+
+    conflict = db.scalar(
+        select(FlashSaleEvent).where(
+            FlashSaleEvent.slug == slug,
+            FlashSaleEvent.id != normalized_id,
+        )
+    )
+    if conflict:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A flash sale event with this slug already exists.",
+        )
+
+    event.slug = slug
+    event.title = payload.title
+    event.subtitle = payload.subtitle
+    if payload.sort_order is not None:
+        event.sort_order = payload.sort_order
+    event.is_active = payload.status != "disabled"
+    event.starts_at = payload.starts_at
+    event.ends_at = payload.ends_at
+    _replace_flash_sale_event_products(db, event, payload.product_ids)
+    db.commit()
+    db.refresh(event)
+    broadcast_catalog_flash_sale_event_change(event)
+    return _serialize_flash_sale_event(db, event)
+
+
+def archive_admin_flash_sale_event(db: Session, current_user: User, event_id: str) -> None:
+    require_admin(current_user)
+    try:
+        normalized_id = uuid.UUID(str(event_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flash sale event not found.") from exc
+
+    event = db.scalar(select(FlashSaleEvent).where(FlashSaleEvent.id == normalized_id))
+    if not event:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Flash sale event not found.")
+
+    event.is_active = False
+    db.commit()
+    broadcast_catalog_flash_sale_event_change(event)
 
 
 def list_admin_categories(db: Session, current_user: User) -> list[AdminCategoryRead]:

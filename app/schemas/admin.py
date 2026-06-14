@@ -732,3 +732,82 @@ class NotificationMarkReadResponse(BaseModel):
 
 class AdminBootstrapStatusRead(BaseModel):
     bootstrap_enabled: bool
+
+
+class AdminPromoBannerRead(BaseModel):
+    id: uuid.UUID
+    title: str
+    subtitle: str | None = None
+    cta_label: str
+    cta_link: str | None = None
+    image_url: str | None = None
+    accent: str | None = None
+    sort_order: int
+    status: str
+    starts_at: datetime | None = None
+    ends_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class AdminPromoBannerUpsert(BaseModel):
+    title: str = Field(min_length=2, max_length=120)
+    subtitle: str | None = Field(default=None, max_length=255)
+    cta_label: str = Field(default="Browse deals", min_length=2, max_length=80)
+    cta_link: str | None = Field(default=None, max_length=500)
+    accent: str | None = Field(default=None, max_length=20)
+    sort_order: int | None = Field(default=None, ge=0, le=9999)
+    status: str = Field(default="active", min_length=1, max_length=30)
+    starts_at: datetime | None = None
+    ends_at: datetime | None = None
+
+    @field_validator("title", "subtitle", "cta_label", "cta_link", "accent", "status", mode="before")
+    @classmethod
+    def strip_promo_banner_fields(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        cleaned = value.strip()
+        return cleaned or None
+
+
+class AdminFlashSaleEventRead(BaseModel):
+    id: uuid.UUID
+    slug: str
+    title: str
+    subtitle: str | None = None
+    image_url: str | None = None
+    starts_at: datetime | None = None
+    ends_at: datetime
+    sort_order: int
+    status: str
+    product_ids: list[str] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+
+
+class AdminFlashSaleEventUpsert(BaseModel):
+    slug: str = Field(min_length=2, max_length=80)
+    title: str = Field(min_length=2, max_length=120)
+    subtitle: str | None = Field(default=None, max_length=255)
+    sort_order: int | None = Field(default=None, ge=0, le=9999)
+    status: str = Field(default="active", min_length=1, max_length=30)
+    starts_at: datetime | None = None
+    ends_at: datetime
+    product_ids: list[str] = Field(default_factory=list)
+
+    @field_validator("slug", "title", "subtitle", "status", mode="before")
+    @classmethod
+    def strip_flash_sale_event_fields(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        cleaned = value.strip()
+        return cleaned or None
+
+    @field_validator("product_ids", mode="before")
+    @classmethod
+    def normalize_product_ids(cls, value: list[str] | str | None) -> list[str]:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            return [item.strip() for item in value.split(",") if item.strip()]
+        return [str(item).strip() for item in value if str(item).strip()]
