@@ -66,6 +66,7 @@ def get_products(
     subcategory: str | None = Query(default=None, max_length=120),
     store_id: str | None = Query(default=None, max_length=100),
     limit: int | None = Query(default=None, ge=1, le=100),
+    offset: int | None = Query(default=None, ge=0),
     db: Session = Depends(get_db),
 ):
     cache_key = build_products_cache_key(
@@ -77,6 +78,7 @@ def get_products(
         subcategory=subcategory,
         store_id=store_id,
         limit=limit,
+        offset=offset,
     )
     ttl = products_list_ttl(section=section, placement=placement)
 
@@ -95,6 +97,7 @@ def get_products(
         subcategory=subcategory,
         store_id=store_id,
         limit=limit,
+        offset=offset,
     )
     serialized = serialize_catalog_products(db, products)
     payload = [item.model_dump(mode="json") for item in serialized]
