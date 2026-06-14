@@ -68,6 +68,11 @@ def generate_otp(*, phone_number: str) -> None:
             message,
             data,
         )
+        if code in {"1007", "1008", "105", "402"} or "insufficient balance" in str(message).lower():
+            raise ArkeselSmsError(
+                "We couldn't send a verification code right now. Please try again shortly.",
+                status_code=code or None,
+            )
         raise ArkeselSmsError(message, status_code=code or None)
 
 
