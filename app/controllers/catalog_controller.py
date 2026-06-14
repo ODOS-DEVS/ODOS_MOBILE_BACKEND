@@ -135,6 +135,7 @@ def list_catalog_products(
     subcategory: str | None = None,
     store_id: str | None = None,
     limit: int | None = None,
+    offset: int | None = None,
 ) -> list[Product]:
     statement: Select[tuple[Product]] = select(Product).where(
         Product.is_active.is_(True),
@@ -227,6 +228,9 @@ def list_catalog_products(
         statement = statement.order_by(Product.sort_order.asc(), Product.updated_at.desc())
     else:
         statement = statement.order_by(Product.sort_order.asc(), Product.title.asc())
+
+    if offset is not None:
+        statement = statement.offset(max(offset, 0))
 
     if limit is not None:
         statement = statement.limit(limit)

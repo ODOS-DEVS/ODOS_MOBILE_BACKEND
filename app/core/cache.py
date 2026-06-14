@@ -161,6 +161,7 @@ def build_products_cache_key(
     subcategory: str | None,
     store_id: str | None,
     limit: int | None,
+    offset: int | None = None,
 ) -> str:
     parts = ["catalog", "products"]
     for name, value in (
@@ -172,6 +173,7 @@ def build_products_cache_key(
         ("subcategory", subcategory),
         ("store_id", store_id),
         ("limit", limit),
+        ("offset", offset),
     ):
         if value is not None:
             parts.append(f"{name}={value}")
