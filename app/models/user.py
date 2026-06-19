@@ -95,6 +95,18 @@ class User(Base):
         server_default="false",
         nullable=False,
     )
+    personalization_enabled: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        server_default="true",
+        nullable=False,
+    )
+    analytics_enabled: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        server_default="true",
+        nullable=False,
+    )
     role: Mapped[UserRole] = mapped_column(
         Enum(
             UserRole,
@@ -207,6 +219,10 @@ class User(Base):
         cascade="all, delete-orphan",
     )
     cart_items: Mapped[list["CartItem"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+    behavior_events: Mapped[list["UserBehaviorEvent"]] = relationship(
         back_populates="user",
         cascade="all, delete-orphan",
     )

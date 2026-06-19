@@ -13,6 +13,7 @@ from app.schemas.voucher import (
     StoreVoucherRead,
     VoucherPreviewRead,
     VoucherPreviewRequest,
+    VoucherSuggestionsRequest,
     VoucherWalletRead,
 )
 
@@ -244,6 +245,9 @@ def _serialize_store_voucher(
         min_subtotal=round(voucher.min_subtotal, 2),
         expires_at=voucher.ends_at,
         claimed=claimed,
+        campaign_tag=getattr(voucher, "campaign_tag", None),
+        discount_type=voucher.discount_type,
+        approval_status=getattr(voucher, "approval_status", None),
     )
 
 
@@ -296,82 +300,32 @@ def build_voucher_quote(
     items: list[OrderItemCreate],
     shipping_amount: float,
 ) -> VoucherQuote:
-    normalized_code = _normalize_code(voucher_code)
+    from app.services.promotion_service import normalize_voucher_code, validate_voucher_for_checkout
+
+    normalized_code = normalize_voucher_code(voucher_code)
     if not normalized_code:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Enter a voucher code first.",
+            detail="Enter a promo code first.",
         )
 
     voucher = db.scalar(select(Voucher).where(Voucher.code == normalized_code))
     if not voucher:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="That voucher code wasn't found.",
+            detail="That promo code wasn't found.",
         )
 
-    subtotal_amount = _compute_subtotal(items)
-    overall_count, user_count = _counts_for_voucher(db, voucher.id, user.id)
-    now = datetime.now(timezone.utc)
-    current_status = voucher_status(voucher, now=now, overall_count=overall_count)
-    assignment = _assignment_for_user(db, voucher.id, user.id)
-
-    if current_status != "active":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="That voucher is no longer active.",
-        )
-
-    if voucher.availability == "assigned" and assignment is None:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="This promotion is only available to shoppers it was gifted to.",
-        )
-
-    if voucher.per_user_limit is not None and user_count >= voucher.per_user_limit:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="You've already used this voucher.",
-        )
-
-    product_store_map = _product_store_map(db, items)
-    eligible_subtotal_amount = _eligible_subtotal_for_voucher(voucher, items, product_store_map)
-    store_name = None
-    if voucher.store_id:
-        store_name = db.scalar(select(Store.title).where(Store.id == voucher.store_id))
-
-    if voucher.scope == "store" and eligible_subtotal_amount <= 0:
-        label = store_name or "that store"
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"This voucher only works on eligible items from {label}.",
-        )
-
-    if eligible_subtotal_amount < voucher.min_subtotal:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"This voucher requires a minimum eligible subtotal of GHS {voucher.min_subtotal:.2f}.",
-        )
-
-    discount_amount = _discount_for_voucher(voucher, eligible_subtotal_amount, shipping_amount)
-    total_amount = round(max(0, subtotal_amount + shipping_amount - discount_amount), 2)
-    return VoucherQuote(
-        voucher=voucher,
-        discount_amount=discount_amount,
-        eligible_subtotal_amount=eligible_subtotal_amount,
-        subtotal_amount=subtotal_amount,
-        shipping_amount=round(shipping_amount, 2),
-        total_amount=total_amount,
-        store_name=store_name,
-    )
+    return validate_voucher_for_checkout(db, user, voucher, items, shipping_amount)
 
 
 def list_user_vouchers(db: Session, user: User) -> list[VoucherWalletRead]:
     auto_vouchers = list(
         db.scalars(
             select(Voucher).where(
-                Voucher.scope == "odos",
                 Voucher.availability == "auto",
+                Voucher.approval_status == "approved",
+                Voucher.is_active.is_(True),
             )
             .order_by(Voucher.created_at.desc(), Voucher.title.asc())
         ).all()
@@ -439,11 +393,13 @@ def list_user_vouchers(db: Session, user: User) -> list[VoucherWalletRead]:
 
 
 def list_public_promotions(db: Session) -> list[StoreVoucherRead]:
+    from app.services.promotion_service import is_voucher_publicly_listable
+
     vouchers = list(
         db.scalars(
             select(Voucher)
             .where(
-                Voucher.scope == "odos",
+                Voucher.scope.in_(("odos", "category")),
                 Voucher.availability.in_(("auto", "claim")),
             )
             .order_by(Voucher.created_at.desc(), Voucher.title.asc())
@@ -462,6 +418,8 @@ def list_public_promotions(db: Session) -> list[StoreVoucherRead]:
 
     payloads: list[StoreVoucherRead] = []
     for voucher in vouchers:
+        if not is_voucher_publicly_listable(voucher):
+            continue
         if voucher_status(voucher, now=now, overall_count=overall_map.get(voucher.id, 0)) != "active":
             continue
         payloads.append(
@@ -513,6 +471,8 @@ def list_store_vouchers(
 
     payloads: list[StoreVoucherRead] = []
     for voucher in vouchers:
+        if getattr(voucher, "approval_status", "approved") != "approved":
+            continue
         if voucher_status(voucher, now=now, overall_count=overall_map.get(voucher.id, 0)) != "active":
             continue
         payloads.append(
@@ -621,3 +581,33 @@ def preview_voucher(db: Session, user: User, payload: VoucherPreviewRequest) -> 
         shipping_amount=quote.shipping_amount,
         total_amount=quote.total_amount,
     )
+
+
+def suggest_vouchers(
+    db: Session,
+    user: User,
+    payload: VoucherSuggestionsRequest,
+) -> list[VoucherPreviewRead]:
+    wallet = list_user_vouchers(db, user)
+    active_codes = [item.code for item in wallet if item.status == "active"]
+    if not active_codes:
+        return []
+
+    suggestions: list[VoucherPreviewRead] = []
+    for code in active_codes:
+        try:
+            preview = preview_voucher(
+                db,
+                user,
+                VoucherPreviewRequest(
+                    voucher_code=code,
+                    items=payload.items,
+                    shipping_amount=payload.shipping_amount,
+                ),
+            )
+            suggestions.append(preview)
+        except HTTPException:
+            continue
+
+    suggestions.sort(key=lambda item: item.discount_amount, reverse=True)
+    return suggestions[:5]

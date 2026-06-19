@@ -209,6 +209,8 @@ class UserUpdate(BaseModel):
     system_notifications: bool | None = None
     location_notifications: bool | None = None
     location_updates: bool | None = None
+    personalization_enabled: bool | None = None
+    analytics_enabled: bool | None = None
 
     @field_validator(
         "full_name",
@@ -244,6 +246,8 @@ class UserRead(BaseModel):
     system_notifications: bool
     location_notifications: bool
     location_updates: bool
+    personalization_enabled: bool
+    analytics_enabled: bool
     role: UserRole
     roles: list[str]
     vendor_status: VendorStatus

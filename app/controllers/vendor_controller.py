@@ -7,6 +7,8 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
+from app.core.admin_pagination import paginate_scalars
+from app.schemas.pagination import AdminPageRead
 from app.controllers.notification_controller import create_notification_event
 from app.core.product_taxonomy import resolve_product_taxonomy
 from app.controllers.voucher_controller import (
@@ -858,6 +860,9 @@ def _serialize_vendor_voucher(
         total_discount_amount=round(total_discount_amount, 2),
         starts_at=voucher.starts_at,
         ends_at=voucher.ends_at,
+        approval_status=getattr(voucher, "approval_status", "approved"),
+        campaign_tag=getattr(voucher, "campaign_tag", None),
+        review_notes=getattr(voucher, "review_notes", None),
         created_at=voucher.created_at,
     )
 
@@ -1094,7 +1099,9 @@ def create_vendor_voucher(
         max_discount=round(payload.max_discount, 2) if payload.max_discount is not None else None,
         usage_limit=payload.usage_limit,
         per_user_limit=payload.per_user_limit,
-        is_active=payload.is_active,
+        is_active=False,
+        approval_status="pending",
+        created_by_user_id=user.id,
         starts_at=payload.starts_at,
         ends_at=payload.ends_at,
     )
@@ -1301,26 +1308,34 @@ async def update_vendor_store(
     return serialize_vendor_store(store)
 
 
-def list_vendor_applications(db: Session, user: User) -> list[VendorApplicationListItem]:
+def list_vendor_applications(
+    db: Session,
+    user: User,
+    *,
+    limit: int = 30,
+    offset: int = 0,
+) -> AdminPageRead[VendorApplicationListItem]:
     require_admin(user)
-    applications = list(
-        db.scalars(
-            select(VendorApplication)
-            .options(selectinload(VendorApplication.user))
-            .order_by(
-                VendorApplication.submitted_at.desc(),
-                VendorApplication.created_at.desc(),
-            )
-        ).all()
-    )
-    return [
-        VendorApplicationListItem(
-            **VendorApplicationRead.model_validate(application).model_dump(),
-            full_name=application.user.full_name,
-            email=application.user.email,
+    statement = (
+        select(VendorApplication)
+        .options(selectinload(VendorApplication.user))
+        .order_by(
+            VendorApplication.submitted_at.desc(),
+            VendorApplication.created_at.desc(),
         )
-        for application in applications
-    ]
+    )
+    applications, has_more = paginate_scalars(db, statement, limit=limit, offset=offset)
+    return AdminPageRead(
+        items=[
+            VendorApplicationListItem(
+                **VendorApplicationRead.model_validate(application).model_dump(),
+                full_name=application.user.full_name,
+                email=application.user.email,
+            )
+            for application in applications
+        ],
+        has_more=has_more,
+    )
 
 
 def approve_vendor_application(

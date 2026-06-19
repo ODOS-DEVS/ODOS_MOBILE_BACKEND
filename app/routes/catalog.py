@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 
+from app.controllers.deals_controller import get_deals_hub
 from app.controllers.catalog_controller import (
     get_catalog_product,
     get_store,
@@ -36,6 +37,7 @@ from app.schemas.catalog import (
     CategoryRead,
     FlashSaleEventRead,
     MarketRead,
+    DealsHubRead,
     ProductRead,
     PromoBannerRead,
     StoreRead,
@@ -192,13 +194,23 @@ def get_store_by_id(store_id: str, response: Response, db: Session = Depends(get
     return store
 
 
+@router.get("/deals-hub", response_model=DealsHubRead)
+def get_deals_hub_endpoint(db: Session = Depends(get_db)):
+    return get_deals_hub(db)
+
+
 @router.get("/promo-banners", response_model=list[PromoBannerRead])
-def get_promo_banners(response: Response, db: Session = Depends(get_db)):
+def get_promo_banners(
+    response: Response,
+    db: Session = Depends(get_db),
+    placement: str | None = Query(default=None, max_length=30),
+):
+    cache_key = f"catalog:promo-banners:{placement or 'all'}"
     return cached_list(
-        key="catalog:promo-banners",
+        key=cache_key,
         ttl_seconds=TTL_PROMO_BANNERS,
         schema=PromoBannerRead,
-        loader=lambda: list_promo_banners(db),
+        loader=lambda: list_promo_banners(db, placement=placement),
         response=response,
     )
 

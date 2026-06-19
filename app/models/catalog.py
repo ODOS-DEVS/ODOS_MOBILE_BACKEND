@@ -52,6 +52,9 @@ class Product(Base):
     subcategory_slugs: Mapped[list[str] | None] = mapped_column(ARRAY(String(120)), nullable=True)
     price: Mapped[int] = mapped_column(Integer, nullable=False)
     old_price: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    regular_price: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    sale_starts_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    sale_ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     discount: Mapped[str | None] = mapped_column(String(50), nullable=True)
     rating: Mapped[float | None] = mapped_column(nullable=True)
     reviews: Mapped[str | None] = mapped_column(String(50), nullable=True)
@@ -233,6 +236,61 @@ class FlashSaleEventProduct(Base):
         primary_key=True,
     )
     sort_order: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    flash_sale_price: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    flash_sale_old_price: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+
+class FlashSaleNomination(Base):
+    __tablename__ = "flash_sale_nominations"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    event_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("flash_sale_events.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    product_id: Mapped[str] = mapped_column(
+        String(100),
+        ForeignKey("products.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    vendor_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    proposed_price: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    proposed_old_price: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    stock_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    max_per_user: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    vendor_note: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="pending",
+        server_default="pending",
+        index=True,
+    )
+    reviewed_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    review_notes: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
 
 
 class PromoBanner(Base):
@@ -259,6 +317,19 @@ class PromoBanner(Base):
     )
     starts_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    campaign_tag: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    link_type: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        default="deals",
+        server_default="deals",
+    )
+    placement: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        default="home",
+        server_default="home",
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

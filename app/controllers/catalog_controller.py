@@ -14,6 +14,7 @@ from app.models import (
     Store,
 )
 from app.schemas.catalog import FlashSaleEventRead, ProductRead
+from app.services.pricing_service import get_flash_sale_context_map, resolve_effective_product_price
 
 
 class FlashProductContext(TypedDict):
@@ -294,15 +295,18 @@ def get_store(db: Session, store_id: str) -> Store | None:
     )
 
 
-def list_promo_banners(db: Session) -> list[PromoBanner]:
+def list_promo_banners(db: Session, *, placement: str | None = None) -> list[PromoBanner]:
     now = datetime.now(timezone.utc)
-    banners = list(
-        db.scalars(
-            select(PromoBanner)
-            .where(PromoBanner.is_active.is_(True))
-            .order_by(PromoBanner.sort_order.asc(), PromoBanner.created_at.desc())
-        ).all()
+    statement = (
+        select(PromoBanner)
+        .where(PromoBanner.is_active.is_(True))
+        .order_by(PromoBanner.sort_order.asc(), PromoBanner.created_at.desc())
     )
+    if placement:
+        normalized_placement = placement.strip().lower()
+        statement = statement.where(PromoBanner.placement == normalized_placement)
+
+    banners = list(db.scalars(statement).all())
 
     active_banners: list[PromoBanner] = []
     for banner in banners:
@@ -424,15 +428,28 @@ def serialize_catalog_products(db: Session, products: list[Product]) -> list[Pro
     if not products:
         return []
 
-    context_map = build_flash_product_context_map(db, [product.id for product in products])
+    product_ids = [product.id for product in products]
+    flash_map = get_flash_sale_context_map(db, product_ids)
+    now = datetime.now(timezone.utc)
     serialized: list[ProductRead] = []
     for product in products:
+        pricing = resolve_effective_product_price(
+            product,
+            flash_context=flash_map.get(product.id),
+            now=now,
+        )
         payload = ProductRead.model_validate(product).model_dump()
-        context = context_map.get(product.id)
-        if context:
-            payload["flash_sale_ends_at"] = context["ends_at"]
-            payload["flash_sale_event_slug"] = context["slug"]
-            payload["flash_sale_event_title"] = context["title"]
+        payload["price"] = int(round(pricing.sale_price))
+        payload["old_price"] = (
+            int(round(pricing.compare_at_price))
+            if pricing.compare_at_price is not None
+            else None
+        )
+        payload["discount"] = pricing.discount_label
+        if pricing.flash_sale_ends_at:
+            payload["flash_sale_ends_at"] = pricing.flash_sale_ends_at
+            payload["flash_sale_event_slug"] = pricing.flash_event_slug
+            payload["flash_sale_event_title"] = pricing.flash_event_title
         serialized.append(ProductRead.model_validate(payload))
     return serialized
 

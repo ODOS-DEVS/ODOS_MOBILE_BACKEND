@@ -138,6 +138,9 @@ class VendorVoucherRead(BaseModel):
     total_discount_amount: float
     starts_at: datetime | None = None
     ends_at: datetime | None = None
+    approval_status: str = "approved"
+    campaign_tag: str | None = None
+    review_notes: str | None = None
     created_at: datetime
 
 
@@ -174,6 +177,31 @@ class VendorVoucherUpsert(BaseModel):
     @classmethod
     def normalize_voucher_modes(cls, value: str) -> str:
         return value.strip().lower()
+
+
+class VendorFlashSaleNominationCreate(BaseModel):
+    product_id: str = Field(min_length=1, max_length=100)
+    event_id: uuid.UUID | None = None
+    proposed_price: int | None = Field(default=None, ge=1)
+    proposed_old_price: int | None = Field(default=None, ge=1)
+    stock_limit: int | None = Field(default=None, ge=1)
+    max_per_user: int | None = Field(default=None, ge=1)
+    vendor_note: str | None = Field(default=None, max_length=255)
+
+
+class VendorFlashSaleNominationRead(BaseModel):
+    id: uuid.UUID
+    event_id: uuid.UUID | None = None
+    product_id: str
+    proposed_price: int | None = None
+    proposed_old_price: int | None = None
+    stock_limit: int | None = None
+    max_per_user: int | None = None
+    vendor_note: str | None = None
+    status: str
+    review_notes: str | None = None
+    created_at: datetime
+    updated_at: datetime
 
 
 class VendorVoucherGiftPayload(BaseModel):

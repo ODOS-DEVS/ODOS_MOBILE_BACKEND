@@ -9,6 +9,7 @@ from app.controllers.voucher_controller import (
     list_store_vouchers,
     list_user_vouchers,
     preview_voucher,
+    suggest_vouchers,
 )
 from app.core.auth import get_current_user
 from app.core.database import get_db
@@ -17,6 +18,7 @@ from app.schemas.voucher import (
     StoreVoucherRead,
     VoucherPreviewRead,
     VoucherPreviewRequest,
+    VoucherSuggestionsRequest,
     VoucherWalletRead,
 )
 
@@ -62,3 +64,12 @@ def post_voucher_preview(
     db: Session = Depends(get_db),
 ):
     return preview_voucher(db, current_user, payload)
+
+
+@router.post("/suggestions", response_model=list[VoucherPreviewRead])
+def post_voucher_suggestions(
+    payload: VoucherSuggestionsRequest,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return suggest_vouchers(db, current_user, payload)

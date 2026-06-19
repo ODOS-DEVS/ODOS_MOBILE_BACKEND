@@ -212,6 +212,9 @@ def invalidate_catalog_markets() -> None:
 
 
 def invalidate_catalog_promo_banners() -> None:
+    cache_delete("catalog:promo-banners:all")
+    cache_delete("catalog:promo-banners:home")
+    cache_delete("catalog:promo-banners:deals")
     cache_delete("catalog:promo-banners")
 
 

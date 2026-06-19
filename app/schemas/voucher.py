@@ -6,8 +6,8 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.schemas.order import OrderItemCreate
 
-VoucherScope = Literal["odos", "store"]
-VoucherAvailability = Literal["auto", "claim", "assigned"]
+VoucherScope = Literal["odos", "store", "category", "product"]
+VoucherAvailability = Literal["auto", "claim", "assigned", "private"]
 VoucherWalletStatus = Literal["active", "used", "expired"]
 
 
@@ -20,6 +20,11 @@ class VoucherPreviewRequest(BaseModel):
     @classmethod
     def normalize_code(cls, value: str) -> str:
         return value.strip().upper()
+
+
+class VoucherSuggestionsRequest(BaseModel):
+    items: list[OrderItemCreate] = Field(min_length=1)
+    shipping_amount: float = Field(default=0, ge=0)
 
 
 class VoucherPreviewRead(BaseModel):
@@ -70,3 +75,6 @@ class StoreVoucherRead(BaseModel):
     min_subtotal: float
     expires_at: datetime | None = None
     claimed: bool = False
+    campaign_tag: str | None = None
+    discount_type: str | None = None
+    approval_status: str | None = None
