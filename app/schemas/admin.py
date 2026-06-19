@@ -1,9 +1,12 @@
+from __future__ import annotations
+
 import uuid
 from datetime import date, datetime
 
 from pydantic import BaseModel, Field, field_validator
 
 from app.models import VendorStatus
+from app.schemas.payment import AdminPaymentTransactionRead
 
 
 class AdminDashboardStatsRead(BaseModel):
@@ -110,6 +113,45 @@ class AdminUserStatsRead(BaseModel):
     last_review_at: datetime | None
 
 
+class AdminUserCartItemRead(BaseModel):
+    id: uuid.UUID
+    product_id: str
+    title: str
+    image_url: str | None = None
+    category: str | None = None
+    price: str
+    quantity: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class AdminUserWishlistItemRead(BaseModel):
+    id: uuid.UUID
+    product_id: str
+    title: str
+    image_url: str | None = None
+    category: str | None = None
+    price: str | None = None
+    created_at: datetime
+
+
+class AdminUserNotificationRead(BaseModel):
+    id: uuid.UUID
+    kind: str
+    title: str
+    message: str
+    created_at: datetime
+
+
+class AdminUserWalletSummaryRead(BaseModel):
+    balance: float
+    currency: str
+    lifetime_topups: float
+    lifetime_spend: float
+    lifetime_refunds: float
+    transaction_count: int
+
+
 class AdminUserDetailRead(AdminUserRead):
     date_of_birth: date | None = None
     gender: str | None
@@ -121,6 +163,9 @@ class AdminUserDetailRead(AdminUserRead):
     system_notifications: bool
     location_notifications: bool
     location_updates: bool
+    personalization_enabled: bool = True
+    analytics_enabled: bool = True
+    phone_verified: bool = False
     vendor_rejection_reason: str | None
     is_verified: bool
     last_login_at: datetime | None
@@ -131,6 +176,15 @@ class AdminUserDetailRead(AdminUserRead):
     vendor_application: AdminUserVendorApplicationRead | None = None
     stores: list[AdminUserStoreSummaryRead]
     stats: AdminUserStatsRead
+    orders: list[AdminOrderRead] = Field(default_factory=list)
+    reviews: list[AdminReviewRead] = Field(default_factory=list)
+    return_requests: list[AdminReturnRequestRead] = Field(default_factory=list)
+    payment_transactions: list[AdminPaymentTransactionRead] = Field(default_factory=list)
+    cart_items: list[AdminUserCartItemRead] = Field(default_factory=list)
+    wishlist_items: list[AdminUserWishlistItemRead] = Field(default_factory=list)
+    notifications: list[AdminUserNotificationRead] = Field(default_factory=list)
+    customer_wallet: AdminUserWalletSummaryRead | None = None
+    behavior_event_count: int = 0
 
 
 class AdminUserStatusUpdate(BaseModel):
@@ -474,6 +528,21 @@ class AdminVoucherRead(BaseModel):
     starts_at: datetime | None = None
     ends_at: datetime | None = None
     created_at: datetime
+    approval_status: str = "approved"
+    campaign_tag: str | None = None
+    review_notes: str | None = None
+    created_by_user_id: uuid.UUID | None = None
+
+
+class AdminVoucherReview(BaseModel):
+    approval_status: str = Field(min_length=1, max_length=20)
+    review_notes: str | None = Field(default=None, max_length=255)
+    is_active: bool | None = None
+
+    @field_validator("approval_status", mode="before")
+    @classmethod
+    def normalize_status(cls, value: str) -> str:
+        return value.strip().lower()
 
 
 class AdminVoucherUpsert(BaseModel):
@@ -510,6 +579,37 @@ class AdminVoucherUpsert(BaseModel):
     @field_validator("discount_type", "scope", "availability", mode="before")
     @classmethod
     def normalize_discount_type(cls, value: str) -> str:
+        return value.strip().lower()
+
+
+class AdminFlashSaleNominationRead(BaseModel):
+    id: uuid.UUID
+    event_id: uuid.UUID | None = None
+    event_title: str | None = None
+    product_id: str
+    product_title: str | None = None
+    vendor_user_id: uuid.UUID
+    proposed_price: int | None = None
+    proposed_old_price: int | None = None
+    stock_limit: int | None = None
+    max_per_user: int | None = None
+    vendor_note: str | None = None
+    status: str
+    review_notes: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class AdminFlashSaleNominationReview(BaseModel):
+    status: str = Field(min_length=1, max_length=20)
+    review_notes: str | None = Field(default=None, max_length=255)
+    event_id: uuid.UUID | None = None
+    flash_sale_price: int | None = Field(default=None, ge=1)
+    flash_sale_old_price: int | None = Field(default=None, ge=1)
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def normalize_status(cls, value: str) -> str:
         return value.strip().lower()
 
 
@@ -744,6 +844,10 @@ class AdminPromoBannerRead(BaseModel):
     accent: str | None = None
     sort_order: int
     status: str
+    link_type: str
+    campaign_tag: str | None = None
+    placement: str
+    destination_label: str
     starts_at: datetime | None = None
     ends_at: datetime | None = None
     created_at: datetime
@@ -753,15 +857,29 @@ class AdminPromoBannerRead(BaseModel):
 class AdminPromoBannerUpsert(BaseModel):
     title: str = Field(min_length=2, max_length=120)
     subtitle: str | None = Field(default=None, max_length=255)
-    cta_label: str = Field(default="Browse deals", min_length=2, max_length=80)
+    cta_label: str = Field(default="Shop now", min_length=2, max_length=80)
     cta_link: str | None = Field(default=None, max_length=500)
     accent: str | None = Field(default=None, max_length=20)
     sort_order: int | None = Field(default=None, ge=0, le=9999)
     status: str = Field(default="active", min_length=1, max_length=30)
+    link_type: str = Field(default="deals", min_length=1, max_length=30)
+    campaign_tag: str | None = Field(default=None, max_length=50)
+    placement: str = Field(default="home", min_length=1, max_length=30)
     starts_at: datetime | None = None
     ends_at: datetime | None = None
 
-    @field_validator("title", "subtitle", "cta_label", "cta_link", "accent", "status", mode="before")
+    @field_validator(
+        "title",
+        "subtitle",
+        "cta_label",
+        "cta_link",
+        "accent",
+        "status",
+        "link_type",
+        "campaign_tag",
+        "placement",
+        mode="before",
+    )
     @classmethod
     def strip_promo_banner_fields(cls, value: str | None) -> str | None:
         if value is None:

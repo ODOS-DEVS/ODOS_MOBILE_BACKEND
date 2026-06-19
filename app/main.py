@@ -10,6 +10,7 @@ from app.routes import (
     admin,
     account,
     auth,
+    behavior,
     cart,
     catalog,
     chat,
@@ -19,6 +20,7 @@ from app.routes import (
     orders,
     payments,
     realtime,
+    recommendations,
     reviews,
     vouchers,
     vendor,
@@ -56,6 +58,8 @@ app.include_router(auth.router, prefix="/api/auth")
 app.include_router(account.router, prefix="/api")
 app.include_router(cart.router, prefix="/api")
 app.include_router(catalog.router, prefix="/api")
+app.include_router(recommendations.router, prefix="/api")
+app.include_router(behavior.router, prefix="/api")
 app.include_router(chat.router, prefix="/api")
 app.include_router(notifications.router, prefix="/api")
 app.include_router(orders.router, prefix="/api")

@@ -6,6 +6,8 @@ from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
+from app.core.admin_pagination import paginate_scalars
+from app.schemas.pagination import AdminPageRead
 from app.models import (
     Order,
     PaymentTransaction,
@@ -22,7 +24,12 @@ from app.schemas.payment import (
     AdminPaymentTransactionRead,
     AdminPlatformLedgerEntryRead,
 )
-from app.services.finance_math import amount_from_subunit, return_reversal_breakdown, round_money, vendor_allocation_map
+from app.services.finance_math import (
+    amount_from_subunit,
+    return_reversal_breakdown,
+    round_money,
+    vendor_allocation_map,
+)
 
 
 def require_admin(user: User) -> None:
@@ -56,7 +63,8 @@ def get_or_create_platform_treasury_account(
             or 0
         )
         commission_balance = round_money(
-            db.scalar(select(func.coalesce(func.sum(VendorWallet.total_commission), 0))) or 0
+            db.scalar(select(func.coalesce(func.sum(VendorWallet.total_commission), 0)))
+            or 0
         )
         if vendor_liability_balance <= 0 and commission_balance <= 0:
             return account
@@ -145,9 +153,13 @@ def record_payment_collection(
         )
     )
     if existing_entry:
-        return get_or_create_platform_treasury_account(db, currency=payment_transaction.currency)
+        return get_or_create_platform_treasury_account(
+            db, currency=payment_transaction.currency
+        )
 
-    account = get_or_create_platform_treasury_account(db, currency=payment_transaction.currency)
+    account = get_or_create_platform_treasury_account(
+        db, currency=payment_transaction.currency
+    )
     allocations = vendor_allocation_map(order)
     vendor_net_total = round_money(
         sum(allocation["net_amount"] for allocation in allocations.values())
@@ -180,7 +192,9 @@ def record_payment_collection(
 
     if fee_amount > 0:
         account.current_balance = round_money(account.current_balance - fee_amount)
-        account.processor_fee_total = round_money(account.processor_fee_total + fee_amount)
+        account.processor_fee_total = round_money(
+            account.processor_fee_total + fee_amount
+        )
         _create_ledger_entry(
             db,
             account,
@@ -402,19 +416,21 @@ def record_vendor_payout_paid(
 def list_admin_payment_transactions(
     db: Session,
     current_user: User,
-) -> list[AdminPaymentTransactionRead]:
+    *,
+    limit: int = 30,
+    offset: int = 0,
+) -> AdminPageRead[AdminPaymentTransactionRead]:
     require_admin(current_user)
-    transactions = list(
-        db.scalars(
-            select(PaymentTransaction)
-            .options(
-                selectinload(PaymentTransaction.order),
-                selectinload(PaymentTransaction.user),
-            )
-            .order_by(PaymentTransaction.created_at.desc())
-        ).all()
+    statement = (
+        select(PaymentTransaction)
+        .options(
+            selectinload(PaymentTransaction.order),
+            selectinload(PaymentTransaction.user),
+        )
+        .order_by(PaymentTransaction.created_at.desc())
     )
-    return [
+    transactions, has_more = paginate_scalars(db, statement, limit=limit, offset=offset)
+    items = [
         AdminPaymentTransactionRead(
             id=transaction.id,
             order_id=transaction.order_id,
@@ -438,46 +454,56 @@ def list_admin_payment_transactions(
         for transaction in transactions
         if transaction.order and transaction.user
     ]
+    return AdminPageRead(items=items, has_more=has_more)
 
 
 def list_admin_platform_ledger_entries(
     db: Session,
     current_user: User,
-) -> list[AdminPlatformLedgerEntryRead]:
+    *,
+    limit: int = 30,
+    offset: int = 0,
+) -> AdminPageRead[AdminPlatformLedgerEntryRead]:
     require_admin(current_user)
-    entries = list(
-        db.scalars(
-            select(PlatformLedgerEntry)
-            .options(
-                selectinload(PlatformLedgerEntry.order),
-                selectinload(PlatformLedgerEntry.payment_transaction),
-            )
-            .order_by(PlatformLedgerEntry.created_at.desc())
-        ).all()
-    )
-    return [
-        AdminPlatformLedgerEntryRead(
-            id=entry.id,
-            kind=entry.kind,
-            direction=entry.direction,
-            title=entry.title,
-            description=entry.description,
-            amount=round_money(entry.amount),
-            current_balance_after=round_money(entry.current_balance_after),
-            vendor_liability_balance_after=round_money(entry.vendor_liability_balance_after),
-            commission_balance_after=round_money(entry.commission_balance_after),
-            order_id=entry.order_id,
-            order_number=entry.order.order_number if entry.order else None,
-            payment_transaction_id=entry.payment_transaction_id,
-            payment_reference=(
-                entry.payment_transaction.reference if entry.payment_transaction else None
-            ),
-            return_request_id=entry.return_request_id,
-            vendor_withdrawal_request_id=entry.vendor_withdrawal_request_id,
-            created_at=entry.created_at,
+    statement = (
+        select(PlatformLedgerEntry)
+        .options(
+            selectinload(PlatformLedgerEntry.order),
+            selectinload(PlatformLedgerEntry.payment_transaction),
         )
-        for entry in entries
-    ]
+        .order_by(PlatformLedgerEntry.created_at.desc())
+    )
+    entries, has_more = paginate_scalars(db, statement, limit=limit, offset=offset)
+    return AdminPageRead(
+        items=[
+            AdminPlatformLedgerEntryRead(
+                id=entry.id,
+                kind=entry.kind,
+                direction=entry.direction,
+                title=entry.title,
+                description=entry.description,
+                amount=round_money(entry.amount),
+                current_balance_after=round_money(entry.current_balance_after),
+                vendor_liability_balance_after=round_money(
+                    entry.vendor_liability_balance_after
+                ),
+                commission_balance_after=round_money(entry.commission_balance_after),
+                order_id=entry.order_id,
+                order_number=entry.order.order_number if entry.order else None,
+                payment_transaction_id=entry.payment_transaction_id,
+                payment_reference=(
+                    entry.payment_transaction.reference
+                    if entry.payment_transaction
+                    else None
+                ),
+                return_request_id=entry.return_request_id,
+                vendor_withdrawal_request_id=entry.vendor_withdrawal_request_id,
+                created_at=entry.created_at,
+            )
+            for entry in entries
+        ],
+        has_more=has_more,
+    )
 
 
 def get_admin_finance_overview(
@@ -503,7 +529,8 @@ def get_admin_finance_overview(
         or 0
     )
     paid_order_count = int(
-        db.scalar(select(func.count(Order.id)).where(Order.payment_status == "paid")) or 0
+        db.scalar(select(func.count(Order.id)).where(Order.payment_status == "paid"))
+        or 0
     )
     paid_order_volume = round_money(
         db.scalar(

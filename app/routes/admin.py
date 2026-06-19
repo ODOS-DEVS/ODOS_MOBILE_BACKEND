@@ -26,6 +26,7 @@ from app.controllers.admin_controller import (
     get_admin_finance_overview_payload,
     get_admin_order,
     get_admin_product,
+    get_admin_promo_banner,
     get_admin_return_request,
     get_admin_store,
     get_admin_user,
@@ -61,6 +62,11 @@ from app.controllers.admin_controller import (
     update_admin_user_status,
     update_admin_vendor_status,
     update_admin_voucher,
+    review_admin_voucher,
+)
+from app.controllers.flash_sale_nominations_controller import (
+    list_admin_flash_sale_nominations,
+    review_admin_flash_sale_nomination,
 )
 from app.schemas.payment import (
     AdminFinanceOverviewRead,
@@ -78,6 +84,8 @@ from app.controllers.wallet_controller import (
 )
 from app.core.auth import get_current_user
 from app.core.database import get_db
+from app.routes.admin_list_params import AdminListParams
+from app.schemas.pagination import AdminPageRead
 from app.models import User
 from app.schemas.admin import (
     AdminBootstrapStatusRead,
@@ -113,7 +121,10 @@ from app.schemas.admin import (
     AdminVendorRead,
     AdminVendorStatusUpdate,
     AdminVoucherRead,
+    AdminVoucherReview,
     AdminVoucherUpsert,
+    AdminFlashSaleNominationRead,
+    AdminFlashSaleNominationReview,
     NotificationMarkReadResponse,
 )
 from app.schemas.user import AuthToken, UserCreate, UserLogin, UserRead
@@ -212,12 +223,14 @@ def admin_dashboard(
     return get_admin_dashboard(db, current_user)
 
 
-@router.get("/users", response_model=list[AdminUserRead])
+@router.get("/users", response_model=AdminPageRead[AdminUserRead])
 def get_users(
     current_user: Annotated[User, Depends(get_current_user)],
+    list_params: AdminListParams,
     db: Session = Depends(get_db),
 ):
-    return list_admin_users(db, current_user)
+    limit, offset = list_params
+    return list_admin_users(db, current_user, limit=limit, offset=offset)
 
 
 @router.get("/users/{user_id}", response_model=AdminUserDetailRead)
@@ -239,12 +252,14 @@ def patch_user_status(
     return update_admin_user_status(db, current_user, user_id, payload)
 
 
-@router.get("/vendors", response_model=list[AdminVendorRead])
+@router.get("/vendors", response_model=AdminPageRead[AdminVendorRead])
 def get_vendors(
     current_user: Annotated[User, Depends(get_current_user)],
+    list_params: AdminListParams,
     db: Session = Depends(get_db),
 ):
-    return list_admin_vendors(db, current_user)
+    limit, offset = list_params
+    return list_admin_vendors(db, current_user, limit=limit, offset=offset)
 
 
 @router.get("/vendors/{vendor_id}", response_model=AdminVendorRead)
@@ -266,12 +281,14 @@ def patch_vendor_status(
     return update_admin_vendor_status(db, current_user, vendor_id, payload)
 
 
-@router.get("/vendor-applications", response_model=list[VendorApplicationListItem])
+@router.get("/vendor-applications", response_model=AdminPageRead[VendorApplicationListItem])
 def get_vendor_applications(
     current_user: Annotated[User, Depends(get_current_user)],
+    list_params: AdminListParams,
     db: Session = Depends(get_db),
 ):
-    return list_vendor_applications(db, current_user)
+    limit, offset = list_params
+    return list_vendor_applications(db, current_user, limit=limit, offset=offset)
 
 
 @router.patch("/vendor-applications/{application_id}/approve", response_model=VendorApplicationRead)
@@ -298,12 +315,14 @@ def reject_application(
     )
 
 
-@router.get("/stores", response_model=list[AdminStoreRead])
+@router.get("/stores", response_model=AdminPageRead[AdminStoreRead])
 def get_stores(
     current_user: Annotated[User, Depends(get_current_user)],
+    list_params: AdminListParams,
     db: Session = Depends(get_db),
 ):
-    return list_admin_stores(db, current_user)
+    limit, offset = list_params
+    return list_admin_stores(db, current_user, limit=limit, offset=offset)
 
 
 @router.get("/stores/{store_id}", response_model=AdminStoreDetailRead)
@@ -357,12 +376,14 @@ async def post_store(
     return await create_admin_store(db, current_user, payload, logo_image, banner_image)
 
 
-@router.get("/markets", response_model=list[AdminMarketRead])
+@router.get("/markets", response_model=AdminPageRead[AdminMarketRead])
 def get_markets(
     current_user: Annotated[User, Depends(get_current_user)],
+    list_params: AdminListParams,
     db: Session = Depends(get_db),
 ):
-    return list_admin_markets(db, current_user)
+    limit, offset = list_params
+    return list_admin_markets(db, current_user, limit=limit, offset=offset)
 
 
 @router.post("/markets", response_model=AdminMarketRead, status_code=status.HTTP_201_CREATED)
@@ -414,12 +435,23 @@ def remove_market(
     return {"success": True}
 
 
-@router.get("/promo-banners", response_model=list[AdminPromoBannerRead])
+@router.get("/promo-banners", response_model=AdminPageRead[AdminPromoBannerRead])
 def get_promo_banners(
+    current_user: Annotated[User, Depends(get_current_user)],
+    list_params: AdminListParams,
+    db: Session = Depends(get_db),
+):
+    limit, offset = list_params
+    return list_admin_promo_banners(db, current_user, limit=limit, offset=offset)
+
+
+@router.get("/promo-banners/{banner_id}", response_model=AdminPromoBannerRead)
+def get_promo_banner(
+    banner_id: str,
     current_user: Annotated[User, Depends(get_current_user)],
     db: Session = Depends(get_db),
 ):
-    return list_admin_promo_banners(db, current_user)
+    return get_admin_promo_banner(db, current_user, banner_id)
 
 
 @router.post("/promo-banners", response_model=AdminPromoBannerRead, status_code=status.HTTP_201_CREATED)
@@ -428,11 +460,14 @@ async def post_promo_banner(
     current_user: Annotated[User, Depends(get_current_user)],
     db: Session = Depends(get_db),
     subtitle: Annotated[str | None, Form(max_length=255)] = None,
-    cta_label: Annotated[str, Form(min_length=2, max_length=80)] = "Browse deals",
+    cta_label: Annotated[str, Form(min_length=2, max_length=80)] = "Shop now",
     cta_link: Annotated[str | None, Form(max_length=500)] = None,
     accent: Annotated[str | None, Form(max_length=20)] = None,
     sort_order: Annotated[int | None, Form()] = None,
     status_value: Annotated[str, Form(alias="status", min_length=1, max_length=30)] = "active",
+    link_type: Annotated[str, Form(min_length=1, max_length=30)] = "deals",
+    campaign_tag: Annotated[str | None, Form(max_length=50)] = None,
+    placement: Annotated[str, Form(min_length=1, max_length=30)] = "home",
     starts_at: Annotated[str | None, Form()] = None,
     ends_at: Annotated[str | None, Form()] = None,
     image_file: UploadFile | None = File(default=None),
@@ -445,6 +480,9 @@ async def post_promo_banner(
         accent=accent,
         sort_order=sort_order,
         status=status_value,
+        link_type=link_type,
+        campaign_tag=campaign_tag,
+        placement=placement,
         starts_at=_parse_optional_datetime(starts_at),
         ends_at=_parse_optional_datetime(ends_at),
     )
@@ -458,11 +496,14 @@ async def patch_promo_banner(
     current_user: Annotated[User, Depends(get_current_user)],
     db: Session = Depends(get_db),
     subtitle: Annotated[str | None, Form(max_length=255)] = None,
-    cta_label: Annotated[str, Form(min_length=2, max_length=80)] = "Browse deals",
+    cta_label: Annotated[str, Form(min_length=2, max_length=80)] = "Shop now",
     cta_link: Annotated[str | None, Form(max_length=500)] = None,
     accent: Annotated[str | None, Form(max_length=20)] = None,
     sort_order: Annotated[int | None, Form()] = None,
     status_value: Annotated[str, Form(alias="status", min_length=1, max_length=30)] = "active",
+    link_type: Annotated[str, Form(min_length=1, max_length=30)] = "deals",
+    campaign_tag: Annotated[str | None, Form(max_length=50)] = None,
+    placement: Annotated[str, Form(min_length=1, max_length=30)] = "home",
     starts_at: Annotated[str | None, Form()] = None,
     ends_at: Annotated[str | None, Form()] = None,
     image_file: UploadFile | None = File(default=None),
@@ -475,6 +516,9 @@ async def patch_promo_banner(
         accent=accent,
         sort_order=sort_order,
         status=status_value,
+        link_type=link_type,
+        campaign_tag=campaign_tag,
+        placement=placement,
         starts_at=_parse_optional_datetime(starts_at),
         ends_at=_parse_optional_datetime(ends_at),
     )
@@ -491,12 +535,14 @@ def remove_promo_banner(
     return {"success": True}
 
 
-@router.get("/flash-sale-events", response_model=list[AdminFlashSaleEventRead])
+@router.get("/flash-sale-events", response_model=AdminPageRead[AdminFlashSaleEventRead])
 def get_flash_sale_events(
     current_user: Annotated[User, Depends(get_current_user)],
+    list_params: AdminListParams,
     db: Session = Depends(get_db),
 ):
-    return list_admin_flash_sale_events(db, current_user)
+    limit, offset = list_params
+    return list_admin_flash_sale_events(db, current_user, limit=limit, offset=offset)
 
 
 @router.post("/flash-sale-events", response_model=AdminFlashSaleEventRead, status_code=status.HTTP_201_CREATED)
@@ -528,12 +574,14 @@ def remove_flash_sale_event(
     return {"success": True}
 
 
-@router.get("/categories", response_model=list[AdminCategoryRead])
+@router.get("/categories", response_model=AdminPageRead[AdminCategoryRead])
 def get_categories(
     current_user: Annotated[User, Depends(get_current_user)],
+    list_params: AdminListParams,
     db: Session = Depends(get_db),
 ):
-    return list_admin_categories(db, current_user)
+    limit, offset = list_params
+    return list_admin_categories(db, current_user, limit=limit, offset=offset)
 
 
 @router.post("/categories", response_model=AdminCategoryRead, status_code=status.HTTP_201_CREATED)
@@ -594,12 +642,14 @@ def remove_category(
     return {"success": True}
 
 
-@router.get("/products", response_model=list[AdminProductRead])
+@router.get("/products", response_model=AdminPageRead[AdminProductRead])
 def get_products(
     current_user: Annotated[User, Depends(get_current_user)],
+    list_params: AdminListParams,
     db: Session = Depends(get_db),
 ):
-    return list_admin_products(db, current_user)
+    limit, offset = list_params
+    return list_admin_products(db, current_user, limit=limit, offset=offset)
 
 
 @router.post("/products", response_model=AdminProductRead, status_code=status.HTTP_201_CREATED)
@@ -724,12 +774,14 @@ def patch_product_status(
     return update_admin_product_status(db, current_user, product_id, payload)
 
 
-@router.get("/vouchers", response_model=list[AdminVoucherRead])
+@router.get("/vouchers", response_model=AdminPageRead[AdminVoucherRead])
 def get_vouchers(
     current_user: Annotated[User, Depends(get_current_user)],
+    list_params: AdminListParams,
     db: Session = Depends(get_db),
 ):
-    return list_admin_vouchers(db, current_user)
+    limit, offset = list_params
+    return list_admin_vouchers(db, current_user, limit=limit, offset=offset)
 
 
 @router.post("/vouchers", response_model=AdminVoucherRead, status_code=status.HTTP_201_CREATED)
@@ -761,12 +813,47 @@ def remove_voucher(
     return {"success": True}
 
 
-@router.get("/reviews", response_model=list[AdminReviewRead])
-def get_reviews(
+@router.post("/vouchers/{voucher_id}/review", response_model=AdminVoucherRead)
+def post_voucher_review(
+    voucher_id: str,
+    payload: AdminVoucherReview,
     current_user: Annotated[User, Depends(get_current_user)],
     db: Session = Depends(get_db),
 ):
-    return list_admin_reviews(db, current_user)
+    return review_admin_voucher(db, current_user, voucher_id, payload)
+
+
+@router.get("/flash-sale-nominations", response_model=AdminPageRead[AdminFlashSaleNominationRead])
+def get_flash_sale_nominations(
+    current_user: Annotated[User, Depends(get_current_user)],
+    list_params: AdminListParams,
+    db: Session = Depends(get_db),
+):
+    limit, offset = list_params
+    return list_admin_flash_sale_nominations(db, current_user, limit=limit, offset=offset)
+
+
+@router.post(
+    "/flash-sale-nominations/{nomination_id}/review",
+    response_model=AdminFlashSaleNominationRead,
+)
+def post_flash_sale_nomination_review(
+    nomination_id: str,
+    payload: AdminFlashSaleNominationReview,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return review_admin_flash_sale_nomination(db, current_user, nomination_id, payload)
+
+
+@router.get("/reviews", response_model=AdminPageRead[AdminReviewRead])
+def get_reviews(
+    current_user: Annotated[User, Depends(get_current_user)],
+    list_params: AdminListParams,
+    db: Session = Depends(get_db),
+):
+    limit, offset = list_params
+    return list_admin_reviews(db, current_user, limit=limit, offset=offset)
 
 
 @router.patch("/reviews/{review_id}/moderation", response_model=AdminReviewRead)
@@ -779,12 +866,14 @@ def patch_review_moderation(
     return moderate_admin_review(db, current_user, review_id, payload)
 
 
-@router.get("/orders", response_model=list[AdminOrderRead])
+@router.get("/orders", response_model=AdminPageRead[AdminOrderRead])
 def get_orders(
     current_user: Annotated[User, Depends(get_current_user)],
+    list_params: AdminListParams,
     db: Session = Depends(get_db),
 ):
-    return list_admin_orders(db, current_user)
+    limit, offset = list_params
+    return list_admin_orders(db, current_user, limit=limit, offset=offset)
 
 
 @router.get("/finance/overview", response_model=AdminFinanceOverviewRead)
@@ -795,20 +884,24 @@ def get_finance_overview(
     return get_admin_finance_overview_payload(db, current_user)
 
 
-@router.get("/finance/payments", response_model=list[AdminPaymentTransactionRead])
+@router.get("/finance/payments", response_model=AdminPageRead[AdminPaymentTransactionRead])
 def get_finance_payments(
     current_user: Annotated[User, Depends(get_current_user)],
+    list_params: AdminListParams,
     db: Session = Depends(get_db),
 ):
-    return list_admin_payment_transactions_payload(db, current_user)
+    limit, offset = list_params
+    return list_admin_payment_transactions_payload(db, current_user, limit=limit, offset=offset)
 
 
-@router.get("/finance/ledger", response_model=list[AdminPlatformLedgerEntryRead])
+@router.get("/finance/ledger", response_model=AdminPageRead[AdminPlatformLedgerEntryRead])
 def get_finance_ledger(
     current_user: Annotated[User, Depends(get_current_user)],
+    list_params: AdminListParams,
     db: Session = Depends(get_db),
 ):
-    return list_admin_platform_ledger_entries_payload(db, current_user)
+    limit, offset = list_params
+    return list_admin_platform_ledger_entries_payload(db, current_user, limit=limit, offset=offset)
 
 
 @router.get("/orders/{order_id}", response_model=AdminOrderDetailRead)
@@ -830,12 +923,14 @@ def patch_order_status(
     return update_admin_order_status(db, current_user, order_id, payload)
 
 
-@router.get("/returns", response_model=list[AdminReturnRequestRead])
+@router.get("/returns", response_model=AdminPageRead[AdminReturnRequestRead])
 def get_return_requests(
     current_user: Annotated[User, Depends(get_current_user)],
+    list_params: AdminListParams,
     db: Session = Depends(get_db),
 ):
-    return list_admin_return_requests(db, current_user)
+    limit, offset = list_params
+    return list_admin_return_requests(db, current_user, limit=limit, offset=offset)
 
 
 @router.get("/returns/{request_id}", response_model=AdminReturnRequestRead)
@@ -859,13 +954,15 @@ def patch_return_request(
 
 @router.get(
     "/payouts/withdrawals",
-    response_model=list[AdminVendorWithdrawalRequestRead],
+    response_model=AdminPageRead[AdminVendorWithdrawalRequestRead],
 )
 def get_vendor_withdrawal_requests(
     current_user: Annotated[User, Depends(get_current_user)],
+    list_params: AdminListParams,
     db: Session = Depends(get_db),
 ):
-    return list_admin_vendor_withdrawal_requests(db, current_user)
+    limit, offset = list_params
+    return list_admin_vendor_withdrawal_requests(db, current_user, limit=limit, offset=offset)
 
 
 @router.patch(
@@ -886,12 +983,14 @@ def patch_vendor_withdrawal_request(
     )
 
 
-@router.get("/notifications", response_model=list[AdminNotificationRead])
+@router.get("/notifications", response_model=AdminPageRead[AdminNotificationRead])
 def get_notifications(
     current_user: Annotated[User, Depends(get_current_user)],
+    list_params: AdminListParams,
     db: Session = Depends(get_db),
 ):
-    return list_admin_notifications(db, current_user)
+    limit, offset = list_params
+    return list_admin_notifications(db, current_user, limit=limit, offset=offset)
 
 
 @router.patch(

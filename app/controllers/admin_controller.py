@@ -8,7 +8,15 @@ from sqlalchemy import case, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
+from app.core.promo_banner_config import (
+    PROMO_CAMPAIGN_TAGS,
+    describe_promo_destination,
+    normalize_promo_link_type,
+    normalize_promo_placement,
+)
 from app.controllers.auth_controller import build_auth_token, login_user
+from app.core.admin_pagination import paginate_scalars
+from app.schemas.pagination import AdminPageRead
 from app.controllers.finance_controller import (
     get_admin_finance_overview,
     list_admin_payment_transactions,
@@ -46,11 +54,13 @@ from app.services.realtime_service import realtime_manager
 from app.models import (
     CartItem,
     Category,
+    CustomerWallet,
     Market,
     NotificationEvent,
     NotificationRead,
     Order,
     OrderItem,
+    PaymentTransaction,
     Product,
     PromoBanner,
     FlashSaleEvent,
@@ -69,6 +79,7 @@ from app.models import (
     VoucherRedemption,
     WishlistItem,
 )
+from app.models.user_behavior import UserBehaviorEvent
 from app.schemas.admin import (
     AdminBootstrapStatusRead,
     AdminCategoryRead,
@@ -94,8 +105,12 @@ from app.schemas.admin import (
     AdminFlashSaleEventRead,
     AdminFlashSaleEventUpsert,
     AdminUserAddressRead,
+    AdminUserCartItemRead,
     AdminUserDetailRead,
+    AdminUserNotificationRead,
     AdminUserPaymentMethodRead,
+    AdminUserWalletSummaryRead,
+    AdminUserWishlistItemRead,
     AdminReviewModerationUpdate,
     AdminReviewRead,
     AdminStoreDetailRead,
@@ -112,6 +127,7 @@ from app.schemas.admin import (
     AdminVendorRead,
     AdminVendorStatusUpdate,
     AdminVoucherRead,
+    AdminVoucherReview,
     AdminVoucherUpsert,
     NotificationMarkReadResponse,
 )
@@ -121,6 +137,7 @@ from app.schemas.payment import (
     AdminPlatformLedgerEntryRead,
 )
 from app.schemas.user import AuthToken, UserCreate, UserLogin
+from app.services.finance_math import amount_from_subunit, round_money
 
 SUPPORTED_ACCOUNT_STATUSES = {"active", "blocked", "inactive"}
 SUPPORTED_VENDOR_STATUSES = {"active", "suspended"}
@@ -232,6 +249,10 @@ def _serialize_voucher(
         starts_at=voucher.starts_at,
         ends_at=voucher.ends_at,
         created_at=voucher.created_at,
+        approval_status=getattr(voucher, "approval_status", "approved"),
+        campaign_tag=getattr(voucher, "campaign_tag", None),
+        review_notes=getattr(voucher, "review_notes", None),
+        created_by_user_id=getattr(voucher, "created_by_user_id", None),
     )
 
 
@@ -366,12 +387,63 @@ def _serialize_vendor_application_detail(
     )
 
 
+def _serialize_user_payment_transaction(transaction: PaymentTransaction) -> AdminPaymentTransactionRead:
+    order = transaction.order
+    user = transaction.user
+    return AdminPaymentTransactionRead(
+        id=transaction.id,
+        order_id=transaction.order_id,
+        order_number=order.order_number if order else "",
+        user_id=transaction.user_id,
+        customer_email=user.email if user else "",
+        provider=transaction.provider,
+        reference=transaction.reference,
+        amount=round_money(order.total_amount if order else 0),
+        currency=transaction.currency,
+        status=transaction.status,
+        preferred_channel=transaction.preferred_channel,
+        processor_fee_amount=amount_from_subunit(transaction.processor_fee_subunit),
+        gateway_response=transaction.gateway_response,
+        provider_transaction_id=transaction.provider_transaction_id,
+        paid_at=transaction.paid_at,
+        verified_at=transaction.verified_at,
+        created_at=transaction.created_at,
+        updated_at=transaction.updated_at,
+    )
+
+
 def _serialize_user_detail(db: Session, user: User) -> AdminUserDetailRead:
     stores = list(
         db.scalars(select(Store).where(Store.vendor_user_id == user.id).order_by(Store.created_at.desc())).all()
     )
     orders = sorted(user.orders, key=lambda order: order.created_at, reverse=True)
     reviews = sorted(user.reviews, key=lambda review: review.updated_at, reverse=True)
+    return_requests = sorted(user.return_requests, key=lambda request: request.created_at, reverse=True)
+    payment_transactions = sorted(
+        user.payment_transactions,
+        key=lambda transaction: transaction.created_at,
+        reverse=True,
+    )
+    cart_items = sorted(user.cart_items, key=lambda item: item.updated_at, reverse=True)
+    wishlist_items = sorted(user.wishlist_items, key=lambda item: item.created_at, reverse=True)
+    notifications = sorted(user.notification_events, key=lambda event: event.created_at, reverse=True)
+    review_products, review_store_name_map = _resolve_review_context(db, reviews)
+    behavior_event_count = db.scalar(
+        select(func.count()).select_from(UserBehaviorEvent).where(UserBehaviorEvent.user_id == user.id)
+    ) or 0
+    customer_wallet = user.customer_wallet
+    wallet_summary = (
+        AdminUserWalletSummaryRead(
+            balance=round_money(customer_wallet.available_balance),
+            currency=customer_wallet.currency,
+            lifetime_topups=round_money(customer_wallet.lifetime_topups),
+            lifetime_spend=round_money(customer_wallet.lifetime_spend),
+            lifetime_refunds=round_money(customer_wallet.lifetime_refunds),
+            transaction_count=len(customer_wallet.transactions),
+        )
+        if customer_wallet
+        else None
+    )
 
     return AdminUserDetailRead(
         id=user.id,
@@ -393,6 +465,9 @@ def _serialize_user_detail(db: Session, user: User) -> AdminUserDetailRead:
         system_notifications=user.system_notifications,
         location_notifications=user.location_notifications,
         location_updates=user.location_updates,
+        personalization_enabled=user.personalization_enabled,
+        analytics_enabled=user.analytics_enabled,
+        phone_verified=user.phone_verified,
         vendor_rejection_reason=user.vendor_rejection_reason,
         is_verified=user.is_verified,
         last_login_at=user.last_login_at,
@@ -428,6 +503,59 @@ def _serialize_user_detail(db: Session, user: User) -> AdminUserDetailRead:
             last_order_at=orders[0].created_at if orders else None,
             last_review_at=reviews[0].updated_at if reviews else None,
         ),
+        orders=[_serialize_order(db, order) for order in orders],
+        reviews=[
+            _build_admin_review_read(
+                review,
+                products=review_products,
+                store_name_map=review_store_name_map,
+            )
+            for review in reviews
+        ],
+        return_requests=[_serialize_return_request(db, request) for request in return_requests],
+        payment_transactions=[
+            _serialize_user_payment_transaction(transaction)
+            for transaction in payment_transactions
+            if transaction.order and transaction.user
+        ],
+        cart_items=[
+            AdminUserCartItemRead(
+                id=item.id,
+                product_id=item.product_id,
+                title=item.title,
+                image_url=item.image_url,
+                category=item.category,
+                price=item.price,
+                quantity=item.quantity,
+                created_at=item.created_at,
+                updated_at=item.updated_at,
+            )
+            for item in cart_items
+        ],
+        wishlist_items=[
+            AdminUserWishlistItemRead(
+                id=item.id,
+                product_id=item.product_id,
+                title=item.title,
+                image_url=item.image_url,
+                category=item.category,
+                price=item.price,
+                created_at=item.created_at,
+            )
+            for item in wishlist_items
+        ],
+        notifications=[
+            AdminUserNotificationRead(
+                id=event.id,
+                kind=event.kind,
+                title=event.title,
+                message=event.body,
+                created_at=event.created_at,
+            )
+            for event in notifications
+        ],
+        customer_wallet=wallet_summary,
+        behavior_event_count=behavior_event_count,
     )
 
 
@@ -1150,10 +1278,20 @@ def get_admin_dashboard(db: Session, current_user: User) -> AdminDashboardRead:
     )
 
 
-def list_admin_users(db: Session, current_user: User) -> list[AdminUserRead]:
+def list_admin_users(
+    db: Session,
+    current_user: User,
+    *,
+    limit: int = 30,
+    offset: int = 0,
+) -> AdminPageRead[AdminUserRead]:
     require_admin(current_user)
-    users = list(db.scalars(select(User).order_by(User.created_at.desc())).all())
-    return [_serialize_user(user) for user in users]
+    statement = select(User).order_by(User.created_at.desc())
+    users, has_more = paginate_scalars(db, statement, limit=limit, offset=offset)
+    return AdminPageRead(
+        items=[_serialize_user(user) for user in users],
+        has_more=has_more,
+    )
 
 
 def get_admin_user(db: Session, current_user: User, user_id: str) -> AdminUserDetailRead:
@@ -1167,9 +1305,14 @@ def get_admin_user(db: Session, current_user: User, user_id: str) -> AdminUserDe
             selectinload(User.saved_payment_methods),
             selectinload(User.orders),
             selectinload(User.reviews),
+            selectinload(User.return_requests).selectinload(ReturnRequest.order_item),
+            selectinload(User.return_requests).selectinload(ReturnRequest.order),
+            selectinload(User.payment_transactions).selectinload(PaymentTransaction.order),
+            selectinload(User.payment_transactions).selectinload(PaymentTransaction.user),
             selectinload(User.cart_items),
             selectinload(User.wishlist_items),
             selectinload(User.notification_events),
+            selectinload(User.customer_wallet).selectinload(CustomerWallet.transactions),
         )
         .where(User.id == user_id)
     )
@@ -1198,16 +1341,24 @@ def update_admin_user_status(
     return _serialize_user(user)
 
 
-def list_admin_vendors(db: Session, current_user: User) -> list[AdminVendorRead]:
+def list_admin_vendors(
+    db: Session,
+    current_user: User,
+    *,
+    limit: int = 30,
+    offset: int = 0,
+) -> AdminPageRead[AdminVendorRead]:
     require_admin(current_user)
-    vendors = list(
-        db.scalars(
-            select(User)
-            .where(User.vendor_status.in_([VendorStatus.APPROVED, VendorStatus.SUSPENDED]))
-            .order_by(User.created_at.desc())
-        ).all()
+    statement = (
+        select(User)
+        .where(User.vendor_status.in_([VendorStatus.APPROVED, VendorStatus.SUSPENDED]))
+        .order_by(User.created_at.desc())
     )
-    return [_serialize_vendor(db, vendor) for vendor in vendors]
+    vendors, has_more = paginate_scalars(db, statement, limit=limit, offset=offset)
+    return AdminPageRead(
+        items=[_serialize_vendor(db, vendor) for vendor in vendors],
+        has_more=has_more,
+    )
 
 
 def get_admin_vendor(db: Session, current_user: User, vendor_id: str) -> AdminVendorRead:
@@ -1251,10 +1402,20 @@ def update_admin_vendor_status(
     return _serialize_vendor(db, vendor)
 
 
-def list_admin_stores(db: Session, current_user: User) -> list[AdminStoreRead]:
+def list_admin_stores(
+    db: Session,
+    current_user: User,
+    *,
+    limit: int = 30,
+    offset: int = 0,
+) -> AdminPageRead[AdminStoreRead]:
     require_admin(current_user)
-    stores = list(db.scalars(select(Store).order_by(Store.created_at.desc())).all())
-    return [_serialize_store(store) for store in stores]
+    statement = select(Store).order_by(Store.created_at.desc())
+    stores, has_more = paginate_scalars(db, statement, limit=limit, offset=offset)
+    return AdminPageRead(
+        items=[_serialize_store(store) for store in stores],
+        has_more=has_more,
+    )
 
 
 def get_admin_store(db: Session, current_user: User, store_id: str) -> AdminStoreDetailRead:
@@ -1351,12 +1512,20 @@ async def create_admin_store(
     return _serialize_store(store)
 
 
-def list_admin_markets(db: Session, current_user: User) -> list[AdminMarketRead]:
+def list_admin_markets(
+    db: Session,
+    current_user: User,
+    *,
+    limit: int = 30,
+    offset: int = 0,
+) -> AdminPageRead[AdminMarketRead]:
     require_admin(current_user)
-    markets = list(
-        db.scalars(select(Market).order_by(Market.sort_order.asc(), Market.title.asc())).all()
+    statement = select(Market).order_by(Market.sort_order.asc(), Market.title.asc())
+    markets, has_more = paginate_scalars(db, statement, limit=limit, offset=offset)
+    return AdminPageRead(
+        items=[_serialize_market(market) for market in markets],
+        has_more=has_more,
     )
-    return [_serialize_market(market) for market in markets]
 
 
 async def create_admin_market(
@@ -1433,7 +1602,44 @@ def delete_admin_market(db: Session, current_user: User, market_id: str) -> None
     broadcast_catalog_market_change(market)
 
 
+def _validate_promo_banner_payload(payload: AdminPromoBannerUpsert) -> None:
+    link_type = normalize_promo_link_type(payload.link_type)
+    placement = normalize_promo_placement(payload.placement)
+    target = (payload.cta_link or "").strip()
+    campaign_tag = (payload.campaign_tag or "").strip()
+
+    if link_type in {"category", "product", "store", "external", "screen"} and not target:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Choose a destination target for this banner tap action.",
+        )
+    if link_type == "campaign" and not campaign_tag:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Choose a campaign for this banner.",
+        )
+    if link_type == "external" and target and not (
+        target.startswith("http://") or target.startswith("https://")
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="External links must start with http:// or https://",
+        )
+    if campaign_tag and campaign_tag not in dict(PROMO_CAMPAIGN_TAGS):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unsupported campaign tag.",
+        )
+    if placement not in {"home", "deals"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unsupported banner placement.",
+        )
+
+
 def _serialize_promo_banner(banner: PromoBanner) -> AdminPromoBannerRead:
+    link_type = normalize_promo_link_type(banner.link_type)
+    placement = normalize_promo_placement(banner.placement)
     return AdminPromoBannerRead(
         id=banner.id,
         title=banner.title,
@@ -1444,6 +1650,14 @@ def _serialize_promo_banner(banner: PromoBanner) -> AdminPromoBannerRead:
         accent=banner.accent,
         sort_order=banner.sort_order,
         status="active" if banner.is_active else "disabled",
+        link_type=link_type,
+        campaign_tag=banner.campaign_tag,
+        placement=placement,
+        destination_label=describe_promo_destination(
+            link_type=link_type,
+            cta_link=banner.cta_link,
+            campaign_tag=banner.campaign_tag,
+        ),
         starts_at=banner.starts_at,
         ends_at=banner.ends_at,
         created_at=banner.created_at,
@@ -1465,17 +1679,23 @@ def broadcast_catalog_promo_banner_change(banner: PromoBanner) -> None:
     )
 
 
-def list_admin_promo_banners(db: Session, current_user: User) -> list[AdminPromoBannerRead]:
+def list_admin_promo_banners(
+    db: Session,
+    current_user: User,
+    *,
+    limit: int = 30,
+    offset: int = 0,
+) -> AdminPageRead[AdminPromoBannerRead]:
     require_admin(current_user)
-    banners = list(
-        db.scalars(
-            select(PromoBanner).order_by(
-                PromoBanner.sort_order.asc(),
-                PromoBanner.created_at.desc(),
-            )
-        ).all()
+    statement = select(PromoBanner).order_by(
+        PromoBanner.sort_order.asc(),
+        PromoBanner.created_at.desc(),
     )
-    return [_serialize_promo_banner(banner) for banner in banners]
+    banners, has_more = paginate_scalars(db, statement, limit=limit, offset=offset)
+    return AdminPageRead(
+        items=[_serialize_promo_banner(banner) for banner in banners],
+        has_more=has_more,
+    )
 
 
 async def create_admin_promo_banner(
@@ -1485,6 +1705,7 @@ async def create_admin_promo_banner(
     image_file: UploadFile | None = None,
 ) -> AdminPromoBannerRead:
     require_admin(current_user)
+    _validate_promo_banner_payload(payload)
     if payload.starts_at and payload.ends_at and payload.ends_at < payload.starts_at:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1498,11 +1719,14 @@ async def create_admin_promo_banner(
     banner = PromoBanner(
         title=payload.title,
         subtitle=payload.subtitle,
-        cta_label=payload.cta_label or "Browse deals",
+        cta_label=payload.cta_label or "Shop now",
         cta_link=payload.cta_link,
         accent=payload.accent,
         sort_order=next_sort_order,
         is_active=payload.status != "disabled",
+        link_type=normalize_promo_link_type(payload.link_type),
+        campaign_tag=payload.campaign_tag,
+        placement=normalize_promo_placement(payload.placement),
         starts_at=payload.starts_at,
         ends_at=payload.ends_at,
     )
@@ -1524,6 +1748,7 @@ async def update_admin_promo_banner(
     image_file: UploadFile | None = None,
 ) -> AdminPromoBannerRead:
     require_admin(current_user)
+    _validate_promo_banner_payload(payload)
     if payload.starts_at and payload.ends_at and payload.ends_at < payload.starts_at:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1541,9 +1766,12 @@ async def update_admin_promo_banner(
 
     banner.title = payload.title
     banner.subtitle = payload.subtitle
-    banner.cta_label = payload.cta_label or "Browse deals"
+    banner.cta_label = payload.cta_label or "Shop now"
     banner.cta_link = payload.cta_link
     banner.accent = payload.accent
+    banner.link_type = normalize_promo_link_type(payload.link_type)
+    banner.campaign_tag = payload.campaign_tag
+    banner.placement = normalize_promo_placement(payload.placement)
     if payload.sort_order is not None:
         banner.sort_order = payload.sort_order
     banner.is_active = payload.status != "disabled"
@@ -1558,6 +1786,20 @@ async def update_admin_promo_banner(
     db.commit()
     db.refresh(banner)
     broadcast_catalog_promo_banner_change(banner)
+    return _serialize_promo_banner(banner)
+
+
+def get_admin_promo_banner(db: Session, current_user: User, banner_id: str) -> AdminPromoBannerRead:
+    require_admin(current_user)
+    try:
+        normalized_id = uuid.UUID(str(banner_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Promo banner not found.") from exc
+
+    banner = db.scalar(select(PromoBanner).where(PromoBanner.id == normalized_id))
+    if not banner:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Promo banner not found.")
+
     return _serialize_promo_banner(banner)
 
 
@@ -1668,17 +1910,23 @@ def _replace_flash_sale_event_products(
         )
 
 
-def list_admin_flash_sale_events(db: Session, current_user: User) -> list[AdminFlashSaleEventRead]:
+def list_admin_flash_sale_events(
+    db: Session,
+    current_user: User,
+    *,
+    limit: int = 30,
+    offset: int = 0,
+) -> AdminPageRead[AdminFlashSaleEventRead]:
     require_admin(current_user)
-    events = list(
-        db.scalars(
-            select(FlashSaleEvent).order_by(
-                FlashSaleEvent.sort_order.asc(),
-                FlashSaleEvent.ends_at.desc(),
-            )
-        ).all()
+    statement = select(FlashSaleEvent).order_by(
+        FlashSaleEvent.sort_order.asc(),
+        FlashSaleEvent.ends_at.desc(),
     )
-    return [_serialize_flash_sale_event(db, event) for event in events]
+    events, has_more = paginate_scalars(db, statement, limit=limit, offset=offset)
+    return AdminPageRead(
+        items=[_serialize_flash_sale_event(db, event) for event in events],
+        has_more=has_more,
+    )
 
 
 def create_admin_flash_sale_event(
@@ -1795,12 +2043,20 @@ def archive_admin_flash_sale_event(db: Session, current_user: User, event_id: st
     broadcast_catalog_flash_sale_event_change(event)
 
 
-def list_admin_categories(db: Session, current_user: User) -> list[AdminCategoryRead]:
+def list_admin_categories(
+    db: Session,
+    current_user: User,
+    *,
+    limit: int = 30,
+    offset: int = 0,
+) -> AdminPageRead[AdminCategoryRead]:
     require_admin(current_user)
-    categories = list(
-        db.scalars(select(Category).order_by(Category.sort_order.asc(), Category.title.asc())).all()
+    statement = select(Category).order_by(Category.sort_order.asc(), Category.title.asc())
+    categories, has_more = paginate_scalars(db, statement, limit=limit, offset=offset)
+    return AdminPageRead(
+        items=[_serialize_category(category) for category in categories],
+        has_more=has_more,
     )
-    return [_serialize_category(category) for category in categories]
 
 
 async def create_admin_category(
@@ -1914,17 +2170,7 @@ def delete_admin_category(
     broadcast_catalog_category_change(category)
 
 
-def list_admin_products(db: Session, current_user: User) -> list[AdminProductRead]:
-    require_admin(current_user)
-    products = list(
-        db.scalars(
-            select(Product).order_by(
-                case((Product.status == "pending", 0), else_=1),
-                Product.updated_at.desc(),
-                Product.created_at.desc(),
-            )
-        ).all()
-    )
+def _serialize_admin_products(db: Session, products: list[Product]) -> list[AdminProductRead]:
     store_ids = {product.store_id for product in products if product.store_id}
     vendor_ids = {product.vendor_user_id for product in products if product.vendor_user_id}
     store_lookup = {
@@ -1943,6 +2189,26 @@ def list_admin_products(db: Session, current_user: User) -> list[AdminProductRea
         )
         for product in products
     ]
+
+
+def list_admin_products(
+    db: Session,
+    current_user: User,
+    *,
+    limit: int = 30,
+    offset: int = 0,
+) -> AdminPageRead[AdminProductRead]:
+    require_admin(current_user)
+    statement = select(Product).order_by(
+        case((Product.status == "pending", 0), else_=1),
+        Product.updated_at.desc(),
+        Product.created_at.desc(),
+    )
+    products, has_more = paginate_scalars(db, statement, limit=limit, offset=offset)
+    return AdminPageRead(
+        items=_serialize_admin_products(db, products),
+        has_more=has_more,
+    )
 
 
 def get_admin_product(db: Session, current_user: User, product_id: str) -> AdminProductRead:
@@ -2176,11 +2442,7 @@ def update_admin_product_status(
     )
 
 
-def list_admin_vouchers(db: Session, current_user: User) -> list[AdminVoucherRead]:
-    require_admin(current_user)
-    vouchers = list(
-        db.scalars(select(Voucher).order_by(Voucher.created_at.desc(), Voucher.title.asc())).all()
-    )
+def _serialize_admin_vouchers(db: Session, vouchers: list[Voucher]) -> list[AdminVoucherRead]:
     stats_map = _voucher_stats_map(db, [voucher.id for voucher in vouchers])
     store_name_map = {
         store_id: title
@@ -2202,6 +2464,22 @@ def list_admin_vouchers(db: Session, current_user: User) -> list[AdminVoucherRea
         )
         for voucher in vouchers
     ]
+
+
+def list_admin_vouchers(
+    db: Session,
+    current_user: User,
+    *,
+    limit: int = 30,
+    offset: int = 0,
+) -> AdminPageRead[AdminVoucherRead]:
+    require_admin(current_user)
+    statement = select(Voucher).order_by(Voucher.created_at.desc(), Voucher.title.asc())
+    vouchers, has_more = paginate_scalars(db, statement, limit=limit, offset=offset)
+    return AdminPageRead(
+        items=_serialize_admin_vouchers(db, vouchers),
+        has_more=has_more,
+    )
 
 
 def _get_admin_voucher(db: Session, voucher_id: str) -> Voucher:
@@ -2253,6 +2531,8 @@ def create_admin_voucher(
         usage_limit=payload.usage_limit,
         per_user_limit=payload.per_user_limit,
         is_active=payload.is_active,
+        approval_status="approved",
+        reviewed_by_user_id=current_user.id,
         starts_at=payload.starts_at,
         ends_at=payload.ends_at,
     )
@@ -2338,6 +2618,46 @@ def archive_admin_voucher(
     voucher = _get_admin_voucher(db, voucher_id)
     voucher.is_active = False
     db.commit()
+
+
+def review_admin_voucher(
+    db: Session,
+    current_user: User,
+    voucher_id: str,
+    payload: AdminVoucherReview,
+) -> AdminVoucherRead:
+    require_admin(current_user)
+    voucher = _get_admin_voucher(db, voucher_id)
+
+    if payload.approval_status not in {"approved", "rejected", "disabled"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Approval status must be approved, rejected, or disabled.",
+        )
+
+    voucher.approval_status = payload.approval_status
+    voucher.reviewed_by_user_id = current_user.id
+    voucher.review_notes = payload.review_notes
+    if payload.approval_status == "approved":
+        voucher.is_active = payload.is_active if payload.is_active is not None else True
+    elif payload.approval_status in {"rejected", "disabled"}:
+        voucher.is_active = False
+
+    db.commit()
+    db.refresh(voucher)
+
+    store_name = None
+    if voucher.store_id:
+        store_name = db.scalar(select(Store.title).where(Store.id == voucher.store_id))
+    stats_map = _voucher_stats_map(db, [voucher.id])
+    voucher_stats = stats_map.get(voucher.id, {})
+    return _serialize_voucher(
+        voucher,
+        store_name=store_name,
+        redemption_count=int(voucher_stats.get("redemption_count", 0)),
+        unique_user_count=int(voucher_stats.get("unique_user_count", 0)),
+        total_discount_amount=float(voucher_stats.get("total_discount_amount", 0)),
+    )
 
 
 def _resolve_review_context(
@@ -2433,27 +2753,35 @@ def _get_admin_review(db: Session, review_id: str) -> Review:
     return review
 
 
-def list_admin_reviews(db: Session, current_user: User) -> list[AdminReviewRead]:
+def list_admin_reviews(
+    db: Session,
+    current_user: User,
+    *,
+    limit: int = 30,
+    offset: int = 0,
+) -> AdminPageRead[AdminReviewRead]:
     require_admin(current_user)
-    reviews = list(
-        db.scalars(
-            select(Review)
-            .options(
-                selectinload(Review.user),
-                selectinload(Review.order).selectinload(Order.items),
-            )
-            .order_by(Review.updated_at.desc(), Review.created_at.desc())
-        ).all()
-    )
-    products, store_name_map = _resolve_review_context(db, reviews)
-    return [
-        _build_admin_review_read(
-            review,
-            products=products,
-            store_name_map=store_name_map,
+    statement = (
+        select(Review)
+        .options(
+            selectinload(Review.user),
+            selectinload(Review.order).selectinload(Order.items),
         )
-        for review in reviews
-    ]
+        .order_by(Review.updated_at.desc(), Review.created_at.desc())
+    )
+    reviews, has_more = paginate_scalars(db, statement, limit=limit, offset=offset)
+    products, store_name_map = _resolve_review_context(db, reviews)
+    return AdminPageRead(
+        items=[
+            _build_admin_review_read(
+                review,
+                products=products,
+                store_name_map=store_name_map,
+            )
+            for review in reviews
+        ],
+        has_more=has_more,
+    )
 
 
 def moderate_admin_review(
@@ -2481,14 +2809,24 @@ def moderate_admin_review(
     )
 
 
-def list_admin_orders(db: Session, current_user: User) -> list[AdminOrderRead]:
+def list_admin_orders(
+    db: Session,
+    current_user: User,
+    *,
+    limit: int = 30,
+    offset: int = 0,
+) -> AdminPageRead[AdminOrderRead]:
     require_admin(current_user)
-    orders = list(
-        db.scalars(
-            select(Order).options(selectinload(Order.items)).order_by(Order.created_at.desc())
-        ).all()
+    statement = (
+        select(Order)
+        .options(selectinload(Order.items))
+        .order_by(Order.created_at.desc())
     )
-    return [_serialize_order(db, order) for order in orders]
+    orders, has_more = paginate_scalars(db, statement, limit=limit, offset=offset)
+    return AdminPageRead(
+        items=[_serialize_order(db, order) for order in orders],
+        has_more=has_more,
+    )
 
 
 def get_admin_order(db: Session, current_user: User, order_id: str) -> AdminOrderDetailRead:
@@ -2508,21 +2846,29 @@ def get_admin_order(db: Session, current_user: User, order_id: str) -> AdminOrde
     return _serialize_order_detail(db, order)
 
 
-def list_admin_return_requests(db: Session, current_user: User) -> list[AdminReturnRequestRead]:
+def list_admin_return_requests(
+    db: Session,
+    current_user: User,
+    *,
+    limit: int = 30,
+    offset: int = 0,
+) -> AdminPageRead[AdminReturnRequestRead]:
     require_admin(current_user)
-    requests = list(
-        db.scalars(
-            select(ReturnRequest)
-            .options(
-                selectinload(ReturnRequest.order).selectinload(Order.items),
-                selectinload(ReturnRequest.order).selectinload(Order.user),
-                selectinload(ReturnRequest.order_item),
-                selectinload(ReturnRequest.reviewed_by_user),
-            )
-            .order_by(ReturnRequest.created_at.desc())
-        ).all()
+    statement = (
+        select(ReturnRequest)
+        .options(
+            selectinload(ReturnRequest.order).selectinload(Order.items),
+            selectinload(ReturnRequest.order).selectinload(Order.user),
+            selectinload(ReturnRequest.order_item),
+            selectinload(ReturnRequest.reviewed_by_user),
+        )
+        .order_by(ReturnRequest.created_at.desc())
     )
-    return [_serialize_return_request(db, request) for request in requests]
+    requests, has_more = paginate_scalars(db, statement, limit=limit, offset=offset)
+    return AdminPageRead(
+        items=[_serialize_return_request(db, request) for request in requests],
+        has_more=has_more,
+    )
 
 
 def get_admin_return_request(
@@ -2704,31 +3050,45 @@ def get_admin_finance_overview_payload(
 def list_admin_payment_transactions_payload(
     db: Session,
     current_user: User,
-) -> list[AdminPaymentTransactionRead]:
-    return list_admin_payment_transactions(db, current_user)
+    *,
+    limit: int = 30,
+    offset: int = 0,
+):
+    return list_admin_payment_transactions(db, current_user, limit=limit, offset=offset)
 
 
 def list_admin_platform_ledger_entries_payload(
     db: Session,
     current_user: User,
-) -> list[AdminPlatformLedgerEntryRead]:
-    return list_admin_platform_ledger_entries(db, current_user)
+    *,
+    limit: int = 30,
+    offset: int = 0,
+):
+    return list_admin_platform_ledger_entries(db, current_user, limit=limit, offset=offset)
 
 
-def list_admin_notifications(db: Session, current_user: User) -> list[AdminNotificationRead]:
+def list_admin_notifications(
+    db: Session,
+    current_user: User,
+    *,
+    limit: int = 30,
+    offset: int = 0,
+) -> AdminPageRead[AdminNotificationRead]:
     require_admin(current_user)
-    notifications = list(
-        db.scalars(select(NotificationEvent).order_by(NotificationEvent.created_at.desc())).all()
-    )
+    statement = select(NotificationEvent).order_by(NotificationEvent.created_at.desc())
+    notifications, has_more = paginate_scalars(db, statement, limit=limit, offset=offset)
     read_keys = set(
         db.scalars(
             select(NotificationRead.notification_key).where(NotificationRead.user_id == current_user.id)
         ).all()
     )
-    return [
-        _serialize_notification(notification, is_read=str(notification.id) in read_keys)
-        for notification in notifications
-    ]
+    return AdminPageRead(
+        items=[
+            _serialize_notification(notification, is_read=str(notification.id) in read_keys)
+            for notification in notifications
+        ],
+        has_more=has_more,
+    )
 
 
 def mark_admin_notification_read(

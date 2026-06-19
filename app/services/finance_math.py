@@ -24,6 +24,7 @@ def vendor_allocation_map(
     *,
     vendor_scope: set[uuid.UUID] | None = None,
     commission_rate: float | None = None,
+    voucher_store_id: str | None = None,
 ) -> dict[uuid.UUID, dict[str, float]]:
     grouped_subtotals: dict[uuid.UUID, float] = defaultdict(float)
     for item in order.items:
@@ -39,13 +40,31 @@ def vendor_allocation_map(
         else float(commission_rate)
     )
 
+    discount_pool = float(order.discount_amount or 0)
+    if voucher_store_id:
+        eligible_subtotal = sum(
+            float(item.line_total)
+            for item in order.items
+            if item.store_id == voucher_store_id
+        )
+    else:
+        eligible_subtotal = float(order.subtotal_amount or 0)
+
     allocations: dict[uuid.UUID, dict[str, float]] = {}
     for vendor_user_id, subtotal in grouped_subtotals.items():
         discount_share = 0.0
-        if order.subtotal_amount > 0 and order.discount_amount > 0:
-            discount_share = (
-                (subtotal / float(order.subtotal_amount)) * float(order.discount_amount)
-            )
+        if discount_pool > 0 and eligible_subtotal > 0:
+            if voucher_store_id:
+                store_lines = [
+                    item
+                    for item in order.items
+                    if item.vendor_user_id == vendor_user_id and item.store_id == voucher_store_id
+                ]
+                store_subtotal = sum(float(item.line_total) for item in store_lines)
+                if store_subtotal > 0:
+                    discount_share = (store_subtotal / eligible_subtotal) * discount_pool
+            else:
+                discount_share = (subtotal / eligible_subtotal) * discount_pool
         gross_amount = max(subtotal - discount_share, 0.0)
         commission_amount = gross_amount * effective_commission_rate
         net_amount = max(gross_amount - commission_amount, 0.0)

@@ -87,8 +87,29 @@ class PromoBannerRead(BaseModel):
     image_url: str | None = None
     accent: str | None = None
     sort_order: int
+    campaign_tag: str | None = None
+    link_type: str | None = None
+    placement: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class DealsHubSectionRead(BaseModel):
+    key: str
+    title: str
+    subtitle: str | None = None
+    kind: str
+    count: int | None = None
+    badge: str | None = None
+
+
+class DealsHubRead(BaseModel):
+    banners: list[PromoBannerRead]
+    flash_events: list[FlashSaleEventRead]
+    promotions: list["StoreVoucherRead"]
+    deal_products: list[ProductRead]
+    sections: list[DealsHubSectionRead]
+    campaign_tags: list[dict[str, str]]
 
 
 class StoreRead(BaseModel):
@@ -124,3 +145,8 @@ class StoreRead(BaseModel):
     sort_order: int
 
     model_config = ConfigDict(from_attributes=True)
+
+
+from app.schemas.voucher import StoreVoucherRead  # noqa: E402
+
+DealsHubRead.model_rebuild()

@@ -3,6 +3,10 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, File, Form, UploadFile, status
 from sqlalchemy.orm import Session
 
+from app.controllers.flash_sale_nominations_controller import (
+    create_vendor_flash_sale_nomination,
+    list_vendor_flash_sale_nominations,
+)
 from app.controllers.vendor_controller import (
     archive_vendor_voucher,
     create_vendor_voucher,
@@ -45,6 +49,8 @@ from app.schemas.vendor import (
     VendorVoucherGiftPayload,
     VendorVoucherRead,
     VendorVoucherUpsert,
+    VendorFlashSaleNominationCreate,
+    VendorFlashSaleNominationRead,
     VendorPayoutInstitutionRead,
     VendorWalletPayoutDetailsUpdate,
     VendorWalletRead,
@@ -370,6 +376,27 @@ def delete_vendor_voucher(
 ):
     archive_vendor_voucher(db, current_user, voucher_id)
     return MessageResponse(message="Store promotion archived successfully.")
+
+
+@router.get("/flash-sale-nominations", response_model=list[VendorFlashSaleNominationRead])
+def get_vendor_flash_sale_nominations(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return list_vendor_flash_sale_nominations(db, current_user)
+
+
+@router.post(
+    "/flash-sale-nominations",
+    response_model=VendorFlashSaleNominationRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def post_vendor_flash_sale_nomination(
+    payload: VendorFlashSaleNominationCreate,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return create_vendor_flash_sale_nomination(db, current_user, payload)
 
 
 @router.patch("/orders/{order_id}/status", response_model=VendorOrderRead)

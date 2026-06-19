@@ -11,6 +11,7 @@ from app.core.security import decode_access_token
 from app.models import User
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
+oauth2_scheme_optional = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=False)
 ACCOUNT_BLOCKED_ERROR_CODE = "ACCOUNT_BLOCKED"
 ACCOUNT_BLOCKED_MESSAGE = "This account has been blocked. Contact ODOS support."
 
@@ -55,5 +56,28 @@ def get_current_user(
 
     if not user.is_active:
         raise_account_blocked()
+
+    return user
+
+
+def get_optional_current_user(
+    token: Annotated[str | None, Depends(oauth2_scheme_optional)],
+    db: Annotated[Session, Depends(get_db)],
+) -> User | None:
+    if not token:
+        return None
+
+    try:
+        payload = decode_access_token(token)
+        subject = payload.get("sub")
+        if subject is None:
+            return None
+        user_id = uuid.UUID(subject)
+    except (jwt.ExpiredSignatureError, jwt.InvalidTokenError, ValueError):
+        return None
+
+    user = db.get(User, user_id)
+    if user is None or not user.is_active:
+        return None
 
     return user

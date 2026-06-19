@@ -5,6 +5,7 @@ from app.models.catalog import (
     Category,
     FlashSaleEvent,
     FlashSaleEventProduct,
+    FlashSaleNomination,
     Market,
     Product,
     PromoBanner,
@@ -35,6 +36,7 @@ from app.models.user import (
     VendorStatus,
     WishlistItem,
 )
+from app.models.user_behavior import UserBehaviorEvent
 from app.models.user_verified_phone import UserVerifiedPhone
 from app.models.vendor import VendorApplication
 
@@ -43,6 +45,7 @@ __all__ = [
     "Category",
     "FlashSaleEvent",
     "FlashSaleEventProduct",
+    "FlashSaleNomination",
     "CartItem",
     "ChatMessage",
     "ChatThread",
@@ -70,6 +73,7 @@ __all__ = [
     "Store",
     "User",
     "UserAuthAccount",
+    "UserBehaviorEvent",
     "UserVerifiedPhone",
     "UserRole",
     "VendorWallet",

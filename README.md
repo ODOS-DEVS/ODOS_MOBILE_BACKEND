@@ -1,6 +1,6 @@
 # ODOS Mobile Backend
 
-FastAPI API for the ODOS marketplace: mobile shopper app, vendor flows, and admin dashboard.
+FastAPI API for the ODOS marketplace — powers the mobile shopper app, vendor tools, and admin dashboard.
 
 | Repository | GitHub |
 |------------|--------|
@@ -11,20 +11,34 @@ FastAPI API for the ODOS marketplace: mobile shopper app, vendor flows, and admi
 
 - FastAPI · SQLAlchemy 2 · Alembic · PostgreSQL
 - JWT auth · Paystack · Cloudinary · Brevo email · Redis (rate limits + catalog cache)
+- WebSocket realtime for admin and catalog invalidation
 
-## Features
+## What the API covers
 
-- Auth: email/password, Google, email verification, password reset, phone OTP
-- Catalog: categories, markets, stores, products, promo banners, flash sale events
-- Commerce: cart, wishlist, orders, returns, reviews, vouchers, customer wallet
-- Admin: users, vendors, stores, products, orders, finance, notifications
-- Real-time catalog cache invalidation and Redis-backed rate limiting
+**Shopper**
+
+- Auth (email/password, Google, verification, password reset, phone OTP)
+- Catalog: categories, markets, stores, products, deals hub, promo banners, flash sales
+- Cart, wishlist, orders, returns, reviews, vouchers, customer wallet, payments
+- **Recommendations**: `/api/recommendations/for-you`, `/api/recommendations/similar/{product_id}`
+- **Behavior tracking**: product views, clicks, search taps (feeds the recommendation engine)
+
+**Vendor**
+
+- Store profile, products, orders, vouchers, flash sale nominations
+
+**Admin**
+
+- Full CRUD across users, vendors, stores, catalog, orders, finance, notifications
+- **Cursor-style admin pagination**: `{ items, has_more }` on list endpoints
+- Promo banners with `placement`, `link_type`, `campaign_tag`
+- Single-record fetch for studio editors (`GET /admin/promo-banners/{id}`)
 
 ## Requirements
 
 - Python 3.11+
 - PostgreSQL
-- Optional: Redis (Upstash or Render), Cloudinary, Brevo, Paystack, Arkesel SMS
+- Optional but recommended: Redis (Upstash or Render), Cloudinary, Brevo, Paystack, Arkesel SMS
 
 ## Local setup
 
@@ -34,7 +48,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Create `.env` in the project root (never commit this file). Minimum variables:
+Create `.env` in the project root (never commit this file). Minimum:
 
 ```env
 DATABASE_URL=postgresql+psycopg://user:password@localhost:5432/odos_mobile
@@ -69,51 +83,78 @@ uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 - API docs: http://127.0.0.1:8000/docs
 - Health: http://127.0.0.1:8000/api/health
 
-Use `--host 0.0.0.0` when testing from a physical device on the same network.
+Use `--host 0.0.0.0` when testing from a phone on the same network.
+
+## Migrations
+
+Recent additions (run `alembic upgrade head` after pull):
+
+- User behavior tracking tables (recommendations input)
+- Promo banner placement and link metadata
+- Promotions / voucher system enhancements
 
 ## Deployment (Render)
 
 This repo includes `render.yaml` for a Blueprint with web service + Postgres.
 
 1. Connect the GitHub repo in Render and deploy the Blueprint.
-2. Set secrets in Render: `CORS_ORIGINS`, Cloudinary, Brevo, Paystack, Google client IDs.
+2. Set secrets: `CORS_ORIGINS`, Cloudinary, Brevo, Paystack, Google client IDs, Redis URL.
 3. `DATABASE_URL` and `SECRET_KEY` are provisioned by Render.
 4. Migrations run on startup via `alembic upgrade head`.
 
-Production API base URL:
+Production API base:
 
 ```text
 https://odos-backend.onrender.com/api
 ```
 
-Add your admin and any web client origins to `CORS_ORIGINS`.
+Add admin and any web client origins to `CORS_ORIGINS`.
 
 ## API overview
 
 **Public / shopper**
 
-- `/api/auth/*` · `/api/account/*` · `/api/cart*` · `/api/wishlist*`
-- `/api/catalog/*` · `/api/orders*` · `/api/notifications*`
-- `/api/vouchers/*` · `/api/payments/*` · `/api/health`
+| Area | Prefix |
+|------|--------|
+| Auth & account | `/api/auth/*`, `/api/account/*` |
+| Catalog & deals | `/api/catalog/*`, `/api/deals/*` |
+| Recommendations | `/api/recommendations/*` |
+| Behavior | `/api/behavior/*` |
+| Commerce | `/api/cart*`, `/api/wishlist*`, `/api/orders*` |
+| Payments & vouchers | `/api/payments/*`, `/api/vouchers/*` |
+| Health | `/api/health` |
 
 **Admin**
 
-- `/api/admin/auth/*` · `/api/admin/dashboard`
-- `/api/admin/users*` · `/api/admin/vendors*` · `/api/admin/stores*`
-- `/api/admin/categories*` · `/api/admin/products*`
-- `/api/admin/promo-banners*` · `/api/admin/flash-sale-events*`
-- `/api/admin/orders*` · `/api/admin/notifications*`
+| Area | Prefix |
+|------|--------|
+| Auth & dashboard | `/api/admin/auth/*`, `/api/admin/dashboard` |
+| Directory lists | `/api/admin/users*`, `/api/admin/vendors*`, `/api/admin/stores*`, … |
+| Merchandising | `/api/admin/promo-banners*`, `/api/admin/flash-sale-events*` |
+| Operations | `/api/admin/orders*`, `/api/admin/notifications*`, `/api/admin/finance*` |
+
+Admin list responses use `{ "items": [...], "has_more": true|false }`.
+
+## Recommendations (how it works)
+
+The recommendation service blends:
+
+- Category and store affinity from user behavior events
+- Co-purchase and recency signals
+- In-stock and catalog backfill when personalized results are thin
+
+Mobile clients send behavior via `/api/behavior/events` and read feeds from `/api/recommendations/for-you` and `/api/recommendations/similar/{product_id}`.
 
 ## Project structure
 
 ```text
 app/
-  controllers/
-  core/
-  models/
-  routes/
-  schemas/
-  services/
+  controllers/     # Route handlers
+  core/            # Auth, cache, pagination, promo config
+  models/          # SQLAlchemy models (incl. user_behavior)
+  routes/          # FastAPI routers
+  schemas/         # Pydantic request/response models
+  services/        # recommendation_service, promotion_service, pricing, …
 alembic/versions/
 ```
 
@@ -123,6 +164,16 @@ alembic/versions/
 alembic upgrade head
 python3 -m py_compile app/main.py
 ```
+
+## Troubleshooting
+
+| Issue | What to check |
+|-------|----------------|
+| Empty recommendations | Behavior migrations applied; user has viewed/clicked products |
+| Admin list mismatch | Deploy latest backend so `{ items, has_more }` is returned |
+| Promo banner 404 in studio | `GET /admin/promo-banners/{id}` route deployed |
+| Redis errors on Render | `REDIS_URL` set; check `/api/health` hint |
+| CORS | `CORS_ORIGINS` includes admin and mobile web origins |
 
 ## License
 

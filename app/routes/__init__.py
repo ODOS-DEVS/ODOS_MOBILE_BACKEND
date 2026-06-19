@@ -1,9 +1,10 @@
-from app.routes import admin, account, auth, cart, catalog, chat, customer_wallet, health, notifications, orders, payments, realtime, vouchers, vendor, wishlist
+from app.routes import admin, account, auth, behavior, cart, catalog, chat, customer_wallet, health, notifications, orders, payments, realtime, recommendations, vouchers, vendor, wishlist
 
 __all__ = [
     "admin",
     "account",
     "auth",
+    "behavior",
     "cart",
     "catalog",
     "chat",
@@ -13,6 +14,7 @@ __all__ = [
     "orders",
     "payments",
     "realtime",
+    "recommendations",
     "vouchers",
     "vendor",
     "wishlist",

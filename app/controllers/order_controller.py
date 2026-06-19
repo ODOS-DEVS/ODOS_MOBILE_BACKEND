@@ -12,6 +12,7 @@ from app.controllers.vendor_controller import fetch_vendor_dashboard, list_vendo
 from app.controllers.voucher_controller import build_voucher_quote
 from app.models import CartItem, Order, OrderItem, Product, ReturnRequest, User, VoucherRedemption
 from app.schemas.order import OrderCreate, OrderRead, ReturnRequestCreate, ReturnRequestRead
+from app.services.pricing_service import compute_server_subtotal
 from app.services.finance_math import round_money
 from app.services.realtime_service import realtime_manager
 from app.services.push_service import send_expo_push_notification
@@ -168,6 +169,16 @@ def prepare_order_for_checkout(
     computed_subtotal = 0.0
     voucher_quote = None
     product_snapshot_map = _load_product_snapshot_map(db, payload)
+    server_subtotal, resolved_prices = compute_server_subtotal(db, payload.items)
+
+    for item in payload.items:
+        pricing = resolved_prices.get(item.product_id)
+        if pricing and abs(pricing.sale_price - item.unit_price) > 0.01:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Some item prices changed. Refresh your cart and try again.",
+            )
+
     if payload.voucher_code:
         voucher_quote = build_voucher_quote(
             db,
@@ -240,6 +251,11 @@ def prepare_order_for_checkout(
         )
 
     computed_subtotal = round(computed_subtotal, 2)
+    if abs(computed_subtotal - server_subtotal) > 0.02:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The order totals didn't match the selected items.",
+        )
     computed_total = _validate_order_totals(
         payload,
         computed_subtotal=computed_subtotal,
@@ -286,6 +302,10 @@ def activate_order_after_payment(
         cart_items = list(db.scalars(select(CartItem).where(CartItem.user_id == user.id)).all())
         for cart_item in cart_items:
             db.delete(cart_item)
+
+    from app.controllers.behavior_controller import record_purchase_events_for_order
+
+    record_purchase_events_for_order(db, user, order)
 
     preview = order_notification_image(order)
     create_notification_event(

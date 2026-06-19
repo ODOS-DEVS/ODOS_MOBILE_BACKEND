@@ -42,7 +42,8 @@ async def websocket_events(websocket: WebSocket) -> None:
     token = websocket.query_params.get("token")
     user = _resolve_websocket_user(token) if token else None
     if token and not user:
-        await websocket.close(code=4401)
+        await websocket.accept()
+        await websocket.close(code=4401, reason="Unauthorized")
         return
 
     connection_id = str(user.id) if user else f"public:{uuid.uuid4()}"

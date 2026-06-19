@@ -9,7 +9,12 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from app.controllers.notification_controller import create_notification_event, order_notification_image
+from app.core.admin_pagination import paginate_scalars
+from app.schemas.pagination import AdminPageRead
+from app.controllers.notification_controller import (
+    create_notification_event,
+    order_notification_image,
+)
 from app.controllers.finance_controller import record_vendor_payout_paid
 from app.core.config import settings
 from app.models import (
@@ -61,7 +66,10 @@ PAYOUT_METHOD_TO_RECIPIENT_TYPE = {
 
 
 def _require_approved_vendor(current_user: User) -> None:
-    if current_user.role == UserRole.CUSTOMER or current_user.vendor_status != VendorStatus.APPROVED:
+    if (
+        current_user.role == UserRole.CUSTOMER
+        or current_user.vendor_status != VendorStatus.APPROVED
+    ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Your vendor wallet is only available to approved vendors.",
@@ -101,7 +109,9 @@ def _fetch_supported_payout_institutions(
                 code=code,
                 name=name,
                 payout_method_type=payout_method_type,
-                currency=str(entry.get("currency") or settings.paystack_currency).upper(),
+                currency=str(
+                    entry.get("currency") or settings.paystack_currency
+                ).upper(),
             )
         )
     return result
@@ -119,7 +129,9 @@ def _resolve_payout_institution(
         if normalized_input in {code_match, name_match}:
             return institution
 
-    readable_type = "mobile money network" if payout_method_type == "mobile_money" else "bank"
+    readable_type = (
+        "mobile money network" if payout_method_type == "mobile_money" else "bank"
+    )
     raise HTTPException(
         status_code=status.HTTP_400_BAD_REQUEST,
         detail=(
@@ -183,16 +195,14 @@ def _serialize_vendor_withdrawal_request(
         admin_note=request.admin_note,
         payout_method_type=request.payout_method_type,
         payout_account_name=request.payout_account_name,
-        payout_account_number_masked=_mask_account_number(
-            request.payout_account_number
-        )
+        payout_account_number_masked=_mask_account_number(request.payout_account_number)
         or "",
         payout_provider=request.payout_provider,
         transfer_failure_reason=request.transfer_failure_reason,
         reviewed_by_user_id=request.reviewed_by_user_id,
-        reviewed_by_name=request.reviewed_by_user.full_name
-        if request.reviewed_by_user
-        else None,
+        reviewed_by_name=(
+            request.reviewed_by_user.full_name if request.reviewed_by_user else None
+        ),
         reviewed_at=request.reviewed_at,
         paid_at=request.paid_at,
         transfer_initiated_at=request.transfer_initiated_at,
@@ -223,9 +233,7 @@ def _serialize_vendor_wallet(wallet: VendorWallet) -> VendorWalletRead:
         total_commission=_round_money(wallet.total_commission),
         payout_method_type=wallet.payout_method_type,
         payout_account_name=wallet.payout_account_name,
-        payout_account_number_masked=_mask_account_number(
-            wallet.payout_account_number
-        ),
+        payout_account_number_masked=_mask_account_number(wallet.payout_account_number),
         payout_provider=wallet.payout_provider,
         recent_transactions=[
             _serialize_wallet_transaction(transaction)
@@ -644,7 +652,7 @@ def create_vendor_withdrawal_request(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="The withdrawal was created, but we couldn't reload it.",
-    )
+        )
     return _serialize_vendor_withdrawal_request(matching_request)
 
 
@@ -669,9 +677,7 @@ def _release_withdrawal_back_to_available_balance(
     wallet.pending_withdrawal_balance = _round_money(
         wallet.pending_withdrawal_balance - request.amount
     )
-    wallet.available_balance = _round_money(
-        wallet.available_balance + request.amount
-    )
+    wallet.available_balance = _round_money(wallet.available_balance + request.amount)
     db.add(
         VendorWalletTransaction(
             wallet_id=wallet.id,
@@ -734,7 +740,9 @@ def _initiate_vendor_withdrawal_transfer(
         )
 
     request.paystack_transfer_reference = transfer_reference
-    request.paystack_transfer_code = str(transfer_data.get("transfer_code") or "").strip() or None
+    request.paystack_transfer_code = (
+        str(transfer_data.get("transfer_code") or "").strip() or None
+    )
     request.paystack_transfer_id = (
         str(transfer_data.get("id")) if transfer_data.get("id") is not None else None
     )
@@ -848,9 +856,7 @@ def _serialize_admin_vendor_withdrawal_request(
         admin_note=request.admin_note,
         payout_method_type=request.payout_method_type,
         payout_account_name=request.payout_account_name,
-        payout_account_number_masked=_mask_account_number(
-            request.payout_account_number
-        )
+        payout_account_number_masked=_mask_account_number(request.payout_account_number)
         or "",
         payout_provider=request.payout_provider,
         paystack_transfer_reference=request.paystack_transfer_reference,
@@ -862,9 +868,9 @@ def _serialize_admin_vendor_withdrawal_request(
             request.wallet.pending_withdrawal_balance
         ),
         reviewed_by_user_id=request.reviewed_by_user_id,
-        reviewed_by_name=request.reviewed_by_user.full_name
-        if request.reviewed_by_user
-        else None,
+        reviewed_by_name=(
+            request.reviewed_by_user.full_name if request.reviewed_by_user else None
+        ),
         reviewed_at=request.reviewed_at,
         paid_at=request.paid_at,
         created_at=request.created_at,
@@ -875,41 +881,50 @@ def _serialize_admin_vendor_withdrawal_request(
 def list_admin_vendor_withdrawal_requests(
     db: Session,
     current_user: User,
-) -> list[AdminVendorWithdrawalRequestRead]:
+    *,
+    limit: int = 30,
+    offset: int = 0,
+) -> AdminPageRead[AdminVendorWithdrawalRequestRead]:
     if current_user.role != UserRole.ADMIN:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin access is required for this action.",
         )
 
-    requests = list(
-        db.scalars(
-            select(VendorWithdrawalRequest)
-            .options(
-                selectinload(VendorWithdrawalRequest.wallet),
-                selectinload(VendorWithdrawalRequest.vendor_user),
-                selectinload(VendorWithdrawalRequest.reviewed_by_user),
-            )
-            .order_by(VendorWithdrawalRequest.created_at.desc())
-        ).all()
+    statement = (
+        select(VendorWithdrawalRequest)
+        .options(
+            selectinload(VendorWithdrawalRequest.wallet),
+            selectinload(VendorWithdrawalRequest.vendor_user),
+            selectinload(VendorWithdrawalRequest.reviewed_by_user),
+        )
+        .order_by(VendorWithdrawalRequest.created_at.desc())
     )
+    requests, has_more = paginate_scalars(db, statement, limit=limit, offset=offset)
     vendor_ids = {request.vendor_user_id for request in requests}
-    store_rows = db.execute(
-        select(Store.vendor_user_id, Store.title)
-        .where(Store.vendor_user_id.in_(vendor_ids))
-        .order_by(Store.created_at.asc())
-    ).all() if vendor_ids else []
+    store_rows = (
+        db.execute(
+            select(Store.vendor_user_id, Store.title)
+            .where(Store.vendor_user_id.in_(vendor_ids))
+            .order_by(Store.created_at.asc())
+        ).all()
+        if vendor_ids
+        else []
+    )
     store_name_map: dict[uuid.UUID, str | None] = {}
     for vendor_user_id, store_title in store_rows:
         store_name_map.setdefault(vendor_user_id, store_title)
 
-    return [
-        _serialize_admin_vendor_withdrawal_request(
-            request,
-            store_name_map=store_name_map,
-        )
-        for request in requests
-    ]
+    return AdminPageRead(
+        items=[
+            _serialize_admin_vendor_withdrawal_request(
+                request,
+                store_name_map=store_name_map,
+            )
+            for request in requests
+        ],
+        has_more=has_more,
+    )
 
 
 def update_admin_vendor_withdrawal_request(
@@ -944,7 +959,10 @@ def update_admin_vendor_withdrawal_request(
             detail="Withdrawal request not found.",
         )
 
-    if request.status in {"paid", "rejected", "failed"} and payload.status != request.status:
+    if (
+        request.status in {"paid", "rejected", "failed"}
+        and payload.status != request.status
+    ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Resolved withdrawal requests cannot be changed again.",
@@ -994,27 +1012,19 @@ def update_admin_vendor_withdrawal_request(
 
     if next_status == "paid":
         message_title = "Withdrawal paid out"
-        message_body = (
-            f"Your {wallet.currency} {request.amount:.2f} withdrawal has been marked paid."
-        )
+        message_body = f"Your {wallet.currency} {request.amount:.2f} withdrawal has been marked paid."
         accent = "success"
     elif next_status == "approved":
         message_title = "Withdrawal approved"
-        message_body = (
-            f"Your {wallet.currency} {request.amount:.2f} withdrawal is approved and awaiting payout."
-        )
+        message_body = f"Your {wallet.currency} {request.amount:.2f} withdrawal is approved and awaiting payout."
         accent = "success"
     elif next_status == "processing":
         message_title = "Withdrawal payout started"
-        message_body = (
-            f"ODOS has started processing your {wallet.currency} {request.amount:.2f} payout."
-        )
+        message_body = f"ODOS has started processing your {wallet.currency} {request.amount:.2f} payout."
         accent = "neutral"
     elif next_status == "failed":
         message_title = "Withdrawal payout failed"
-        message_body = (
-            f"Your {wallet.currency} {request.amount:.2f} payout could not be completed."
-        )
+        message_body = f"Your {wallet.currency} {request.amount:.2f} payout could not be completed."
         accent = "warning"
     elif next_status == "rejected":
         message_title = "Withdrawal declined"
@@ -1024,9 +1034,7 @@ def update_admin_vendor_withdrawal_request(
         accent = "warning"
     else:
         message_title = "Withdrawal updated"
-        message_body = (
-            f"Your {wallet.currency} {request.amount:.2f} withdrawal is now {next_status}."
-        )
+        message_body = f"Your {wallet.currency} {request.amount:.2f} withdrawal is now {next_status}."
         accent = "neutral"
 
     create_notification_event(
@@ -1059,7 +1067,9 @@ def update_admin_vendor_withdrawal_request(
         )
 
     store_title = db.scalar(
-        select(Store.title).where(Store.vendor_user_id == refreshed_request.vendor_user_id)
+        select(Store.title).where(
+            Store.vendor_user_id == refreshed_request.vendor_user_id
+        )
     )
     publish_vendor_wallet_updates(refreshed_request.vendor_user_id)
     return _serialize_admin_vendor_withdrawal_request(
