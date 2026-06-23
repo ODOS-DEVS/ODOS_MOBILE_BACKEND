@@ -9,6 +9,7 @@ from app.core.config import settings
 from app.routes import (
     admin,
     account,
+    assistant,
     auth,
     behavior,
     cart,
@@ -59,6 +60,7 @@ app.include_router(account.router, prefix="/api")
 app.include_router(cart.router, prefix="/api")
 app.include_router(catalog.router, prefix="/api")
 app.include_router(recommendations.router, prefix="/api")
+app.include_router(assistant.router, prefix="/api")
 app.include_router(behavior.router, prefix="/api")
 app.include_router(chat.router, prefix="/api")
 app.include_router(notifications.router, prefix="/api")

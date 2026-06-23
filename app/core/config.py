@@ -112,5 +112,38 @@ class Settings(BaseSettings):
             and self.paystack_public_key.strip()
         )
 
+    assistant_enabled: bool = True
+    assistant_provider: str = "openrouter"
+    assistant_model: str = "meta-llama/llama-3.2-3b-instruct:free"
+    openrouter_api_key: str = ""
+    openrouter_base_url: str = "https://openrouter.ai/api/v1"
+    ollama_base_url: str = "http://127.0.0.1:11434"
+    openai_api_key: str = ""
+    openai_assistant_model: str = "gpt-4o-mini"
+
+    @property
+    def assistant_provider_normalized(self) -> str:
+        value = self.assistant_provider.strip().lower()
+        if value in {"openrouter", "ollama", "openai"}:
+            return value
+        return "openrouter"
+
+    @property
+    def assistant_model_name(self) -> str:
+        if self.assistant_provider_normalized == "openai":
+            return self.openai_assistant_model.strip() or self.assistant_model.strip()
+        return self.assistant_model.strip() or "meta-llama/llama-3.2-3b-instruct:free"
+
+    @property
+    def assistant_is_configured(self) -> bool:
+        if not self.assistant_enabled:
+            return False
+        provider = self.assistant_provider_normalized
+        if provider == "openrouter":
+            return bool(self.openrouter_api_key.strip())
+        if provider == "ollama":
+            return bool(self.ollama_base_url.strip())
+        return bool(self.openai_api_key.strip())
+
 
 settings = Settings()
