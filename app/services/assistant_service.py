@@ -235,7 +235,7 @@ async def _call_llm(
         headers["Authorization"] = f"Bearer {api_key}"
         headers["HTTP-Referer"] = "https://odos.app"
         headers["X-Title"] = "ODOS Mobile Assistant"
-        request_body["response_format"] = {"type": "json_object"}
+        # Free/small OpenRouter models often reject response_format — JSON is enforced via the system prompt.
     elif provider == "ollama":
         base_url = settings.ollama_base_url.rstrip("/")
         url = f"{base_url}/v1/chat/completions"
@@ -281,7 +281,14 @@ async def chat_with_assistant(
             message=payload.message,
         )
     except httpx.HTTPStatusError as exc:
-        logger.warning("Assistant OpenAI HTTP error: %s", exc)
+        detail = ""
+        if exc.response is not None:
+            detail = exc.response.text[:500]
+        logger.warning(
+            "Assistant LLM HTTP error %s: %s",
+            exc.response.status_code if exc.response is not None else "unknown",
+            detail or str(exc),
+        )
         return AssistantChatResponse(
             reply=(
                 "I'm having trouble reaching the AI service right now. "
