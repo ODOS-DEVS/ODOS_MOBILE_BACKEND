@@ -135,6 +135,15 @@ class Settings(BaseSettings):
         return self.assistant_model.strip() or "meta-llama/llama-3.2-3b-instruct:free"
 
     @property
+    def openrouter_api_base(self) -> str:
+        url = self.openrouter_base_url.strip().rstrip("/") or "https://openrouter.ai/api/v1"
+        if url.endswith("/api"):
+            return f"{url}/v1"
+        if "/api/v1" not in url and "openrouter.ai" in url:
+            return f"{url}/v1" if not url.endswith("/v1") else url
+        return url
+
+    @property
     def assistant_is_configured(self) -> bool:
         if not self.assistant_enabled:
             return False

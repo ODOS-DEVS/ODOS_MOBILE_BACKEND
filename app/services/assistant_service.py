@@ -192,6 +192,40 @@ def _fallback_reply(payload: AssistantChatRequest, user: User | None) -> Assista
     )
 
 
+OPENROUTER_FALLBACK_MODELS = (
+    "meta-llama/llama-3.2-3b-instruct:free",
+    "google/gemma-2-9b-it:free",
+    "mistralai/mistral-7b-instruct:free",
+)
+
+
+def _openrouter_error_message(status_code: int, body: str) -> str:
+    lowered = body.lower()
+    if status_code == 401:
+        return (
+            "The OpenRouter API key on the server is invalid or expired. "
+            "Update OPENROUTER_API_KEY in Render and redeploy."
+        )
+    if status_code == 402:
+        return (
+            "OpenRouter needs account credits even for some free models. "
+            "Open openrouter.ai/settings/credits, add a small balance, then try again."
+        )
+    if status_code == 429:
+        return "OpenRouter rate limit reached. Wait a minute and try again."
+    if status_code == 404:
+        return (
+            "That OpenRouter model is unavailable right now. "
+            "Try ASSISTANT_MODEL=google/gemma-2-9b-it:free on Render."
+        )
+    if "response_format" in lowered or "json_object" in lowered:
+        return "The selected model does not support structured JSON mode. Redeploy the latest backend fix."
+    return (
+        "I'm having trouble reaching the AI service right now. "
+        "Try again in a moment, or chat with our support team."
+    )
+
+
 async def _call_llm(
     *,
     user_context: str,
@@ -230,7 +264,7 @@ async def _call_llm(
         api_key = settings.openrouter_api_key.strip()
         if not api_key:
             raise RuntimeError("OpenRouter API key is not configured.")
-        base_url = settings.openrouter_base_url.rstrip("/")
+        base_url = settings.openrouter_api_base
         url = f"{base_url}/chat/completions"
         headers["Authorization"] = f"Bearer {api_key}"
         headers["HTTP-Referer"] = "https://odos.app"
@@ -250,13 +284,36 @@ async def _call_llm(
 
     timeout = 90.0 if provider == "ollama" else 45.0
 
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        response = await client.post(url, headers=headers, json=request_body)
-        response.raise_for_status()
-        payload = response.json()
+    models_to_try = [model]
+    if provider == "openrouter":
+        models_to_try = []
+        for candidate in (model, *OPENROUTER_FALLBACK_MODELS):
+            if candidate not in models_to_try:
+                models_to_try.append(candidate)
 
-    content = payload["choices"][0]["message"]["content"]
-    return _parse_llm_json(content)
+    last_error: httpx.HTTPStatusError | None = None
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        for candidate_model in models_to_try:
+            attempt_body = {**request_body, "model": candidate_model}
+            response = await client.post(url, headers=headers, json=attempt_body)
+            if response.is_success:
+                payload = response.json()
+                content = payload["choices"][0]["message"]["content"]
+                return _parse_llm_json(content)
+
+            last_error = httpx.HTTPStatusError(
+                f"OpenRouter error for {candidate_model}",
+                request=response.request,
+                response=response,
+            )
+            if response.status_code not in {404, 502, 503}:
+                break
+
+    if last_error is not None:
+        raise last_error
+
+    raise RuntimeError("No OpenRouter model candidates were available.")
 
 
 def assistant_is_enabled() -> bool:
@@ -282,18 +339,16 @@ async def chat_with_assistant(
         )
     except httpx.HTTPStatusError as exc:
         detail = ""
+        status_code = exc.response.status_code if exc.response is not None else 0
         if exc.response is not None:
             detail = exc.response.text[:500]
         logger.warning(
             "Assistant LLM HTTP error %s: %s",
-            exc.response.status_code if exc.response is not None else "unknown",
+            status_code or "unknown",
             detail or str(exc),
         )
         return AssistantChatResponse(
-            reply=(
-                "I'm having trouble reaching the AI service right now. "
-                "Try again in a moment, or chat with our support team."
-            ),
+            reply=_openrouter_error_message(status_code, detail),
             suggested_actions=[
                 AssistantActionRead(label="Contact support", route="/screens/support/chat"),
             ],
