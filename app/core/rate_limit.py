@@ -232,3 +232,18 @@ def limit_wallet_checkout(user: User) -> None:
             )
         ]
     )
+
+
+def limit_assistant_chat(request: Request, user: User | None) -> None:
+    identifier = str(user.id) if user else client_ip(request)
+    scope = "assistant:chat:user" if user else "assistant:chat:ip"
+    enforce_rate_limits(
+        [
+            RateLimitRule(
+                scope=scope,
+                identifier=identifier,
+                limit=40 if user else 20,
+                window_seconds=3600,
+            )
+        ]
+    )

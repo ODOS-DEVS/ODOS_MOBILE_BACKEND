@@ -22,6 +22,7 @@ FastAPI API for the ODOS marketplace — powers the mobile shopper app, vendor t
 - Cart, wishlist, orders, returns, reviews, vouchers, customer wallet, payments
 - **Recommendations**: `/api/recommendations/for-you`, `/api/recommendations/similar/{product_id}`
 - **Behavior tracking**: product views, clicks, search taps (feeds the recommendation engine)
+- **In-app AI assistant**: `/api/assistant/chat` with order/cart context when signed in
 
 **Vendor**
 
@@ -71,6 +72,9 @@ PAYSTACK_SECRET_KEY=
 PAYSTACK_PUBLIC_KEY=
 PAYSTACK_WEBHOOK_SECRET=
 GOOGLE_CLIENT_IDS=
+ASSISTANT_ENABLED=true
+OPENAI_API_KEY=
+OPENAI_ASSISTANT_MODEL=gpt-4o-mini
 ```
 
 Apply migrations and run:
@@ -120,6 +124,7 @@ Add admin and any web client origins to `CORS_ORIGINS`.
 | Catalog & deals | `/api/catalog/*`, `/api/deals/*` |
 | Recommendations | `/api/recommendations/*` |
 | Behavior | `/api/behavior/*` |
+| Assistant | `/api/assistant/*` |
 | Commerce | `/api/cart*`, `/api/wishlist*`, `/api/orders*` |
 | Payments & vouchers | `/api/payments/*`, `/api/vouchers/*` |
 | Health | `/api/health` |
