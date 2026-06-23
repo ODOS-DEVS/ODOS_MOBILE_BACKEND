@@ -27,3 +27,5 @@ class AssistantStatusResponse(BaseModel):
     enabled: bool
     provider: str
     model: str | None = None
+    llm_reachable: bool | None = None
+    llm_error: str | None = None

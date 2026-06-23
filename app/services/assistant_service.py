@@ -220,6 +220,21 @@ def _openrouter_error_message(status_code: int, body: str) -> str:
         )
     if "response_format" in lowered or "json_object" in lowered:
         return "The selected model does not support structured JSON mode. Redeploy the latest backend fix."
+    if status_code == 400:
+        return (
+            "OpenRouter rejected the request (HTTP 400). "
+            "Check ASSISTANT_MODEL on Render or try google/gemma-2-9b-it:free."
+        )
+    if status_code in {502, 503, 504}:
+        return (
+            f"OpenRouter is temporarily unavailable (HTTP {status_code}). "
+            "Try again in a minute."
+        )
+    if status_code:
+        return (
+            f"I'm having trouble reaching the AI service (HTTP {status_code}). "
+            "Check OPENROUTER_API_KEY and credits on openrouter.ai, then try again."
+        )
     return (
         "I'm having trouble reaching the AI service right now. "
         "Try again in a moment, or chat with our support team."
@@ -320,6 +335,45 @@ def assistant_is_enabled() -> bool:
     return settings.assistant_is_configured
 
 
+async def probe_assistant_llm() -> tuple[bool, str | None]:
+    """Lightweight OpenRouter ping for /assistant/status?probe=1 diagnostics."""
+    if not assistant_is_enabled():
+        return False, "Assistant is not configured (missing API key)."
+
+    provider = settings.assistant_provider_normalized
+    if provider != "openrouter":
+        return True, None
+
+    api_key = settings.openrouter_api_key.strip()
+    base_url = settings.openrouter_api_base
+    url = f"{base_url}/chat/completions"
+    model = settings.assistant_model_name
+
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}",
+        "HTTP-Referer": "https://odos.app",
+        "X-Title": "ODOS Mobile Assistant",
+    }
+    body = {
+        "model": model,
+        "max_tokens": 8,
+        "messages": [{"role": "user", "content": "ping"}],
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            response = await client.post(url, headers=headers, json=body)
+        if response.is_success:
+            return True, None
+        return False, _openrouter_error_message(response.status_code, response.text[:500])
+    except httpx.RequestError as exc:
+        return False, f"Could not reach OpenRouter ({exc.__class__.__name__}). Check OPENROUTER_BASE_URL."
+    except Exception as exc:
+        logger.warning("Assistant probe error: %s", exc)
+        return False, "Unexpected error while probing OpenRouter."
+
+
 async def chat_with_assistant(
     db: Session,
     user: User | None,
@@ -347,6 +401,8 @@ async def chat_with_assistant(
             status_code or "unknown",
             detail or str(exc),
         )
+        if status_code in {402, 429, 502, 503, 504}:
+            return _fallback_reply(payload, user)
         return AssistantChatResponse(
             reply=_openrouter_error_message(status_code, detail),
             suggested_actions=[

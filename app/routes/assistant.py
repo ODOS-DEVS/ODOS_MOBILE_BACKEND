@@ -14,8 +14,8 @@ router = APIRouter(prefix="/assistant", tags=["assistant"])
 
 
 @router.get("/status", response_model=AssistantStatusResponse)
-def assistant_status():
-    return get_assistant_status()
+async def assistant_status(probe: bool = False):
+    return await get_assistant_status(probe=probe)
 
 
 @router.post("/chat", response_model=AssistantChatResponse)

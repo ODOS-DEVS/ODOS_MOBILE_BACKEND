@@ -140,7 +140,7 @@ class Settings(BaseSettings):
         if url.endswith("/api"):
             return f"{url}/v1"
         if "/api/v1" not in url and "openrouter.ai" in url:
-            return f"{url}/v1" if not url.endswith("/v1") else url
+            return "https://openrouter.ai/api/v1"
         return url
 
     @property
