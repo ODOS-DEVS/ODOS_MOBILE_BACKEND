@@ -64,6 +64,10 @@ from app.controllers.admin_controller import (
     update_admin_voucher,
     review_admin_voucher,
 )
+from app.controllers.delivery_settings_controller import (
+    get_admin_delivery_settings,
+    update_admin_delivery_settings,
+)
 from app.controllers.flash_sale_nominations_controller import (
     list_admin_flash_sale_nominations,
     review_admin_flash_sale_nomination,
@@ -85,7 +89,10 @@ from app.controllers.wallet_controller import (
 from app.core.auth import get_current_user
 from app.core.database import get_db
 from app.routes.admin_list_params import AdminListParams
-from app.schemas.pagination import AdminPageRead
+from app.schemas.delivery_settings import (
+    AdminDeliverySettingsRead,
+    AdminDeliverySettingsUpdate,
+)
 from app.models import User
 from app.schemas.admin import (
     AdminBootstrapStatusRead,
@@ -1003,3 +1010,21 @@ def patch_notification_read(
     db: Session = Depends(get_db),
 ):
     return mark_admin_notification_read(db, current_user, notification_id)
+
+
+@router.get("/delivery-settings", response_model=AdminDeliverySettingsRead)
+def admin_get_delivery_settings(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return get_admin_delivery_settings(db, current_user)
+
+
+@router.patch("/delivery-settings", response_model=AdminDeliverySettingsRead)
+def admin_update_delivery_settings(
+    payload: AdminDeliverySettingsUpdate,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return update_admin_delivery_settings(db, current_user, payload)
+

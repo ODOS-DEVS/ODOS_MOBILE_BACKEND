@@ -16,6 +16,7 @@ from app.routes import (
     catalog,
     chat,
     customer_wallet,
+    delivery,
     health,
     notifications,
     orders,
@@ -61,6 +62,7 @@ app.include_router(cart.router, prefix="/api")
 app.include_router(catalog.router, prefix="/api")
 app.include_router(recommendations.router, prefix="/api")
 app.include_router(assistant.router, prefix="/api")
+app.include_router(delivery.router, prefix="/api")
 app.include_router(behavior.router, prefix="/api")
 app.include_router(chat.router, prefix="/api")
 app.include_router(notifications.router, prefix="/api")

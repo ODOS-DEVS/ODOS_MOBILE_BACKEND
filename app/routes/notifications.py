@@ -8,6 +8,7 @@ from app.controllers.notification_controller import (
     list_notification_read_keys,
     mark_notification_keys_read,
     register_expo_push_token,
+    unregister_expo_push_token,
 )
 from app.core.auth import get_current_user
 from app.core.database import get_db
@@ -59,3 +60,11 @@ def save_push_token(
     db: Session = Depends(get_db),
 ):
     return register_expo_push_token(db, current_user, payload.expo_push_token)
+
+
+@router.delete("/push-token", response_model=UserRead)
+def clear_push_token(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return unregister_expo_push_token(db, current_user)

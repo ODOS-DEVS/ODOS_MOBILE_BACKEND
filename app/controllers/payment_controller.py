@@ -215,7 +215,7 @@ def _apply_successful_payment(
 
     first_time_payment = order.payment_status != "paid"
     if first_time_payment:
-        activate_order_after_payment(db, order.user, order)
+        payment_event = activate_order_after_payment(db, order.user, order)
         order.payment_reference = payment_transaction.reference
         order.payment_provider = payment_transaction.provider
         order.payment_status = "paid"
@@ -233,6 +233,7 @@ def _apply_successful_payment(
             title="Payment confirmed",
             body=f"Order #{order.order_number} is now being prepared.",
             order=order,
+            notification_event=payment_event,
         )
         db.commit()
         db.refresh(order)

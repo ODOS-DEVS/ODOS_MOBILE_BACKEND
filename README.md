@@ -20,6 +20,8 @@ FastAPI API for the ODOS marketplace — powers the mobile shopper app, vendor t
 - Auth (email/password, Google, verification, password reset, phone OTP)
 - Catalog: categories, markets, stores, products, deals hub, promo banners, flash sales
 - Cart, wishlist, orders, returns, reviews, vouchers, customer wallet, payments
+- Delivery quotes at checkout, configurable delivery settings, order payment SMS
+- Push notifications (Expo) with tap-to-navigate payloads
 - **Recommendations**: `/api/recommendations/for-you`, `/api/recommendations/similar/{product_id}`
 - **Behavior tracking**: product views, clicks, search taps (feeds the recommendation engine)
 - **In-app AI assistant**: `/api/assistant/chat` with order/cart context when signed in
@@ -31,7 +33,7 @@ FastAPI API for the ODOS marketplace — powers the mobile shopper app, vendor t
 **Admin**
 
 - Full CRUD across users, vendors, stores, catalog, orders, finance, notifications
-- **Cursor-style admin pagination**: `{ items, has_more }` on list endpoints
+- **Paginated admin lists**: `{ items, has_more }` on list endpoints
 - Promo banners with `placement`, `link_type`, `campaign_tag`
 - Single-record fetch for studio editors (`GET /admin/promo-banners/{id}`)
 

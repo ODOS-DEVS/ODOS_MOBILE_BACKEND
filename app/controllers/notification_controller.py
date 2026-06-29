@@ -202,3 +202,10 @@ def register_expo_push_token(db: Session, user: User, expo_push_token: str) -> U
     db.commit()
     db.refresh(user)
     return user
+
+
+def unregister_expo_push_token(db: Session, user: User) -> User:
+    user.expo_push_token = None
+    db.commit()
+    db.refresh(user)
+    return user

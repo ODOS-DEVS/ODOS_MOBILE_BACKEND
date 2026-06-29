@@ -710,6 +710,8 @@ class AdminOrderDetailRead(AdminOrderRead):
     subtotal_amount: float
     shipping_amount: float
     discount_amount: float
+    delivery_method: str
+    delivery_method_label: str
     progress: float | None
     tracking_eta: str | None
     cancellation_reason: str | None

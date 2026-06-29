@@ -40,6 +40,12 @@ class Order(Base):
     )
     subtotal_amount: Mapped[float] = mapped_column(Float, nullable=False)
     shipping_amount: Mapped[float] = mapped_column(Float, nullable=False, default=0)
+    delivery_method: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="economy",
+        server_default="economy",
+    )
     total_amount: Mapped[float] = mapped_column(Float, nullable=False)
     progress: Mapped[float | None] = mapped_column(Float, nullable=True)
     tracking_eta: Mapped[str | None] = mapped_column(String(120), nullable=True)

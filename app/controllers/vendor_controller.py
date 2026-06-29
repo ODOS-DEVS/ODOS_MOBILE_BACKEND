@@ -57,14 +57,19 @@ from app.services.email_service import (
 )
 from app.services.media_service import remove_media_file, save_image_upload, save_image_uploads
 from app.services.realtime_service import realtime_manager
+from app.services.delivery_service import (
+    get_delivery_config,
+    tracking_eta_for_vendor_status,
+)
 
 logger = logging.getLogger(__name__)
-VENDOR_ACTIVE_ORDER_STATUSES = {"pending", "confirmed", "processing", "ready"}
+VENDOR_ACTIVE_ORDER_STATUSES = {"pending", "confirmed", "processing", "ready", "out_for_delivery"}
 VENDOR_ALLOWED_STATUSES = {
     "pending",
     "confirmed",
     "processing",
     "ready",
+    "out_for_delivery",
     "delivered",
     "cancelled",
 }
@@ -962,6 +967,12 @@ def update_vendor_order_status(
         order.tracking_eta = None
         order.cancelled_at = datetime.now(UTC)
         order.cancellation_reason = "Cancelled by store"
+    elif next_status == "out_for_delivery":
+        order.status = "processing"
+        order.progress = 0.9
+        order.tracking_eta = "Out for delivery · on the way to you"
+        order.cancelled_at = None
+        order.cancellation_reason = None
     else:
         order.status = "processing"
         progress_map = {
@@ -970,14 +981,12 @@ def update_vendor_order_status(
             "processing": 0.45,
             "ready": 0.75,
         }
-        eta_map = {
-            "pending": "Awaiting vendor confirmation",
-            "confirmed": "Confirmed by vendor",
-            "processing": "Being prepared for dispatch",
-            "ready": "Ready for delivery handoff",
-        }
         order.progress = progress_map.get(next_status, order.progress)
-        order.tracking_eta = eta_map.get(next_status, order.tracking_eta)
+        order.tracking_eta = tracking_eta_for_vendor_status(
+            next_status,
+            order.delivery_method,
+            get_delivery_config(db),
+        ) or order.tracking_eta
         order.cancelled_at = None
         order.cancellation_reason = None
 

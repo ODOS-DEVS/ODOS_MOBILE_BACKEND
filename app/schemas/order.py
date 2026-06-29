@@ -39,6 +39,7 @@ class OrderCreate(BaseModel):
     items: list[OrderItemCreate] = Field(min_length=1)
     subtotal_amount: float = Field(ge=0)
     shipping_amount: float = Field(default=0, ge=0)
+    delivery_method: Literal["economy", "express", "same_day"] = "economy"
     discount_amount: float = Field(default=0, ge=0)
     total_amount: float = Field(ge=0)
     voucher_code: str | None = Field(default=None, min_length=2, max_length=40)
@@ -144,6 +145,7 @@ class OrderRead(BaseModel):
     payment_reference: str | None
     subtotal_amount: float
     shipping_amount: float
+    delivery_method: str
     total_amount: float
     progress: float | None
     tracking_eta: str | None

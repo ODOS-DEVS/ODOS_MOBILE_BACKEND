@@ -9,6 +9,7 @@ logger = logging.getLogger(__name__)
 
 ARKESEL_OTP_GENERATE_URL = "https://sms.arkesel.com/api/otp/generate"
 ARKESEL_OTP_VERIFY_URL = "https://sms.arkesel.com/api/otp/verify"
+ARKESEL_SMS_SEND_URL = "https://sms.arkesel.com/api/v2/sms/send"
 
 
 class ArkeselSmsError(Exception):
@@ -22,6 +23,47 @@ def _arkesel_headers() -> dict[str, str]:
         "api-key": settings.arkesel_api_key.strip(),
         "Content-Type": "application/json",
     }
+
+
+def send_sms(*, phone_number: str, message: str) -> None:
+    international_number = to_international_ghana_phone(phone_number)
+    payload = {
+        "sender": settings.arkesel_sender_id.strip(),
+        "message": message.strip()[:480],
+        "recipients": [international_number],
+    }
+
+    try:
+        response = httpx.post(
+            ARKESEL_SMS_SEND_URL,
+            headers=_arkesel_headers(),
+            json=payload,
+            timeout=20.0,
+        )
+    except httpx.HTTPError as exc:
+        logger.exception("Arkesel SMS send request failed")
+        raise ArkeselSmsError(
+            "We couldn't send that text message right now. Try again shortly."
+        ) from exc
+
+    data = response.json() if response.content else {}
+    status = str(data.get("status", "")).lower()
+    code = str(data.get("code", ""))
+    is_success = response.status_code < 400 and (
+        status == "success" or code in {"1000", "1100", "ok"}
+    )
+    if not is_success:
+        api_message = data.get("message") or "Failed to send text message."
+        logger.error(
+            "Arkesel SMS send failed for %s: http=%s status=%s code=%s message=%s body=%s",
+            international_number,
+            response.status_code,
+            status,
+            code,
+            api_message,
+            data,
+        )
+        raise ArkeselSmsError(api_message, status_code=code or None)
 
 
 def generate_otp(*, phone_number: str) -> None:

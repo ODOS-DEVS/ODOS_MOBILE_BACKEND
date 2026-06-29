@@ -10,12 +10,18 @@ from sqlalchemy.orm import Session, selectinload
 from app.controllers.notification_controller import create_notification_event, order_notification_image
 from app.controllers.vendor_controller import fetch_vendor_dashboard, list_vendor_orders_payloads
 from app.controllers.voucher_controller import build_voucher_quote
-from app.models import CartItem, Order, OrderItem, Product, ReturnRequest, User, VoucherRedemption
+from app.models import CartItem, NotificationEvent, Order, OrderItem, Product, ReturnRequest, User, VoucherRedemption
 from app.schemas.order import OrderCreate, OrderRead, ReturnRequestCreate, ReturnRequestRead
 from app.services.pricing_service import compute_server_subtotal
+from app.services.delivery_service import (
+    get_delivery_config,
+    tracking_eta_after_payment,
+    validate_delivery_checkout,
+)
 from app.services.finance_math import round_money
 from app.services.realtime_service import realtime_manager
-from app.services.push_service import send_expo_push_notification
+from app.services.push_service import build_push_data, send_expo_push_notification
+from app.services.sms_service import send_order_payment_confirmation_sms
 
 logger = logging.getLogger(__name__)
 OPEN_RETURN_REQUEST_STATUSES = {"requested", "under_review", "approved"}
@@ -101,17 +107,23 @@ def _dispatch_order_push(
     title: str,
     body: str,
     order: Order,
+    notification_event: NotificationEvent | None = None,
 ) -> None:
     try:
         send_expo_push_notification(
             user=user,
             title=title,
             body=body,
-            data={
-                "type": "order_update",
-                "orderId": str(order.id),
-                "status": order.status,
-            },
+            data=build_push_data(
+                push_type="order_update",
+                route_type="order",
+                route_target_id=str(order.id),
+                notification_event=notification_event,
+                extra={
+                    "orderId": str(order.id),
+                    "status": order.status,
+                },
+            ),
         )
     except Exception:
         logger.exception("Failed to send order push for %s", order.id)
@@ -190,13 +202,29 @@ def prepare_order_for_checkout(
 
     computed_discount = round(voucher_quote.discount_amount if voucher_quote else 0, 2)
 
+    try:
+        delivery_config = get_delivery_config(db)
+        delivery_method, validated_shipping = validate_delivery_checkout(
+            subtotal=server_subtotal,
+            region=payload.address_region,
+            delivery_method=payload.delivery_method,
+            shipping_amount=payload.shipping_amount,
+            config=delivery_config,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+
     order = Order(
         order_number=_generate_order_number(db),
         user_id=user.id,
         source=payload.source,
         status="pending_payment",
         subtotal_amount=payload.subtotal_amount,
-        shipping_amount=payload.shipping_amount,
+        shipping_amount=validated_shipping,
+        delivery_method=delivery_method,
         total_amount=payload.total_amount,
         progress=0.03,
         tracking_eta="Awaiting payment confirmation",
@@ -262,7 +290,8 @@ def prepare_order_for_checkout(
         computed_discount=computed_discount,
     )
     order.subtotal_amount = computed_subtotal
-    order.shipping_amount = round(payload.shipping_amount, 2)
+    order.shipping_amount = round(validated_shipping, 2)
+    order.delivery_method = delivery_method
     order.discount_amount = computed_discount
     order.total_amount = computed_total
 
@@ -271,14 +300,35 @@ def prepare_order_for_checkout(
     return order
 
 
+def _maybe_send_order_payment_confirmation_sms(user: User, order: Order) -> None:
+    if not user.phone_verified or not user.phone_number:
+        return
+
+    try:
+        send_order_payment_confirmation_sms(
+            phone_number=user.phone_number,
+            order_number=order.order_number,
+            total_amount=order.total_amount,
+            payment_label=order.payment_label,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to send order payment confirmation SMS for order %s",
+            order.id,
+        )
+
+
 def activate_order_after_payment(
     db: Session,
     user: User,
     order: Order,
-) -> None:
+) -> NotificationEvent:
     order.status = "processing"
     order.progress = 0.18
-    order.tracking_eta = "Estimated delivery in 2–3 days"
+    order.tracking_eta = tracking_eta_after_payment(
+        order.delivery_method,
+        get_delivery_config(db),
+    )
     order.payment_status = "paid"
     order.paid_at = datetime.now(timezone.utc)
     order.cancelled_at = None
@@ -308,7 +358,7 @@ def activate_order_after_payment(
     record_purchase_events_for_order(db, user, order)
 
     preview = order_notification_image(order)
-    create_notification_event(
+    event = create_notification_event(
         db,
         user,
         kind="order_placed",
@@ -322,6 +372,9 @@ def activate_order_after_payment(
         image_key=preview["image_key"],
         image_url=preview["image_url"],
     )
+
+    _maybe_send_order_payment_confirmation_sms(user, order)
+    return event
 
 
 def create_order(db: Session, user: User, payload: OrderCreate) -> Order:
@@ -337,7 +390,7 @@ def create_order(db: Session, user: User, payload: OrderCreate) -> Order:
         payload,
         payment_provider="cash_on_delivery",
     )
-    activate_order_after_payment(db, user, order)
+    placed_event = activate_order_after_payment(db, user, order)
     db.commit()
 
     created_order = db.scalar(
@@ -356,21 +409,7 @@ def create_order(db: Session, user: User, payload: OrderCreate) -> Order:
         title="Order placed successfully",
         body=f"Order #{created_order.order_number} is now being prepared.",
         order=created_order,
-    )
-    preview = order_notification_image(created_order)
-    create_notification_event(
-        db,
-        user,
-        kind="order_placed",
-        title="Order placed successfully",
-        body=f"Order #{created_order.order_number} is now being prepared for delivery.",
-        icon="bag-handle-outline",
-        accent="neutral",
-        action_label="Track order",
-        route_type="order",
-        route_target_id=str(created_order.id),
-        image_key=preview["image_key"],
-        image_url=preview["image_url"],
+        notification_event=placed_event,
     )
     db.commit()
     db.refresh(created_order)
@@ -535,14 +574,8 @@ def cancel_order(
     order.cancelled_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(order)
-    _dispatch_order_push(
-        user=user,
-        title="Order cancelled",
-        body=f"Order #{order.order_number} has been cancelled.",
-        order=order,
-    )
     preview = order_notification_image(order)
-    create_notification_event(
+    cancelled_event = create_notification_event(
         db,
         user,
         kind="order_cancelled",
@@ -555,6 +588,13 @@ def cancel_order(
         route_target_id=str(order.id),
         image_key=preview["image_key"],
         image_url=preview["image_url"],
+    )
+    _dispatch_order_push(
+        user=user,
+        title="Order cancelled",
+        body=f"Order #{order.order_number} has been cancelled.",
+        order=order,
+        notification_event=cancelled_event,
     )
     db.commit()
     db.refresh(order)
@@ -579,14 +619,8 @@ def confirm_order_delivery(db: Session, user: User, order_id: str) -> Order:
     order.delivered_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(order)
-    _dispatch_order_push(
-        user=user,
-        title="Order delivered",
-        body=f"Order #{order.order_number} has arrived successfully.",
-        order=order,
-    )
     preview = order_notification_image(order)
-    create_notification_event(
+    delivered_event = create_notification_event(
         db,
         user,
         kind="order_delivered",
@@ -599,6 +633,13 @@ def confirm_order_delivery(db: Session, user: User, order_id: str) -> Order:
         route_target_id=str(order.id),
         image_key=preview["image_key"],
         image_url=preview["image_url"],
+    )
+    _dispatch_order_push(
+        user=user,
+        title="Order delivered",
+        body=f"Order #{order.order_number} has arrived successfully.",
+        order=order,
+        notification_event=delivered_event,
     )
     db.commit()
     db.refresh(order)

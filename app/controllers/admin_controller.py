@@ -137,6 +137,7 @@ from app.schemas.payment import (
     AdminPlatformLedgerEntryRead,
 )
 from app.schemas.user import AuthToken, UserCreate, UserLogin
+from app.services.delivery_service import delivery_method_label, get_delivery_config
 from app.services.finance_math import amount_from_subunit, round_money
 
 SUPPORTED_ACCOUNT_STATUSES = {"active", "blocked", "inactive"}
@@ -841,6 +842,8 @@ def _serialize_return_request(db: Session, request: ReturnRequest) -> AdminRetur
 
 def _serialize_order_detail(db: Session, order: Order) -> AdminOrderDetailRead:
     base = _serialize_order(db, order)
+    delivery_config = get_delivery_config(db)
+    method = order.delivery_method or "economy"
     return AdminOrderDetailRead(
         **base.model_dump(),
         customer_id=order.user_id,
@@ -853,6 +856,8 @@ def _serialize_order_detail(db: Session, order: Order) -> AdminOrderDetailRead:
         subtotal_amount=round(order.subtotal_amount, 2),
         shipping_amount=round(order.shipping_amount, 2),
         discount_amount=round(order.discount_amount, 2),
+        delivery_method=method,
+        delivery_method_label=delivery_method_label(method, delivery_config),
         progress=order.progress,
         tracking_eta=order.tracking_eta,
         cancellation_reason=order.cancellation_reason,
