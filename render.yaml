@@ -19,7 +19,7 @@ services:
       - key: ACCESS_TOKEN_EXPIRE_MINUTES
         value: "10080"
       - key: CORS_ORIGINS
-        sync: false
+        value: http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173,https://odos-admin.onrender.com
       - key: GOOGLE_CLIENT_IDS
         sync: false
       - key: CLOUDINARY_CLOUD_NAME
