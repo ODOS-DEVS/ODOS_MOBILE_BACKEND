@@ -9,6 +9,7 @@ from app.models import NotificationEvent, User
 logger = logging.getLogger(__name__)
 
 EXPO_PUSH_ENDPOINT = "https://exp.host/--/api/v2/push/send"
+VENDOR_ORDER_SOUND = "vendor-order.wav"
 
 
 def build_push_data(
@@ -34,12 +35,30 @@ def build_push_data(
     return data
 
 
+def can_receive_vendor_order_alerts(user: User) -> bool:
+    return bool(
+        user.expo_push_token
+        and user.allow_notifications
+        and user.vendor_order_notifications
+    )
+
+
+def can_receive_vendor_chat_alerts(user: User) -> bool:
+    return bool(
+        user.expo_push_token
+        and user.allow_notifications
+        and user.store_notifications
+    )
+
+
 def send_expo_push_notification(
     *,
     user: User,
     title: str,
     body: str,
     data: dict | None = None,
+    channel_id: str = "default",
+    sound: str = "default",
 ) -> None:
     if not user.expo_push_token or not user.allow_notifications:
         return
@@ -49,9 +68,9 @@ def send_expo_push_notification(
         "title": title,
         "body": body,
         "data": data or {},
-        "sound": "default",
+        "sound": sound,
         "priority": "high",
-        "channelId": "default",
+        "channelId": channel_id,
     }
 
     response = requests.post(
@@ -71,3 +90,43 @@ def send_expo_push_notification(
             response.status_code,
             response.text,
         )
+
+
+def send_vendor_order_push(
+    *,
+    user: User,
+    title: str,
+    body: str,
+    data: dict | None = None,
+) -> None:
+    if not can_receive_vendor_order_alerts(user):
+        return
+
+    send_expo_push_notification(
+        user=user,
+        title=title,
+        body=body,
+        data=data,
+        channel_id="vendor-orders",
+        sound=VENDOR_ORDER_SOUND,
+    )
+
+
+def send_vendor_chat_push(
+    *,
+    user: User,
+    title: str,
+    body: str,
+    data: dict | None = None,
+) -> None:
+    if not can_receive_vendor_chat_alerts(user):
+        return
+
+    send_expo_push_notification(
+        user=user,
+        title=title,
+        body=body,
+        data=data,
+        channel_id="vendor-chats",
+        sound="default",
+    )

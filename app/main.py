@@ -30,14 +30,29 @@ from app.routes import (
 )
 from app.core.redis_client import close_redis, get_redis
 from app.services.realtime_service import realtime_manager
+from app.services.vendor_order_reminder_service import process_vendor_order_reminders
 
 app = FastAPI(title="ODOS Mobile Backend")
+
+VENDOR_REMINDER_INTERVAL_SECONDS = 180
+
+
+async def _vendor_order_reminder_loop() -> None:
+    while True:
+        try:
+            await asyncio.to_thread(process_vendor_order_reminders)
+        except Exception:
+            import logging
+
+            logging.getLogger(__name__).exception("Vendor order reminder loop failed")
+        await asyncio.sleep(VENDOR_REMINDER_INTERVAL_SECONDS)
 
 
 @app.on_event("startup")
 async def on_startup() -> None:
     realtime_manager.bind_loop(asyncio.get_running_loop())
     get_redis()
+    asyncio.create_task(_vendor_order_reminder_loop())
 
 
 @app.on_event("shutdown")

@@ -160,6 +160,7 @@ class AdminUserDetailRead(AdminUserRead):
     allow_notifications: bool
     discount_notifications: bool
     store_notifications: bool
+    vendor_order_notifications: bool
     system_notifications: bool
     location_notifications: bool
     location_updates: bool

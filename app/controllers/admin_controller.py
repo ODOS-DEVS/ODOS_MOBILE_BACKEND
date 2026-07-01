@@ -463,6 +463,7 @@ def _serialize_user_detail(db: Session, user: User) -> AdminUserDetailRead:
         allow_notifications=user.allow_notifications,
         discount_notifications=user.discount_notifications,
         store_notifications=user.store_notifications,
+        vendor_order_notifications=user.vendor_order_notifications,
         system_notifications=user.system_notifications,
         location_notifications=user.location_notifications,
         location_updates=user.location_updates,

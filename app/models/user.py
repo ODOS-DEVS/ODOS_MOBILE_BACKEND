@@ -77,6 +77,12 @@ class User(Base):
         server_default="false",
         nullable=False,
     )
+    vendor_order_notifications: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        server_default="true",
+        nullable=False,
+    )
     system_notifications: Mapped[bool] = mapped_column(
         Boolean,
         default=False,

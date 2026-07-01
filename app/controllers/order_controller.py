@@ -20,7 +20,7 @@ from app.services.delivery_service import (
 )
 from app.services.finance_math import round_money
 from app.services.realtime_service import realtime_manager
-from app.services.push_service import build_push_data, send_expo_push_notification
+from app.services.push_service import build_push_data, send_expo_push_notification, send_vendor_order_push
 from app.services.sms_service import send_order_payment_confirmation_sms
 
 logger = logging.getLogger(__name__)
@@ -85,6 +85,91 @@ def _broadcast_order_realtime(db: Session, order: Order) -> None:
                 str(vendor_user.id),
                 "vendor.dashboard.updated",
                 dashboard.model_dump(mode="json"),
+            )
+
+
+def _order_vendor_users(db: Session, order: Order) -> list[User]:
+    vendor_user_ids = list(
+        dict.fromkeys(
+            str(vendor_user_id)
+            for vendor_user_id in db.scalars(
+                select(Product.vendor_user_id).where(
+                    Product.id.in_([item.product_id for item in order.items if item.product_id]),
+                    Product.vendor_user_id.is_not(None),
+                )
+            ).all()
+            if vendor_user_id
+        )
+    )
+
+    vendors: list[User] = []
+    for vendor_user_id in vendor_user_ids:
+        vendor_user = db.get(User, vendor_user_id)
+        if vendor_user:
+            vendors.append(vendor_user)
+    return vendors
+
+
+def _dispatch_vendor_new_order_alerts(db: Session, order: Order) -> None:
+    preview = order_notification_image(order)
+
+    for vendor_user in _order_vendor_users(db, order):
+        vendor_order = next(
+            (
+                item
+                for item in list_vendor_orders_payloads(db, vendor_user)
+                if str(item.id) == str(order.id)
+            ),
+            None,
+        )
+        if not vendor_order:
+            continue
+
+        item_label = "item" if vendor_order.product_count == 1 else "items"
+        amount_label = f"GHS {vendor_order.total_amount:,.2f}"
+        notification_body = (
+            f"Order #{order.order_number} · {vendor_order.product_count} {item_label} · "
+            f"{amount_label}. Tap to fulfil now."
+        )
+
+        try:
+            vendor_event = create_notification_event(
+                db,
+                vendor_user,
+                kind="vendor_order_received",
+                title="New order received",
+                body=notification_body,
+                icon="receipt-outline",
+                accent="warning",
+                action_label="View order",
+                route_type="vendor_order",
+                route_target_id=str(order.id),
+                image_key=preview["image_key"],
+                image_url=preview["image_url"],
+            )
+            send_vendor_order_push(
+                user=vendor_user,
+                title="New order on ODOS",
+                body=f"#{order.order_number} · {vendor_order.product_count} {item_label} · {amount_label}",
+                data=build_push_data(
+                    push_type="vendor_order",
+                    route_type="vendor_order",
+                    route_target_id=str(order.id),
+                    notification_event=vendor_event,
+                    extra={
+                        "orderId": str(order.id),
+                        "orderNumber": order.order_number,
+                        "productCount": vendor_order.product_count,
+                        "totalAmount": vendor_order.total_amount,
+                        "alertKind": "new",
+                    },
+                ),
+            )
+        except Exception:
+            logger.exception(
+                "Failed to send vendor new-order alert for order %s to vendor %s",
+                order.id,
+                vendor_user.id,
             )
 
 
@@ -414,6 +499,8 @@ def create_order(db: Session, user: User, payload: OrderCreate) -> Order:
     db.commit()
     db.refresh(created_order)
     _broadcast_order_realtime(db, created_order)
+    _dispatch_vendor_new_order_alerts(db, created_order)
+    db.commit()
 
     return created_order
 

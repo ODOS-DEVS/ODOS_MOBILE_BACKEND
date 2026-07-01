@@ -206,6 +206,7 @@ class UserUpdate(BaseModel):
     allow_notifications: bool | None = None
     discount_notifications: bool | None = None
     store_notifications: bool | None = None
+    vendor_order_notifications: bool | None = None
     system_notifications: bool | None = None
     location_notifications: bool | None = None
     location_updates: bool | None = None
@@ -243,6 +244,7 @@ class UserRead(BaseModel):
     allow_notifications: bool
     discount_notifications: bool
     store_notifications: bool
+    vendor_order_notifications: bool
     system_notifications: bool
     location_notifications: bool
     location_updates: bool

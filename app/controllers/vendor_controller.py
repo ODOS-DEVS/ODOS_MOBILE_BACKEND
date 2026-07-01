@@ -23,6 +23,7 @@ from app.controllers.wallet_controller import (
 )
 from app.models import (
     Market,
+    NotificationEvent,
     Order,
     Product,
     Store,
@@ -341,6 +342,57 @@ def broadcast_catalog_store_change(store: Store) -> None:
     )
 
 
+def _matching_vendor_items(db: Session, user: User, order: Order) -> list:
+    matching_items = []
+    for item in order.items:
+        owns_item = item.vendor_user_id == user.id
+        if not owns_item:
+            owns_item = db.scalar(
+                select(Product.id).where(
+                    Product.id == item.product_id,
+                    Product.vendor_user_id == user.id,
+                )
+            )
+        if owns_item:
+            matching_items.append(item)
+    return matching_items
+
+
+def _serialize_vendor_order(db: Session, user: User, order: Order) -> VendorOrderRead | None:
+    matching_items = _matching_vendor_items(db, user, order)
+    if not matching_items:
+        return None
+
+    return VendorOrderRead(
+        id=order.id,
+        order_number=order.order_number,
+        customer_name=order.address_full_name,
+        customer_phone=order.address_phone,
+        delivery_method=order.delivery_method,
+        address_street=order.address_street,
+        address_city=order.address_city,
+        address_region=order.address_region,
+        payment_label=order.payment_label,
+        product_count=sum(item.quantity for item in matching_items),
+        total_amount=round(sum(item.line_total for item in matching_items), 2),
+        status=order.vendor_status,
+        placed_at=order.placed_at,
+        paid_at=order.paid_at,
+        created_at=order.created_at,
+        items=[
+            VendorOrderItemRead(
+                id=item.id,
+                product_id=item.product_id,
+                title=item.title,
+                quantity=item.quantity,
+                unit_price=item.unit_price,
+                image_url=item.image_url,
+            )
+            for item in matching_items
+        ],
+    )
+
+
 def list_vendor_orders_payloads(db: Session, user: User) -> list[VendorOrderRead]:
     orders = list(
         db.scalars(
@@ -352,37 +404,59 @@ def list_vendor_orders_payloads(db: Session, user: User) -> list[VendorOrderRead
 
     payloads: list[VendorOrderRead] = []
     for order in orders:
-        matching_items = [
-            item
-            for item in order.items
-            if item.vendor_user_id == user.id
-        ]
-        if not matching_items:
-            continue
-
-        payloads.append(
-            VendorOrderRead(
-                id=order.id,
-                order_number=order.order_number,
-                customer_name=order.address_full_name,
-                product_count=sum(item.quantity for item in matching_items),
-                total_amount=round(sum(item.line_total for item in matching_items), 2),
-                status=order.vendor_status,
-                created_at=order.created_at,
-                items=[
-                    VendorOrderItemRead(
-                        id=item.id,
-                        product_id=item.product_id,
-                        title=item.title,
-                        quantity=item.quantity,
-                        unit_price=item.unit_price,
-                    )
-                    for item in matching_items
-                ],
-            )
-        )
+        payload = _serialize_vendor_order(db, user, order)
+        if payload:
+            payloads.append(payload)
 
     return payloads
+
+
+def get_vendor_order(db: Session, user: User, order_id: str) -> VendorOrderRead:
+    require_vendor_access(user)
+    order = db.scalar(
+        select(Order)
+        .options(selectinload(Order.items), selectinload(Order.user))
+        .where(Order.id == order_id)
+    )
+    if not order:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="That order was not found.",
+        )
+
+    payload = _serialize_vendor_order(db, user, order)
+    if not payload:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="That order was not found for this vendor.",
+        )
+    return payload
+
+
+def acknowledge_vendor_order(db: Session, user: User, order_id: str) -> VendorOrderRead:
+    payload = get_vendor_order(db, user, order_id)
+    existing = db.scalar(
+        select(NotificationEvent.id).where(
+            NotificationEvent.user_id == user.id,
+            NotificationEvent.kind == "vendor_order_acknowledged",
+            NotificationEvent.route_target_id == str(payload.id),
+        )
+    )
+    if not existing:
+        create_notification_event(
+            db,
+            user,
+            kind="vendor_order_acknowledged",
+            title="Order acknowledged",
+            body=f"You acknowledged order #{payload.order_number}.",
+            icon="checkmark-circle-outline",
+            accent="success",
+            action_label="View order",
+            route_type="vendor_order",
+            route_target_id=str(payload.id),
+        )
+        db.commit()
+    return payload
 
 
 async def submit_vendor_application(
@@ -801,6 +875,111 @@ def delete_vendor_product(db: Session, user: User, product_id: str) -> None:
     )
 
 
+VENDOR_SELF_SERVICE_PRODUCT_STATUSES = {"active", "hidden"}
+
+
+def _publish_vendor_product_change(db: Session, user: User, product: Product) -> VendorProductRead:
+    broadcast_catalog_product_change(product)
+    serialized_product = serialize_vendor_product(product)
+    realtime_manager.publish_user_event_sync(
+        str(user.id),
+        "vendor.product.updated",
+        serialized_product.model_dump(mode="json"),
+    )
+    dashboard = fetch_vendor_dashboard(db, user)
+    realtime_manager.publish_user_event_sync(
+        str(user.id),
+        "vendor.dashboard.updated",
+        dashboard.model_dump(mode="json"),
+    )
+    return serialized_product
+
+
+def update_vendor_product_status(
+    db: Session,
+    user: User,
+    product_id: str,
+    status: str,
+) -> VendorProductRead:
+    require_vendor_access(user)
+    normalized_status = status.strip().lower()
+    if normalized_status not in VENDOR_SELF_SERVICE_PRODUCT_STATUSES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Status must be active or hidden.",
+        )
+
+    product = db.scalar(
+        select(Product).where(
+            Product.id == product_id,
+            Product.vendor_user_id == user.id,
+        )
+    )
+    if not product:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="That vendor product was not found.",
+        )
+
+    if product.status == "suspended":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Suspended products can't be updated from the app.",
+        )
+
+    if normalized_status == "hidden":
+        if product.status not in {"active", "hidden"}:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Only live products can be hidden.",
+            )
+        product.status = "hidden"
+        product.is_active = False
+    else:
+        if product.status != "hidden":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Only hidden products can be relisted.",
+            )
+        product.status = "active"
+        product.is_active = True
+
+    db.commit()
+    db.refresh(product)
+    return _publish_vendor_product_change(db, user, product)
+
+
+def patch_vendor_product_stock(
+    db: Session,
+    user: User,
+    product_id: str,
+    stock: int,
+) -> VendorProductRead:
+    require_vendor_access(user)
+    product = db.scalar(
+        select(Product).where(
+            Product.id == product_id,
+            Product.vendor_user_id == user.id,
+        )
+    )
+    if not product:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="That vendor product was not found.",
+        )
+
+    if product.status == "suspended":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Suspended products can't be updated from the app.",
+        )
+
+    product.stock = stock
+    db.commit()
+    db.refresh(product)
+    return _publish_vendor_product_change(db, user, product)
+
+
 def list_vendor_orders(db: Session, user: User) -> list[VendorOrderRead]:
     require_vendor_access(user)
     return list_vendor_orders_payloads(db, user)
@@ -1013,26 +1192,25 @@ def update_vendor_order_status(
         OrderRead.model_validate(order).model_dump(mode="json"),
     )
 
-    vendor_orders = list_vendor_orders_payloads(db, user)
-    for vendor_order in vendor_orders:
-        if str(vendor_order.id) == order_id:
-            realtime_manager.publish_user_event_sync(
-                str(user.id),
-                "vendor.order.updated",
-                vendor_order.model_dump(mode="json"),
-            )
-            dashboard = fetch_vendor_dashboard(db, user)
-            realtime_manager.publish_user_event_sync(
-                str(user.id),
-                "vendor.dashboard.updated",
-                dashboard.model_dump(mode="json"),
-            )
-            return vendor_order
+    vendor_order = _serialize_vendor_order(db, user, order)
+    if not vendor_order:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="That order was not found for this vendor.",
+        )
 
-    raise HTTPException(
-        status_code=status.HTTP_404_NOT_FOUND,
-        detail="That order was not found for this vendor.",
+    realtime_manager.publish_user_event_sync(
+        str(user.id),
+        "vendor.order.updated",
+        vendor_order.model_dump(mode="json"),
     )
+    dashboard = fetch_vendor_dashboard(db, user)
+    realtime_manager.publish_user_event_sync(
+        str(user.id),
+        "vendor.dashboard.updated",
+        dashboard.model_dump(mode="json"),
+    )
+    return vendor_order
 
 
 def list_vendor_vouchers(db: Session, user: User) -> list[VendorVoucherRead]:

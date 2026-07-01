@@ -28,6 +28,8 @@ from app.schemas.chat import (
     ChatThreadEnsurePayload,
     ChatThreadRead,
 )
+from app.controllers.notification_controller import create_notification_event
+from app.services.push_service import build_push_data, send_vendor_chat_push
 from app.services.realtime_service import realtime_manager
 
 
@@ -540,6 +542,55 @@ def list_chat_messages(db: Session, user: User, thread_id: str) -> list[ChatMess
     return [_serialize_message(message, thread) for message in messages]
 
 
+def _notify_vendor_shopper_message(
+    db: Session,
+    *,
+    thread: ChatThread,
+    message: ChatMessage,
+    customer: User,
+) -> None:
+    vendor = thread.vendor_user or db.get(User, thread.vendor_user_id)
+    if not vendor or thread.thread_type != ChatThreadType.STORE:
+        return
+
+    customer_name = (customer.full_name or customer.email or "A shopper").strip()
+    preview = (message.body or "").strip()
+    if len(preview) > 140:
+        preview = f"{preview[:137]}..."
+
+    store_title = thread.store.title if thread.store else "your store"
+    notification_event = create_notification_event(
+        db,
+        vendor,
+        kind="vendor_chat_message",
+        title=f"Message from {customer_name}",
+        body=preview or "New shopper message waiting for your reply.",
+        icon="chatbubble-ellipses-outline",
+        accent="info",
+        action_label="Reply",
+        route_type="vendor_chat",
+        route_target_id=str(thread.id),
+    )
+    send_vendor_chat_push(
+        user=vendor,
+        title=f"{customer_name} · {store_title}",
+        body=preview or "New shopper message waiting for your reply.",
+        data=build_push_data(
+            push_type="vendor_chat_message",
+            route_type="vendor_chat",
+            route_target_id=str(thread.id),
+            notification_event=notification_event,
+            extra={
+                "threadId": str(thread.id),
+                "storeId": str(thread.store_id),
+                "storeName": store_title,
+                "customerName": customer_name,
+            },
+        ),
+    )
+    db.commit()
+
+
 def post_chat_message(
     db: Session,
     user: User,
@@ -603,6 +654,23 @@ def post_chat_message(
         serialized_message.model_dump(mode="json"),
     )
     _publish_thread_updates(db, thread)
+
+    if (
+        thread.thread_type == ChatThreadType.STORE
+        and user.id == thread.customer_user_id
+        and thread.vendor_user_id
+    ):
+        customer = thread.customer_user or db.get(User, thread.customer_user_id)
+        if customer:
+            try:
+                _notify_vendor_shopper_message(
+                    db,
+                    thread=thread,
+                    message=created_message,
+                    customer=customer,
+                )
+            except Exception:
+                db.rollback()
 
     return serialized_message
 

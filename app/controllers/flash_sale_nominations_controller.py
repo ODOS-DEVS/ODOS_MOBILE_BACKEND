@@ -12,17 +12,27 @@ from sqlalchemy.orm import Session
 from app.core.admin_pagination import paginate_scalars
 from app.schemas.pagination import AdminPageRead
 from app.controllers.admin_controller import broadcast_catalog_flash_sale_event_change
+from app.controllers.notification_controller import create_notification_event
 from app.controllers.vendor_controller import get_vendor_store, require_vendor_access
 from app.models import FlashSaleEvent, FlashSaleEventProduct, FlashSaleNomination, Product, User
 from app.schemas.admin import AdminFlashSaleNominationRead, AdminFlashSaleNominationReview
 from app.schemas.vendor import VendorFlashSaleNominationCreate, VendorFlashSaleNominationRead
+from app.services.push_service import build_push_data, send_expo_push_notification
 
 
-def _serialize_vendor_nomination(nomination: FlashSaleNomination) -> VendorFlashSaleNominationRead:
+def _serialize_vendor_nomination(
+    db: Session,
+    nomination: FlashSaleNomination,
+) -> VendorFlashSaleNominationRead:
+    product = db.get(Product, nomination.product_id)
+    event = db.get(FlashSaleEvent, nomination.event_id) if nomination.event_id else None
     return VendorFlashSaleNominationRead(
         id=nomination.id,
         event_id=nomination.event_id,
+        event_title=event.title if event else None,
         product_id=nomination.product_id,
+        product_title=product.title if product else None,
+        product_image_url=product.image_url if product else None,
         proposed_price=nomination.proposed_price,
         proposed_old_price=nomination.proposed_old_price,
         stock_limit=nomination.stock_limit,
@@ -69,7 +79,7 @@ def list_vendor_flash_sale_nominations(db: Session, user: User) -> list[VendorFl
             .order_by(FlashSaleNomination.created_at.desc())
         ).all()
     )
-    return [_serialize_vendor_nomination(item) for item in nominations]
+    return [_serialize_vendor_nomination(db, item) for item in nominations]
 
 
 def create_vendor_flash_sale_nomination(
@@ -127,7 +137,7 @@ def create_vendor_flash_sale_nomination(
     db.add(nomination)
     db.commit()
     db.refresh(nomination)
-    return _serialize_vendor_nomination(nomination)
+    return _serialize_vendor_nomination(db, nomination)
 
 
 def list_admin_flash_sale_nominations(
@@ -231,4 +241,46 @@ def review_admin_flash_sale_nomination(
 
     db.commit()
     db.refresh(nomination)
+
+    vendor = db.get(User, nomination.vendor_user_id)
+    product = db.get(Product, nomination.product_id)
+    if vendor and payload.status in {"approved", "rejected"}:
+        product_title = product.title if product else "your product"
+        if payload.status == "approved":
+            title = "Flash sale nomination approved"
+            body = f"{product_title} was approved for the flash sale."
+        else:
+            title = "Flash sale nomination declined"
+            body = f"{product_title} was not selected for this flash sale."
+            if payload.review_notes:
+                body = f"{body} {payload.review_notes}"
+
+        notification_event = create_notification_event(
+            db,
+            vendor,
+            kind=f"vendor_flash_sale_nomination_{payload.status}",
+            title=title,
+            body=body,
+            icon="flash-outline" if payload.status == "approved" else "close-circle-outline",
+            accent="success" if payload.status == "approved" else "neutral",
+            action_label="View nominations",
+            route_type="vendor_flash_sale",
+            route_target_id=str(nomination.id),
+        )
+        if vendor.expo_push_token and vendor.allow_notifications:
+            send_expo_push_notification(
+                user=vendor,
+                title=title,
+                body=body,
+                data=build_push_data(
+                    push_type="vendor_flash_sale_nomination",
+                    route_type="vendor_flash_sale",
+                    route_target_id=str(nomination.id),
+                    notification_event=notification_event,
+                    extra={"nominationId": str(nomination.id)},
+                ),
+            )
+        db.commit()
+        db.refresh(nomination)
+
     return _serialize_admin_nomination(db, nomination)

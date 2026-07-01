@@ -192,7 +192,10 @@ class VendorFlashSaleNominationCreate(BaseModel):
 class VendorFlashSaleNominationRead(BaseModel):
     id: uuid.UUID
     event_id: uuid.UUID | None = None
+    event_title: str | None = None
     product_id: str
+    product_title: str | None = None
+    product_image_url: str | None = None
     proposed_price: int | None = None
     proposed_old_price: int | None = None
     stock_limit: int | None = None
@@ -437,6 +440,19 @@ class VendorOrderStatusUpdate(BaseModel):
     status: str = Field(min_length=1, max_length=30)
 
 
+class VendorProductStatusUpdate(BaseModel):
+    status: str = Field(min_length=1, max_length=30)
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def normalize_status(cls, value: str) -> str:
+        return value.strip().lower()
+
+
+class VendorProductStockUpdate(BaseModel):
+    stock: int = Field(ge=0)
+
+
 class VendorProductRead(BaseModel):
     id: str
     store_id: str
@@ -469,14 +485,23 @@ class VendorOrderItemRead(BaseModel):
     title: str
     quantity: int
     unit_price: float
+    image_url: str | None = None
 
 
 class VendorOrderRead(BaseModel):
     id: uuid.UUID
     order_number: str
     customer_name: str | None
+    customer_phone: str | None = None
+    delivery_method: str | None = None
+    address_street: str | None = None
+    address_city: str | None = None
+    address_region: str | None = None
+    payment_label: str | None = None
     product_count: int
     total_amount: float
     status: str
+    placed_at: datetime | None = None
+    paid_at: datetime | None = None
     created_at: datetime
     items: list[VendorOrderItemRead]

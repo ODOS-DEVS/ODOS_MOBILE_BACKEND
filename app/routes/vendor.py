@@ -17,12 +17,16 @@ from app.controllers.vendor_controller import (
     fetch_vendor_profile,
     fetch_vendor_store,
     gift_vendor_voucher,
+    get_vendor_order,
+    acknowledge_vendor_order,
     list_vendor_orders,
     list_vendor_products,
     list_vendor_vouchers,
+    patch_vendor_product_stock,
     submit_vendor_application,
     update_vendor_order_status,
     update_vendor_product,
+    update_vendor_product_status,
     update_vendor_store,
     update_vendor_voucher,
 )
@@ -43,6 +47,8 @@ from app.schemas.vendor import (
     VendorOrderStatusUpdate,
     VendorProductCreate,
     VendorProductRead,
+    VendorProductStatusUpdate,
+    VendorProductStockUpdate,
     VendorProductUpdate,
     VendorProfileRead,
     VendorStoreRead,
@@ -323,12 +329,50 @@ def remove_vendor_product(
     return MessageResponse(message="Product removed successfully.")
 
 
+@router.patch("/products/{product_id}/status", response_model=VendorProductRead)
+def patch_vendor_product_status(
+    product_id: str,
+    payload: VendorProductStatusUpdate,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return update_vendor_product_status(db, current_user, product_id, payload.status)
+
+
+@router.patch("/products/{product_id}/stock", response_model=VendorProductRead)
+def patch_vendor_product_stock_route(
+    product_id: str,
+    payload: VendorProductStockUpdate,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return patch_vendor_product_stock(db, current_user, product_id, payload.stock)
+
+
 @router.get("/orders", response_model=list[VendorOrderRead])
 def get_vendor_orders(
     current_user: Annotated[User, Depends(get_current_user)],
     db: Session = Depends(get_db),
 ):
     return list_vendor_orders(db, current_user)
+
+
+@router.get("/orders/{order_id}", response_model=VendorOrderRead)
+def get_vendor_order_detail(
+    order_id: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return get_vendor_order(db, current_user, order_id)
+
+
+@router.post("/orders/{order_id}/acknowledge", response_model=VendorOrderRead)
+def post_vendor_order_acknowledge(
+    order_id: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return acknowledge_vendor_order(db, current_user, order_id)
 
 
 @router.get("/vouchers", response_model=list[VendorVoucherRead])

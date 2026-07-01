@@ -7,7 +7,12 @@ from fastapi import HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from app.controllers.order_controller import activate_order_after_payment, prepare_order_for_checkout
+from app.controllers.order_controller import (
+    _broadcast_order_realtime,
+    _dispatch_vendor_new_order_alerts,
+    activate_order_after_payment,
+    prepare_order_for_checkout,
+)
 from app.models import CustomerWallet, CustomerWalletTopUp, CustomerWalletTransaction, User
 from app.schemas.customer_wallet import (
     CustomerWalletRead,
@@ -357,6 +362,10 @@ def create_wallet_checkout(
             balance_after=wallet.available_balance,
         )
     )
+    db.commit()
+    db.refresh(order)
+    _broadcast_order_realtime(db, order)
+    _dispatch_vendor_new_order_alerts(db, order)
     db.commit()
     db.refresh(order)
     return WalletCheckoutRead(

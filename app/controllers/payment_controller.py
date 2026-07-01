@@ -17,6 +17,7 @@ from app.controllers.customer_wallet_controller import reconcile_wallet_topup_by
 from app.controllers.order_controller import (
     _broadcast_order_realtime,
     _dispatch_order_push,
+    _dispatch_vendor_new_order_alerts,
     activate_order_after_payment,
     prepare_order_for_checkout,
 )
@@ -238,6 +239,8 @@ def _apply_successful_payment(
         db.commit()
         db.refresh(order)
         _broadcast_order_realtime(db, order)
+        _dispatch_vendor_new_order_alerts(db, order)
+        db.commit()
     else:
         db.commit()
         db.refresh(order)
