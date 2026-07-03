@@ -1271,11 +1271,13 @@ def get_admin_dashboard(db: Session, current_user: User) -> AdminDashboardRead:
         ).all()
     )
 
+    vendor_applications_page = list_vendor_applications(db, current_user, limit=5)
+
     return AdminDashboardRead(
         stats=stats,
         recent_orders=[_serialize_order(db, order) for order in recent_orders],
         recent_vendor_applications=[
-            item.model_dump() for item in list_vendor_applications(db, current_user)[:5]
+            item.model_dump() for item in vendor_applications_page.items
         ],
         recent_notifications=[
             _serialize_notification(notification, is_read=str(notification.id) in read_keys)
