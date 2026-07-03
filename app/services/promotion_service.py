@@ -15,7 +15,10 @@ from app.schemas.order import OrderItemCreate
 from app.services.finance_math import round_money
 from app.services.pricing_service import resolve_cart_line_prices
 
-SUPPORTED_VOUCHER_DISCOUNT_TYPES = {"percent", "fixed", "free_shipping"}
+PROMOTION_TYPES = frozenset(
+    {"coupon", "automatic", "product", "cart", "bogo", "free_shipping"}
+)
+SUPPORTED_VOUCHER_DISCOUNT_TYPES = {"percent", "fixed", "free_shipping", "bogo"}
 SUPPORTED_VOUCHER_SCOPES = {"odos", "store", "category", "product"}
 SUPPORTED_VOUCHER_AVAILABILITY = {"auto", "claim", "assigned", "private"}
 PUBLIC_VOUCHER_AVAILABILITY = {"auto", "claim"}
@@ -172,7 +175,21 @@ def discount_for_voucher(
     voucher: Voucher,
     eligible_subtotal: float,
     shipping_amount: float,
+    *,
+    items: list[OrderItemCreate] | None = None,
+    product_meta_map: dict[str, dict[str, object]] | None = None,
+    line_prices: dict[str, float] | None = None,
 ) -> float:
+    promotion_type = getattr(voucher, "promotion_type", None) or "coupon"
+
+    if promotion_type == "bogo" or voucher.discount_type == "bogo":
+        return _bogo_discount_for_voucher(
+            voucher,
+            items or [],
+            product_meta_map=product_meta_map or {},
+            line_prices=line_prices or {},
+        )
+
     if voucher.discount_type == "percent":
         discount = eligible_subtotal * (voucher.discount_value / 100)
     elif voucher.discount_type == "fixed":
@@ -190,6 +207,47 @@ def discount_for_voucher(
 
     ceiling = eligible_subtotal + (shipping_amount if voucher.discount_type == "free_shipping" else 0)
     return round_money(max(0, min(discount, ceiling)))
+
+
+def _bogo_discount_for_voucher(
+    voucher: Voucher,
+    items: list[OrderItemCreate],
+    *,
+    product_meta_map: dict[str, dict[str, object]],
+    line_prices: dict[str, float],
+) -> float:
+    buy_qty = int(getattr(voucher, "bogo_buy_quantity", None) or 0)
+    get_qty = int(getattr(voucher, "bogo_get_quantity", None) or 0)
+    get_percent = float(getattr(voucher, "bogo_get_discount_percent", None) or 100)
+
+    if buy_qty <= 0 or get_qty <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="This BOGO promotion is configured incorrectly.",
+        )
+
+    unit_prices: list[float] = []
+    for item in items:
+        meta = product_meta_map.get(item.product_id, {})
+        unit_price = line_prices.get(item.product_id, float(item.unit_price))
+        if not _line_is_eligible(voucher, item, product_meta=meta, unit_price=unit_price):
+            continue
+        unit_prices.extend([unit_price] * item.quantity)
+
+    if not unit_prices:
+        return 0.0
+
+    unit_prices.sort()
+    bundle_size = buy_qty + get_qty
+    complete_bundles = len(unit_prices) // bundle_size
+    if complete_bundles <= 0:
+        return 0.0
+
+    free_items = complete_bundles * get_qty
+    discount = sum(unit_prices[:free_items]) * (get_percent / 100)
+    if voucher.max_discount is not None:
+        discount = min(discount, voucher.max_discount)
+    return round_money(max(0, discount))
 
 
 def _user_has_prior_orders(db: Session, user_id: uuid.UUID) -> bool:
@@ -283,7 +341,14 @@ def validate_voucher_for_checkout(
             f"You need GH₵{shortfall:.2f} more."
         )
 
-    discount_amount = discount_for_voucher(voucher, eligible_subtotal_amount, shipping_amount)
+    discount_amount = discount_for_voucher(
+        voucher,
+        eligible_subtotal_amount,
+        shipping_amount,
+        items=items,
+        product_meta_map=product_meta_map,
+        line_prices=line_prices,
+    )
     total_amount = round_money(max(0, subtotal_amount + shipping_amount - discount_amount))
 
     return VoucherQuote(
@@ -306,3 +371,84 @@ def is_voucher_publicly_listable(voucher: Voucher) -> bool:
     if getattr(voucher, "approval_status", APPROVED_VOUCHER_STATUS) != APPROVED_VOUCHER_STATUS:
         return False
     return True
+
+
+def validate_voucher_configuration(
+    *,
+    scope: str,
+    availability: str,
+    discount_type: str,
+    discount_value: float,
+    starts_at: datetime | None,
+    ends_at: datetime | None,
+    usage_limit: int | None,
+    per_user_limit: int | None,
+    store_id: str | None,
+    promotion_type: str = "coupon",
+    bogo_buy_quantity: int | None = None,
+    bogo_get_quantity: int | None = None,
+    category_slugs: list[str] | None = None,
+    product_ids: list[str] | None = None,
+) -> None:
+    if scope not in SUPPORTED_VOUCHER_SCOPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unsupported voucher scope.",
+        )
+    if availability not in SUPPORTED_VOUCHER_AVAILABILITY:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unsupported voucher availability mode.",
+        )
+    if promotion_type not in PROMOTION_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unsupported promotion type.",
+        )
+    if discount_type not in SUPPORTED_VOUCHER_DISCOUNT_TYPES and promotion_type != "bogo":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unsupported voucher discount type.",
+        )
+    if discount_type == "percent" and discount_value > 100:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Percent vouchers cannot exceed 100%.",
+        )
+    if scope == "store" and not store_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Store promotions must be attached to a store.",
+        )
+    if scope == "store" and discount_type == "free_shipping":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Store promotions do not support free shipping yet.",
+        )
+    if scope == "category" and not category_slugs:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Category promotions require at least one category slug.",
+        )
+    if scope == "product" and not product_ids:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Product promotions require at least one product id.",
+        )
+    if promotion_type == "bogo":
+        if not bogo_buy_quantity or not bogo_get_quantity:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="BOGO promotions require buy and get quantities.",
+            )
+    if starts_at and ends_at and ends_at < starts_at:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Voucher end date must be after the start date.",
+        )
+    if usage_limit is not None and per_user_limit is not None and per_user_limit > usage_limit:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Per-user limit cannot be higher than the total usage limit.",
+        )
+

@@ -543,6 +543,19 @@ class AdminVoucherRead(BaseModel):
     campaign_tag: str | None = None
     review_notes: str | None = None
     created_by_user_id: uuid.UUID | None = None
+    promotion_type: str = "coupon"
+    priority: int = 0
+    stackable: bool = False
+    exclusive_group: str | None = None
+    auto_apply: bool = False
+    bogo_buy_quantity: int | None = None
+    bogo_get_quantity: int | None = None
+    bogo_get_discount_percent: float | None = None
+    first_order_only: bool = False
+    new_user_only: bool = False
+    category_slugs: list[str] | None = None
+    product_ids: list[str] | None = None
+    excluded_product_ids: list[str] | None = None
 
 
 class AdminVoucherReview(BaseModel):
@@ -573,6 +586,20 @@ class AdminVoucherUpsert(BaseModel):
     is_active: bool = True
     starts_at: datetime | None = None
     ends_at: datetime | None = None
+    campaign_tag: str | None = Field(default=None, max_length=50)
+    promotion_type: str = Field(default="coupon", max_length=30)
+    priority: int = Field(default=0, ge=0, le=1000)
+    stackable: bool = False
+    exclusive_group: str | None = Field(default=None, max_length=50)
+    auto_apply: bool = False
+    bogo_buy_quantity: int | None = Field(default=None, ge=1)
+    bogo_get_quantity: int | None = Field(default=None, ge=1)
+    bogo_get_discount_percent: float | None = Field(default=100, ge=0, le=100)
+    first_order_only: bool = False
+    new_user_only: bool = False
+    category_slugs: list[str] | None = None
+    product_ids: list[str] | None = None
+    excluded_product_ids: list[str] | None = None
 
     @field_validator("code", mode="before")
     @classmethod
@@ -591,6 +618,30 @@ class AdminVoucherUpsert(BaseModel):
     @classmethod
     def normalize_discount_type(cls, value: str) -> str:
         return value.strip().lower()
+
+    @field_validator("promotion_type", mode="before")
+    @classmethod
+    def normalize_promotion_type(cls, value: str) -> str:
+        return value.strip().lower()
+
+
+class AdminVoucherBulkGenerate(BaseModel):
+    prefix: str = Field(min_length=2, max_length=20)
+    count: int = Field(default=10, ge=1, le=200)
+    template: AdminVoucherUpsert
+
+    @field_validator("prefix", mode="before")
+    @classmethod
+    def normalize_prefix(cls, value: str) -> str:
+        return value.strip().upper()
+
+
+class AdminPromotionAnalyticsRead(BaseModel):
+    total_campaigns: int
+    active_campaigns: int
+    total_redemptions: int
+    total_discount_given: float
+    top_campaigns: list[AdminVoucherRead]
 
 
 class AdminFlashSaleNominationRead(BaseModel):

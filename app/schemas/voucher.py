@@ -27,6 +27,49 @@ class VoucherSuggestionsRequest(BaseModel):
     shipping_amount: float = Field(default=0, ge=0)
 
 
+class PromotionCalculateRequest(BaseModel):
+    items: list[OrderItemCreate] = Field(min_length=1)
+    shipping_amount: float = Field(default=0, ge=0)
+    voucher_code: str | None = Field(default=None, max_length=40)
+    include_auto_apply: bool = True
+
+    @field_validator("voucher_code", mode="before")
+    @classmethod
+    def normalize_optional_code(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip().upper()
+        return cleaned or None
+
+
+class AppliedPromotionRead(BaseModel):
+    voucher_id: uuid.UUID
+    code: str
+    title: str
+    promotion_type: str
+    discount_type: str
+    discount_amount: float
+    priority: int
+    stackable: bool
+
+
+class RejectedPromotionRead(BaseModel):
+    code: str | None = None
+    voucher_id: uuid.UUID | None = None
+    reason: str
+    rejection_code: str
+
+
+class PromotionCalculateRead(BaseModel):
+    subtotal_amount: float
+    shipping_amount: float
+    discount_amount: float
+    total_amount: float
+    eligible_subtotal_amount: float
+    applied_promotions: list[AppliedPromotionRead]
+    rejected_promotions: list[RejectedPromotionRead]
+
+
 class VoucherPreviewRead(BaseModel):
     voucher_id: uuid.UUID
     code: str

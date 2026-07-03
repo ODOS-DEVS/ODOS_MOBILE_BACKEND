@@ -17,7 +17,7 @@ from app.core.promo_banner_config import (
 from app.controllers.auth_controller import build_auth_token, login_user
 from app.core.admin_pagination import paginate_scalars
 from app.core.admin_permissions import AdminPermissionLevel, require_super_admin
-from app.core.event_types import USER_LOGIN
+from app.core.event_types import PROMO_CREATED, PROMO_DELETED, PROMO_UPDATED, USER_LOGIN
 from app.helpers.admin_audit import (
     log_admin_order_status_change,
     log_admin_product_mutation,
@@ -25,6 +25,7 @@ from app.helpers.admin_audit import (
     log_admin_vendor_status_change,
     log_admin_role_change,
 )
+from app.helpers.promo_audit import log_admin_promo_mutation
 from app.services.event_log_service import record_admin_event
 from app.schemas.pagination import AdminPageRead
 from app.controllers.finance_controller import (
@@ -140,6 +141,8 @@ from app.schemas.admin import (
     AdminVoucherRead,
     AdminVoucherReview,
     AdminVoucherUpsert,
+    AdminVoucherBulkGenerate,
+    AdminPromotionAnalyticsRead,
     NotificationMarkReadResponse,
 )
 from app.schemas.payment import (
@@ -265,7 +268,67 @@ def _serialize_voucher(
         campaign_tag=getattr(voucher, "campaign_tag", None),
         review_notes=getattr(voucher, "review_notes", None),
         created_by_user_id=getattr(voucher, "created_by_user_id", None),
+        promotion_type=getattr(voucher, "promotion_type", "coupon") or "coupon",
+        priority=int(getattr(voucher, "priority", 0) or 0),
+        stackable=bool(getattr(voucher, "stackable", False)),
+        exclusive_group=getattr(voucher, "exclusive_group", None),
+        auto_apply=bool(getattr(voucher, "auto_apply", False)),
+        bogo_buy_quantity=getattr(voucher, "bogo_buy_quantity", None),
+        bogo_get_quantity=getattr(voucher, "bogo_get_quantity", None),
+        bogo_get_discount_percent=getattr(voucher, "bogo_get_discount_percent", None),
+        first_order_only=bool(getattr(voucher, "first_order_only", False)),
+        new_user_only=bool(getattr(voucher, "new_user_only", False)),
+        category_slugs=getattr(voucher, "category_slugs", None),
+        product_ids=getattr(voucher, "product_ids", None),
+        excluded_product_ids=getattr(voucher, "excluded_product_ids", None),
     )
+
+
+def _voucher_audit_snapshot(voucher: Voucher) -> dict:
+    return {
+        "code": voucher.code,
+        "title": voucher.title,
+        "promotion_type": getattr(voucher, "promotion_type", "coupon"),
+        "discount_type": voucher.discount_type,
+        "is_active": voucher.is_active,
+        "auto_apply": bool(getattr(voucher, "auto_apply", False)),
+        "priority": int(getattr(voucher, "priority", 0) or 0),
+    }
+
+
+def _apply_voucher_upsert(voucher: Voucher, payload: AdminVoucherUpsert, *, target_store: Store | None) -> None:
+    discount_value = 0 if payload.discount_type in {"free_shipping", "bogo"} else round(payload.discount_value, 2)
+    voucher.code = payload.code
+    voucher.title = payload.title
+    voucher.description = payload.description
+    voucher.issuer_name = payload.issuer_name or (target_store.title if target_store else None)
+    voucher.scope = payload.scope
+    voucher.availability = payload.availability
+    voucher.store_id = target_store.id if target_store else None
+    voucher.reward_text = build_voucher_reward_text(payload.discount_type, discount_value or payload.discount_value)
+    voucher.discount_type = payload.discount_type
+    voucher.discount_value = discount_value
+    voucher.min_subtotal = round(payload.min_subtotal, 2)
+    voucher.max_discount = round(payload.max_discount, 2) if payload.max_discount is not None else None
+    voucher.usage_limit = payload.usage_limit
+    voucher.per_user_limit = payload.per_user_limit
+    voucher.is_active = payload.is_active
+    voucher.starts_at = payload.starts_at
+    voucher.ends_at = payload.ends_at
+    voucher.campaign_tag = payload.campaign_tag
+    voucher.promotion_type = payload.promotion_type
+    voucher.priority = payload.priority
+    voucher.stackable = payload.stackable
+    voucher.exclusive_group = payload.exclusive_group
+    voucher.auto_apply = payload.auto_apply
+    voucher.bogo_buy_quantity = payload.bogo_buy_quantity
+    voucher.bogo_get_quantity = payload.bogo_get_quantity
+    voucher.bogo_get_discount_percent = payload.bogo_get_discount_percent
+    voucher.first_order_only = payload.first_order_only
+    voucher.new_user_only = payload.new_user_only
+    voucher.category_slugs = payload.category_slugs
+    voucher.product_ids = payload.product_ids
+    voucher.excluded_product_ids = payload.excluded_product_ids
 
 
 def _validate_voucher_payload(payload: AdminVoucherUpsert) -> None:
@@ -279,6 +342,11 @@ def _validate_voucher_payload(payload: AdminVoucherUpsert) -> None:
         usage_limit=payload.usage_limit,
         per_user_limit=payload.per_user_limit,
         store_id=payload.store_id,
+        promotion_type=payload.promotion_type,
+        bogo_buy_quantity=payload.bogo_buy_quantity,
+        bogo_get_quantity=payload.bogo_get_quantity,
+        category_slugs=payload.category_slugs,
+        product_ids=payload.product_ids,
     )
 
 
@@ -2603,28 +2671,17 @@ def create_admin_voucher(
                 detail="The selected store was not found.",
             )
 
-    discount_value = 0 if payload.discount_type == "free_shipping" else round(payload.discount_value, 2)
+    discount_value = 0 if payload.discount_type in {"free_shipping", "bogo"} else round(payload.discount_value, 2)
     voucher = Voucher(
         code=payload.code,
         title=payload.title,
-        description=payload.description,
-        issuer_name=payload.issuer_name or (target_store.title if target_store else None),
-        scope=payload.scope,
-        availability=payload.availability,
-        store_id=target_store.id if target_store else None,
-        reward_text=build_voucher_reward_text(payload.discount_type, discount_value),
+        reward_text=build_voucher_reward_text(payload.discount_type, discount_value or payload.discount_value),
         discount_type=payload.discount_type,
         discount_value=discount_value,
-        min_subtotal=round(payload.min_subtotal, 2),
-        max_discount=round(payload.max_discount, 2) if payload.max_discount is not None else None,
-        usage_limit=payload.usage_limit,
-        per_user_limit=payload.per_user_limit,
-        is_active=payload.is_active,
         approval_status="approved",
         reviewed_by_user_id=current_user.id,
-        starts_at=payload.starts_at,
-        ends_at=payload.ends_at,
     )
+    _apply_voucher_upsert(voucher, payload, target_store=target_store)
     db.add(voucher)
     try:
         db.commit()
@@ -2636,6 +2693,14 @@ def create_admin_voucher(
         ) from exc
 
     db.refresh(voucher)
+    log_admin_promo_mutation(
+        db,
+        admin_user=current_user,
+        event_type=PROMO_CREATED,
+        action="promo.created",
+        voucher=voucher,
+        after_state=_voucher_audit_snapshot(voucher),
+    )
     return _serialize_voucher(voucher, store_name=target_store.title if target_store else None)
 
 
@@ -2649,6 +2714,7 @@ def update_admin_voucher(
     _validate_voucher_payload(payload)
 
     voucher = _get_admin_voucher(db, voucher_id)
+    before_state = _voucher_audit_snapshot(voucher)
     target_store = None
     if payload.scope == "store":
         target_store = db.scalar(select(Store).where(Store.id == payload.store_id))
@@ -2657,25 +2723,7 @@ def update_admin_voucher(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="The selected store was not found.",
             )
-    discount_value = 0 if payload.discount_type == "free_shipping" else round(payload.discount_value, 2)
-
-    voucher.code = payload.code
-    voucher.title = payload.title
-    voucher.description = payload.description
-    voucher.issuer_name = payload.issuer_name or (target_store.title if target_store else None)
-    voucher.scope = payload.scope
-    voucher.availability = payload.availability
-    voucher.store_id = target_store.id if target_store else None
-    voucher.reward_text = build_voucher_reward_text(payload.discount_type, discount_value)
-    voucher.discount_type = payload.discount_type
-    voucher.discount_value = discount_value
-    voucher.min_subtotal = round(payload.min_subtotal, 2)
-    voucher.max_discount = round(payload.max_discount, 2) if payload.max_discount is not None else None
-    voucher.usage_limit = payload.usage_limit
-    voucher.per_user_limit = payload.per_user_limit
-    voucher.is_active = payload.is_active
-    voucher.starts_at = payload.starts_at
-    voucher.ends_at = payload.ends_at
+    _apply_voucher_upsert(voucher, payload, target_store=target_store)
 
     try:
         db.commit()
@@ -2687,6 +2735,15 @@ def update_admin_voucher(
         ) from exc
 
     db.refresh(voucher)
+    log_admin_promo_mutation(
+        db,
+        admin_user=current_user,
+        event_type=PROMO_UPDATED,
+        action="promo.updated",
+        voucher=voucher,
+        before_state=before_state,
+        after_state=_voucher_audit_snapshot(voucher),
+    )
     stats_map = _voucher_stats_map(db, [voucher.id])
     voucher_stats = stats_map.get(voucher.id, {})
     return _serialize_voucher(
@@ -2705,8 +2762,117 @@ def archive_admin_voucher(
 ) -> None:
     require_admin(current_user)
     voucher = _get_admin_voucher(db, voucher_id)
+    before_state = _voucher_audit_snapshot(voucher)
     voucher.is_active = False
     db.commit()
+    log_admin_promo_mutation(
+        db,
+        admin_user=current_user,
+        event_type=PROMO_DELETED,
+        action="promo.archived",
+        voucher=voucher,
+        before_state=before_state,
+        after_state=_voucher_audit_snapshot(voucher),
+    )
+
+
+def bulk_generate_admin_vouchers(
+    db: Session,
+    current_user: User,
+    payload: AdminVoucherBulkGenerate,
+) -> list[AdminVoucherRead]:
+    require_admin(current_user)
+    _validate_voucher_payload(payload.template)
+
+    target_store = None
+    if payload.template.scope == "store":
+        target_store = db.scalar(select(Store).where(Store.id == payload.template.store_id))
+        if not target_store:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="The selected store was not found.",
+            )
+
+    created: list[AdminVoucherRead] = []
+    for index in range(payload.count):
+        code = f"{payload.prefix}{index + 1:04d}"
+        item_payload = payload.template.model_copy(update={"code": code})
+        voucher = Voucher(
+            code=code,
+            title=item_payload.title,
+            reward_text=build_voucher_reward_text(item_payload.discount_type, item_payload.discount_value),
+            discount_type=item_payload.discount_type,
+            discount_value=item_payload.discount_value,
+            approval_status="approved",
+            reviewed_by_user_id=current_user.id,
+        )
+        _apply_voucher_upsert(voucher, item_payload, target_store=target_store)
+        db.add(voucher)
+        try:
+            db.flush()
+        except IntegrityError as exc:
+            db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Could not generate code {code}.",
+            ) from exc
+        log_admin_promo_mutation(
+            db,
+            admin_user=current_user,
+            event_type=PROMO_CREATED,
+            action="promo.bulk_created",
+            voucher=voucher,
+            after_state=_voucher_audit_snapshot(voucher),
+        )
+        created.append(_serialize_voucher(voucher, store_name=target_store.title if target_store else None))
+
+    db.commit()
+    return created
+
+
+def get_admin_promotion_analytics(
+    db: Session,
+    current_user: User,
+) -> AdminPromotionAnalyticsRead:
+    require_admin(current_user)
+    vouchers = list(db.scalars(select(Voucher).order_by(Voucher.created_at.desc())).all())
+    stats_map = _voucher_stats_map(db, [voucher.id for voucher in vouchers])
+
+    total_redemptions = 0
+    total_discount_given = 0.0
+    active_campaigns = 0
+    serialized: list[AdminVoucherRead] = []
+
+    for voucher in vouchers:
+        stats = stats_map.get(voucher.id, {})
+        redemption_count = int(stats.get("redemption_count", 0))
+        total_redemptions += redemption_count
+        total_discount_given += float(stats.get("total_discount_amount", 0))
+        status_value = _voucher_status(voucher, redemption_count)
+        if status_value == "active":
+            active_campaigns += 1
+        serialized.append(
+            _serialize_voucher(
+                voucher,
+                redemption_count=redemption_count,
+                unique_user_count=int(stats.get("unique_user_count", 0)),
+                total_discount_amount=float(stats.get("total_discount_amount", 0)),
+            )
+        )
+
+    top_campaigns = sorted(
+        serialized,
+        key=lambda item: (item.total_discount_amount, item.redemption_count),
+        reverse=True,
+    )[:10]
+
+    return AdminPromotionAnalyticsRead(
+        total_campaigns=len(vouchers),
+        active_campaigns=active_campaigns,
+        total_redemptions=total_redemptions,
+        total_discount_given=round(total_discount_given, 2),
+        top_campaigns=top_campaigns,
+    )
 
 
 def review_admin_voucher(

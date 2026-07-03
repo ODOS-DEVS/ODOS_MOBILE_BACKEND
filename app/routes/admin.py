@@ -11,6 +11,7 @@ from app.controllers.admin_controller import (
     archive_admin_promo_banner,
     archive_admin_flash_sale_event,
     bootstrap_first_admin,
+    bulk_generate_admin_vouchers,
     create_admin_category,
     create_admin_product,
     create_admin_market,
@@ -24,6 +25,7 @@ from app.controllers.admin_controller import (
     get_admin_dashboard,
     get_admin_me,
     get_admin_finance_overview_payload,
+    get_admin_promotion_analytics,
     get_admin_order,
     get_admin_product,
     get_admin_promo_banner,
@@ -140,6 +142,8 @@ from app.schemas.admin import (
     AdminVoucherRead,
     AdminVoucherReview,
     AdminVoucherUpsert,
+    AdminVoucherBulkGenerate,
+    AdminPromotionAnalyticsRead,
     AdminFlashSaleNominationRead,
     AdminFlashSaleNominationReview,
     NotificationMarkReadResponse,
@@ -849,6 +853,23 @@ def post_voucher_review(
     db: Session = Depends(get_db),
 ):
     return review_admin_voucher(db, current_user, voucher_id, payload)
+
+
+@router.get("/vouchers/analytics", response_model=AdminPromotionAnalyticsRead)
+def get_voucher_analytics(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return get_admin_promotion_analytics(db, current_user)
+
+
+@router.post("/vouchers/bulk-generate", response_model=list[AdminVoucherRead], status_code=status.HTTP_201_CREATED)
+def post_bulk_vouchers(
+    payload: AdminVoucherBulkGenerate,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return bulk_generate_admin_vouchers(db, current_user, payload)
 
 
 @router.get("/flash-sale-nominations", response_model=AdminPageRead[AdminFlashSaleNominationRead])

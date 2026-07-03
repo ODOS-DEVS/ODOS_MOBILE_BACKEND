@@ -303,8 +303,20 @@ def _vendor_allocation_map(
     order: Order,
     *,
     vendor_scope: set[uuid.UUID] | None = None,
+    db: Session | None = None,
 ) -> dict[uuid.UUID, dict[str, float]]:
-    return vendor_allocation_map(order, vendor_scope=vendor_scope)
+    voucher_store_id = None
+    if db and order.voucher_id:
+        from app.models import Voucher
+
+        voucher = db.get(Voucher, order.voucher_id)
+        if voucher and voucher.scope == "store" and voucher.store_id:
+            voucher_store_id = voucher.store_id
+    return vendor_allocation_map(
+        order,
+        vendor_scope=vendor_scope,
+        voucher_store_id=voucher_store_id,
+    )
 
 
 def settle_vendor_wallets_for_order(
@@ -313,7 +325,7 @@ def settle_vendor_wallets_for_order(
     *,
     vendor_scope: set[uuid.UUID] | None = None,
 ) -> set[uuid.UUID]:
-    allocations = _vendor_allocation_map(order, vendor_scope=vendor_scope)
+    allocations = _vendor_allocation_map(order, vendor_scope=vendor_scope, db=db)
     if not allocations:
         return set()
 

@@ -10,27 +10,27 @@ from sqlalchemy.orm import Session
 from app.models import Product, Store, User, Voucher, VoucherAssignment, VoucherRedemption
 from app.schemas.order import OrderItemCreate
 from app.schemas.voucher import (
+    AppliedPromotionRead,
+    PromotionCalculateRead,
+    PromotionCalculateRequest,
+    RejectedPromotionRead,
     StoreVoucherRead,
     VoucherPreviewRead,
     VoucherPreviewRequest,
     VoucherSuggestionsRequest,
     VoucherWalletRead,
 )
-
-SUPPORTED_VOUCHER_DISCOUNT_TYPES = {"percent", "fixed", "free_shipping"}
-SUPPORTED_VOUCHER_SCOPES = {"odos", "store"}
-SUPPORTED_VOUCHER_AVAILABILITY = {"auto", "claim", "assigned"}
-
-
-@dataclass(slots=True)
-class VoucherQuote:
-    voucher: Voucher
-    discount_amount: float
-    eligible_subtotal_amount: float
-    subtotal_amount: float
-    shipping_amount: float
-    total_amount: float
-    store_name: str | None = None
+from app.services.promotion_engine import (
+    calculate_best_discount,
+    calculate_voucher_quote,
+    suggest_best_promotions,
+)
+from app.services.promotion_service import (
+    build_voucher_reward_text,
+    validate_voucher_configuration,
+    voucher_status,
+    VoucherQuote,
+)
 
 
 def _compute_subtotal(items: list[OrderItemCreate]) -> float:
@@ -46,67 +46,15 @@ def _normalize_code(value: str | None) -> str | None:
 
 
 def build_voucher_reward_text(discount_type: str, discount_value: float) -> str:
-    if discount_type == "percent":
-        value = int(discount_value) if float(discount_value).is_integer() else round(discount_value, 2)
-        return f"{value}% OFF"
-    if discount_type == "fixed":
-        value = int(discount_value) if float(discount_value).is_integer() else round(discount_value, 2)
-        return f"GHS {value} OFF"
-    return "FREE SHIPPING"
+    from app.services.promotion_service import build_voucher_reward_text as _build
+
+    return _build(discount_type, discount_value)
 
 
-def validate_voucher_configuration(
-    *,
-    scope: str,
-    availability: str,
-    discount_type: str,
-    discount_value: float,
-    starts_at: datetime | None,
-    ends_at: datetime | None,
-    usage_limit: int | None,
-    per_user_limit: int | None,
-    store_id: str | None,
-) -> None:
-    if scope not in SUPPORTED_VOUCHER_SCOPES:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Unsupported voucher scope.",
-        )
-    if availability not in SUPPORTED_VOUCHER_AVAILABILITY:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Unsupported voucher availability mode.",
-        )
-    if discount_type not in SUPPORTED_VOUCHER_DISCOUNT_TYPES:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Unsupported voucher discount type.",
-        )
-    if discount_type == "percent" and discount_value > 100:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Percent vouchers cannot exceed 100%.",
-        )
-    if scope == "store" and not store_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Store promotions must be attached to a store.",
-        )
-    if scope == "store" and discount_type == "free_shipping":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Store promotions do not support free shipping yet.",
-        )
-    if starts_at and ends_at and ends_at < starts_at:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Voucher end date must be after the start date.",
-        )
-    if usage_limit is not None and per_user_limit is not None and per_user_limit > usage_limit:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Per-user limit cannot be higher than the total usage limit.",
-        )
+def validate_voucher_configuration(**kwargs) -> None:
+    from app.services.promotion_service import validate_voucher_configuration as _validate
+
+    _validate(**kwargs)
 
 
 def _counts_for_voucher(db: Session, voucher_id, user_id) -> tuple[int, int]:
@@ -123,35 +71,15 @@ def _counts_for_voucher(db: Session, voucher_id, user_id) -> tuple[int, int]:
 
 
 def voucher_status(voucher: Voucher, *, now: datetime, overall_count: int) -> str:
-    if not voucher.is_active:
-        return "disabled"
-    if voucher.starts_at and voucher.starts_at > now:
-        return "scheduled"
-    if voucher.ends_at and voucher.ends_at < now:
-        return "expired"
-    if voucher.usage_limit is not None and overall_count >= voucher.usage_limit:
-        return "limit_reached"
-    return "active"
+    from app.services.promotion_service import voucher_status as _status
+
+    return _status(voucher, now=now, overall_count=overall_count)
 
 
 def _discount_for_voucher(voucher: Voucher, eligible_subtotal: float, shipping_amount: float) -> float:
-    if voucher.discount_type == "percent":
-        discount = eligible_subtotal * (voucher.discount_value / 100)
-    elif voucher.discount_type == "fixed":
-        discount = voucher.discount_value
-    elif voucher.discount_type == "free_shipping":
-        discount = shipping_amount
-    else:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="That voucher is configured with an unsupported discount type.",
-        )
+    from app.services.promotion_service import discount_for_voucher
 
-    if voucher.max_discount is not None:
-        discount = min(discount, voucher.max_discount)
-
-    ceiling = eligible_subtotal + (shipping_amount if voucher.discount_type == "free_shipping" else 0)
-    return round(max(0, min(discount, ceiling)), 2)
+    return discount_for_voucher(voucher, eligible_subtotal, shipping_amount)
 
 
 def _voucher_store_name_map(db: Session, store_ids: Iterable[str]) -> dict[str, str]:
@@ -300,23 +228,7 @@ def build_voucher_quote(
     items: list[OrderItemCreate],
     shipping_amount: float,
 ) -> VoucherQuote:
-    from app.services.promotion_service import normalize_voucher_code, validate_voucher_for_checkout
-
-    normalized_code = normalize_voucher_code(voucher_code)
-    if not normalized_code:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Enter a promo code first.",
-        )
-
-    voucher = db.scalar(select(Voucher).where(Voucher.code == normalized_code))
-    if not voucher:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="That promo code wasn't found.",
-        )
-
-    return validate_voucher_for_checkout(db, user, voucher, items, shipping_amount)
+    return calculate_voucher_quote(db, user, voucher_code, items, shipping_amount)
 
 
 def list_user_vouchers(db: Session, user: User) -> list[VoucherWalletRead]:
@@ -588,26 +500,89 @@ def suggest_vouchers(
     user: User,
     payload: VoucherSuggestionsRequest,
 ) -> list[VoucherPreviewRead]:
-    wallet = list_user_vouchers(db, user)
-    active_codes = [item.code for item in wallet if item.status == "active"]
-    if not active_codes:
-        return []
-
     suggestions: list[VoucherPreviewRead] = []
-    for code in active_codes:
-        try:
-            preview = preview_voucher(
-                db,
-                user,
-                VoucherPreviewRequest(
-                    voucher_code=code,
-                    items=payload.items,
-                    shipping_amount=payload.shipping_amount,
-                ),
-            )
-            suggestions.append(preview)
-        except HTTPException:
+    for result in suggest_best_promotions(
+        db,
+        user,
+        payload.items,
+        payload.shipping_amount,
+    ):
+        if not result.primary_voucher:
             continue
+        voucher = result.primary_voucher
+        suggestions.append(
+            VoucherPreviewRead(
+                voucher_id=voucher.id,
+                code=voucher.code,
+                title=voucher.title,
+                issuer_name=voucher.issuer_name,
+                scope=voucher.scope,  # type: ignore[arg-type]
+                availability=voucher.availability,  # type: ignore[arg-type]
+                store_id=voucher.store_id,
+                store_name=None,
+                reward_text=voucher.reward_text,
+                discount_amount=result.discount_amount,
+                eligible_subtotal_amount=result.eligible_subtotal_amount,
+                subtotal_amount=result.subtotal_amount,
+                shipping_amount=result.shipping_amount,
+                total_amount=result.total_amount,
+            )
+        )
 
-    suggestions.sort(key=lambda item: item.discount_amount, reverse=True)
-    return suggestions[:5]
+    return suggestions
+
+
+def calculate_promotions(
+    db: Session,
+    user: User,
+    payload: PromotionCalculateRequest,
+) -> PromotionCalculateRead:
+    from app.helpers.promo_audit import log_promo_applied, log_promo_rejections
+
+    result = calculate_best_discount(
+        db,
+        user,
+        payload.items,
+        payload.shipping_amount,
+        voucher_code=payload.voucher_code,
+        include_auto_apply=payload.include_auto_apply,
+    )
+    if result.rejected_promotions:
+        log_promo_rejections(
+            db,
+            user=user,
+            rejections=result.rejected_promotions,
+            voucher_code=payload.voucher_code,
+        )
+    if result.applied_promotions:
+        log_promo_applied(db, user=user, order=None, result=result)
+
+    return PromotionCalculateRead(
+        subtotal_amount=result.subtotal_amount,
+        shipping_amount=result.shipping_amount,
+        discount_amount=result.discount_amount,
+        total_amount=result.total_amount,
+        eligible_subtotal_amount=result.eligible_subtotal_amount,
+        applied_promotions=[
+            AppliedPromotionRead(
+                voucher_id=uuid.UUID(promo.voucher_id),
+                code=promo.code,
+                title=promo.title,
+                promotion_type=promo.promotion_type,
+                discount_type=promo.discount_type,
+                discount_amount=promo.discount_amount,
+                priority=promo.priority,
+                stackable=promo.stackable,
+            )
+            for promo in result.applied_promotions
+        ],
+        rejected_promotions=[
+            RejectedPromotionRead(
+                code=rejected.code,
+                voucher_id=uuid.UUID(rejected.voucher_id) if rejected.voucher_id else None,
+                reason=rejected.reason,
+                rejection_code=rejected.rejection_code,
+            )
+            for rejected in result.rejected_promotions
+        ],
+    )

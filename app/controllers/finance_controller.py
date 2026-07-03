@@ -160,7 +160,14 @@ def record_payment_collection(
     account = get_or_create_platform_treasury_account(
         db, currency=payment_transaction.currency
     )
-    allocations = vendor_allocation_map(order)
+    voucher_store_id = None
+    if order.voucher_id:
+        from app.models import Voucher
+
+        voucher = db.get(Voucher, order.voucher_id)
+        if voucher and voucher.scope == "store" and voucher.store_id:
+            voucher_store_id = voucher.store_id
+    allocations = vendor_allocation_map(order, voucher_store_id=voucher_store_id)
     vendor_net_total = round_money(
         sum(allocation["net_amount"] for allocation in allocations.values())
     )

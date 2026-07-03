@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint, func
-from sqlalchemy.dialects.postgresql import ARRAY, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -86,6 +86,7 @@ class Order(Base):
     voucher_code: Mapped[str | None] = mapped_column(String(40), nullable=True)
     voucher_title: Mapped[str | None] = mapped_column(String(120), nullable=True)
     discount_amount: Mapped[float] = mapped_column(Float, nullable=False, default=0, server_default="0")
+    promotion_breakdown: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     placed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

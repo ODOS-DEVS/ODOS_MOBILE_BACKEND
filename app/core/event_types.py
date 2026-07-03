@@ -29,6 +29,13 @@ ADMIN_VENDOR_MUTATION = "admin.vendor_mutation"
 ADMIN_FINANCE_MUTATION = "admin.finance_mutation"
 ADMIN_SETTINGS_MUTATION = "admin.settings_mutation"
 
+# Promotions
+PROMO_CREATED = "promo.created"
+PROMO_UPDATED = "promo.updated"
+PROMO_DELETED = "promo.deleted"
+PROMO_APPLIED = "promo.applied"
+PROMO_REJECTED = "promo.rejected"
+
 # System / security
 API_REQUEST_FAILED = "system.api_request_failed"
 AUTH_FAILURE = "system.auth_failure"

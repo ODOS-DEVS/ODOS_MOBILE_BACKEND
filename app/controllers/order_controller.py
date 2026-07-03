@@ -9,7 +9,8 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.controllers.notification_controller import create_notification_event, order_notification_image
 from app.controllers.vendor_controller import fetch_vendor_dashboard, list_vendor_orders_payloads
-from app.controllers.voucher_controller import build_voucher_quote
+from app.services.promotion_engine import calculate_best_discount
+from app.helpers.promo_audit import log_promo_applied, log_promo_rejections
 from app.core.event_types import ORDER_CREATED
 from app.models import CartItem, NotificationEvent, Order, OrderItem, Product, ReturnRequest, User, VoucherRedemption
 from app.services.event_log_service import record_user_event
@@ -333,7 +334,7 @@ def prepare_order_for_checkout(
     payment_reference: str | None = None,
 ) -> Order:
     computed_subtotal = 0.0
-    voucher_quote = None
+    promo_result = None
     _validate_checkout_items(db, payload.items)
     product_snapshot_map = _load_product_snapshot_map(db, payload)
     try:
@@ -352,16 +353,26 @@ def prepare_order_for_checkout(
                 detail="Some item prices changed. Refresh your cart and try again.",
             )
 
-    if payload.voucher_code:
-        voucher_quote = build_voucher_quote(
+    promo_result = calculate_best_discount(
+        db,
+        user,
+        payload.items,
+        payload.shipping_amount,
+        voucher_code=payload.voucher_code,
+        include_auto_apply=True,
+    )
+    if payload.voucher_code and promo_result.rejected_promotions:
+        log_promo_rejections(
             db,
-            user,
-            payload.voucher_code,
-            payload.items,
-            payload.shipping_amount,
+            user=user,
+            rejections=promo_result.rejected_promotions,
+            voucher_code=payload.voucher_code,
         )
+    if promo_result.applied_promotions:
+        log_promo_applied(db, user=user, order=None, result=promo_result)
 
-    computed_discount = round(voucher_quote.discount_amount if voucher_quote else 0, 2)
+    computed_discount = round(promo_result.discount_amount, 2)
+    primary_voucher = promo_result.primary_voucher
 
     try:
         delivery_config = get_delivery_config(db)
@@ -402,10 +413,11 @@ def prepare_order_for_checkout(
         payment_network=payload.payment_network,
         payment_phone=payload.payment_phone,
         payment_last4=payload.payment_last4,
-        voucher_id=voucher_quote.voucher.id if voucher_quote else None,
-        voucher_code=voucher_quote.voucher.code if voucher_quote else None,
-        voucher_title=voucher_quote.voucher.title if voucher_quote else None,
+        voucher_id=primary_voucher.id if primary_voucher else None,
+        voucher_code=primary_voucher.code if primary_voucher else None,
+        voucher_title=primary_voucher.title if primary_voucher else None,
         discount_amount=computed_discount,
+        promotion_breakdown=promo_result.to_breakdown_json() if promo_result.applied_promotions else None,
     )
 
     for item in payload.items:

@@ -11,7 +11,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.dialects.postgresql import ARRAY, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -105,6 +105,38 @@ class Voucher(Base):
     category_slugs: Mapped[list[str] | None] = mapped_column(ARRAY(String(80)), nullable=True)
     product_ids: Mapped[list[str] | None] = mapped_column(ARRAY(String(100)), nullable=True)
     excluded_product_ids: Mapped[list[str] | None] = mapped_column(ARRAY(String(100)), nullable=True)
+    promotion_type: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        default="coupon",
+        server_default="coupon",
+        index=True,
+    )
+    priority: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+        index=True,
+    )
+    stackable: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
+    exclusive_group: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    auto_apply: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+        index=True,
+    )
+    bogo_buy_quantity: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    bogo_get_quantity: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    bogo_get_discount_percent: Mapped[float | None] = mapped_column(Float, nullable=True)
+    rules_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
