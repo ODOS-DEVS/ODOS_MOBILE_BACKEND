@@ -1,6 +1,6 @@
 import logging
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi import HTTPException, UploadFile, status
 from sqlalchemy import func, select
@@ -25,23 +25,30 @@ from app.models import (
     Market,
     NotificationEvent,
     Order,
+    OrderItem,
     Product,
+    ReturnRequest,
     Store,
     User,
     UserRole,
     VendorApplication,
     VendorStatus,
     VendorWallet,
+    VendorWalletTransaction,
     Voucher,
     VoucherRedemption,
 )
+from app.services.finance_math import vendor_allocation_map
 from app.schemas.vendor import (
+    VendorAnalyticsRead,
     VendorApplicationListItem,
     VendorApplicationRead,
     VendorDashboardRead,
     VendorOrderItemRead,
     VendorOrderRead,
     VendorOrderStatusUpdate,
+    VendorReturnRequestRead,
+    VendorTopProductRead,
     VendorProductCreate,
     VendorProductRead,
     VendorProductUpdate,
@@ -65,6 +72,14 @@ from app.services.delivery_service import (
 
 logger = logging.getLogger(__name__)
 VENDOR_ACTIVE_ORDER_STATUSES = {"pending", "confirmed", "processing", "ready", "out_for_delivery"}
+VENDOR_OPEN_RETURN_STATUSES = {"requested", "under_review", "approved"}
+VENDOR_ANALYTICS_ORDER_STATUSES = {
+    "confirmed",
+    "processing",
+    "ready",
+    "out_for_delivery",
+    "delivered",
+}
 VENDOR_ALLOWED_STATUSES = {
     "pending",
     "confirmed",
@@ -358,10 +373,41 @@ def _matching_vendor_items(db: Session, user: User, order: Order) -> list:
     return matching_items
 
 
+def _order_earnings_fields(db: Session, user: User, order: Order) -> dict[str, float | bool | str | None]:
+    allocation = vendor_allocation_map(order, vendor_scope={user.id}).get(user.id)
+    if not allocation:
+        return {
+            "gross_amount": None,
+            "commission_amount": None,
+            "net_amount": None,
+            "is_settled": False,
+            "currency": "GHS",
+        }
+
+    is_settled = bool(
+        db.scalar(
+            select(VendorWalletTransaction.id).where(
+                VendorWalletTransaction.vendor_user_id == user.id,
+                VendorWalletTransaction.order_id == order.id,
+                VendorWalletTransaction.kind == "sale_settlement",
+            )
+        )
+    )
+    return {
+        "gross_amount": allocation["gross_amount"],
+        "commission_amount": allocation["commission_amount"],
+        "net_amount": allocation["net_amount"],
+        "is_settled": is_settled,
+        "currency": "GHS",
+    }
+
+
 def _serialize_vendor_order(db: Session, user: User, order: Order) -> VendorOrderRead | None:
     matching_items = _matching_vendor_items(db, user, order)
     if not matching_items:
         return None
+
+    earnings = _order_earnings_fields(db, user, order)
 
     return VendorOrderRead(
         id=order.id,
@@ -375,6 +421,11 @@ def _serialize_vendor_order(db: Session, user: User, order: Order) -> VendorOrde
         payment_label=order.payment_label,
         product_count=sum(item.quantity for item in matching_items),
         total_amount=round(sum(item.line_total for item in matching_items), 2),
+        gross_amount=earnings["gross_amount"],
+        commission_amount=earnings["commission_amount"],
+        net_amount=earnings["net_amount"],
+        is_settled=bool(earnings["is_settled"]),
+        currency=str(earnings["currency"]),
         status=order.vendor_status,
         placed_at=order.placed_at,
         paid_at=order.paid_at,
@@ -390,6 +441,33 @@ def _serialize_vendor_order(db: Session, user: User, order: Order) -> VendorOrde
             )
             for item in matching_items
         ],
+    )
+
+
+def _serialize_vendor_return_request(request: ReturnRequest) -> VendorReturnRequestRead:
+    order = request.order
+    order_item = request.order_item
+    return VendorReturnRequestRead(
+        id=request.id,
+        order_id=request.order_id,
+        order_number=order.order_number,
+        order_item_id=request.order_item_id,
+        product_id=order_item.product_id,
+        product_title=order_item.title,
+        product_image_url=order_item.image_url,
+        customer_name=order.address_full_name,
+        request_type=request.request_type,
+        status=request.status,
+        quantity=request.quantity,
+        reason=request.reason,
+        details=request.details,
+        evidence_image_urls=request.evidence_image_urls,
+        admin_note=request.admin_note,
+        refund_amount=round(request.refund_amount, 2)
+        if request.refund_amount is not None
+        else None,
+        created_at=request.created_at,
+        updated_at=request.updated_at,
     )
 
 
@@ -983,6 +1061,127 @@ def patch_vendor_product_stock(
 def list_vendor_orders(db: Session, user: User) -> list[VendorOrderRead]:
     require_vendor_access(user)
     return list_vendor_orders_payloads(db, user)
+
+
+def list_vendor_return_requests(db: Session, user: User) -> list[VendorReturnRequestRead]:
+    require_vendor_access(user)
+    requests = list(
+        db.scalars(
+            select(ReturnRequest)
+            .join(OrderItem, ReturnRequest.order_item_id == OrderItem.id)
+            .options(
+                selectinload(ReturnRequest.order),
+                selectinload(ReturnRequest.order_item),
+            )
+            .where(OrderItem.vendor_user_id == user.id)
+            .order_by(ReturnRequest.created_at.desc())
+        ).all()
+    )
+    return [_serialize_vendor_return_request(request) for request in requests]
+
+
+def get_vendor_return_request(
+    db: Session,
+    user: User,
+    return_request_id: str,
+) -> VendorReturnRequestRead:
+    require_vendor_access(user)
+    request = db.scalar(
+        select(ReturnRequest)
+        .join(OrderItem, ReturnRequest.order_item_id == OrderItem.id)
+        .options(
+            selectinload(ReturnRequest.order),
+            selectinload(ReturnRequest.order_item),
+        )
+        .where(
+            ReturnRequest.id == return_request_id,
+            OrderItem.vendor_user_id == user.id,
+        )
+    )
+    if not request:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="That return request was not found.",
+        )
+    return _serialize_vendor_return_request(request)
+
+
+def fetch_vendor_analytics(db: Session, user: User) -> VendorAnalyticsRead:
+    require_vendor_access(user)
+
+    now = datetime.now(UTC)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    week_start = today_start - timedelta(days=6)
+    month_start = today_start - timedelta(days=29)
+
+    orders = list_vendor_orders_payloads(db, user)
+
+    def order_timestamp(order: VendorOrderRead) -> datetime:
+        return order.placed_at or order.created_at
+
+    today_orders = [
+        order
+        for order in orders
+        if order_timestamp(order) >= today_start
+        and order.status in VENDOR_ANALYTICS_ORDER_STATUSES
+    ]
+    week_orders = [
+        order
+        for order in orders
+        if order_timestamp(order) >= week_start
+        and order.status in VENDOR_ANALYTICS_ORDER_STATUSES
+    ]
+
+    open_returns = (
+        db.scalar(
+            select(func.count(ReturnRequest.id))
+            .join(OrderItem, ReturnRequest.order_item_id == OrderItem.id)
+            .where(
+                OrderItem.vendor_user_id == user.id,
+                ReturnRequest.status.in_(VENDOR_OPEN_RETURN_STATUSES),
+            )
+        )
+        or 0
+    )
+
+    top_rows = db.execute(
+        select(
+            OrderItem.product_id,
+            OrderItem.title,
+            OrderItem.image_url,
+            func.sum(OrderItem.quantity).label("units_sold"),
+            func.sum(OrderItem.line_total).label("gross_sales"),
+        )
+        .join(Order, OrderItem.order_id == Order.id)
+        .where(
+            OrderItem.vendor_user_id == user.id,
+            Order.vendor_status == "delivered",
+            func.coalesce(Order.placed_at, Order.created_at) >= month_start,
+        )
+        .group_by(OrderItem.product_id, OrderItem.title, OrderItem.image_url)
+        .order_by(func.sum(OrderItem.line_total).desc())
+        .limit(5)
+    ).all()
+
+    top_products = [
+        VendorTopProductRead(
+            product_id=row.product_id,
+            product_title=row.title,
+            product_image_url=row.image_url,
+            units_sold=int(row.units_sold or 0),
+            gross_sales=round(float(row.gross_sales or 0), 2),
+        )
+        for row in top_rows
+    ]
+
+    return VendorAnalyticsRead(
+        today_sales=round(sum(order.total_amount for order in today_orders), 2),
+        week_sales=round(sum(order.total_amount for order in week_orders), 2),
+        today_orders=len(today_orders),
+        week_orders=len(week_orders),
+        open_returns=int(open_returns),
+        top_products=top_products,
+    )
 
 
 def _vendor_voucher_stats_map(

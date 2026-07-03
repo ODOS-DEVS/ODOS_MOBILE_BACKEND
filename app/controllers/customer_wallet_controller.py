@@ -68,6 +68,23 @@ def get_or_create_customer_wallet(db: Session, user_id: uuid.UUID) -> CustomerWa
     return wallet
 
 
+def get_or_create_customer_wallet_for_update(
+    db: Session,
+    user_id: uuid.UUID,
+) -> CustomerWallet:
+    wallet = db.scalar(
+        select(CustomerWallet)
+        .where(CustomerWallet.user_id == user_id)
+        .with_for_update()
+    )
+    if wallet:
+        return wallet
+    wallet = CustomerWallet(user_id=user_id, currency="GHS")
+    db.add(wallet)
+    db.flush()
+    return wallet
+
+
 def _serialize_wallet(wallet: CustomerWallet) -> CustomerWalletRead:
     recent_transactions = sorted(
         wallet.transactions,
@@ -330,7 +347,7 @@ def create_wallet_checkout(
     current_user: User,
     payload: WalletCheckoutCreate,
 ) -> WalletCheckoutRead:
-    wallet = get_or_create_customer_wallet(db, current_user.id)
+    wallet = get_or_create_customer_wallet_for_update(db, current_user.id)
     order_total = round_money(payload.total_amount)
     if wallet.available_balance < order_total:
         raise HTTPException(

@@ -19,8 +19,11 @@ from app.controllers.vendor_controller import (
     gift_vendor_voucher,
     get_vendor_order,
     acknowledge_vendor_order,
+    fetch_vendor_analytics,
+    get_vendor_return_request,
     list_vendor_orders,
     list_vendor_products,
+    list_vendor_return_requests,
     list_vendor_vouchers,
     patch_vendor_product_stock,
     submit_vendor_application,
@@ -41,6 +44,7 @@ from app.core.database import get_db
 from app.models import User
 from app.schemas.user import MessageResponse
 from app.schemas.vendor import (
+    VendorAnalyticsRead,
     VendorApplicationRead,
     VendorDashboardRead,
     VendorOrderRead,
@@ -51,6 +55,7 @@ from app.schemas.vendor import (
     VendorProductStockUpdate,
     VendorProductUpdate,
     VendorProfileRead,
+    VendorReturnRequestRead,
     VendorStoreRead,
     VendorVoucherGiftPayload,
     VendorVoucherRead,
@@ -184,6 +189,31 @@ def get_vendor_dashboard(
     db: Session = Depends(get_db),
 ):
     return fetch_vendor_dashboard(db, current_user)
+
+
+@router.get("/analytics", response_model=VendorAnalyticsRead)
+def get_vendor_analytics(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return fetch_vendor_analytics(db, current_user)
+
+
+@router.get("/returns", response_model=list[VendorReturnRequestRead])
+def get_vendor_returns(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return list_vendor_return_requests(db, current_user)
+
+
+@router.get("/returns/{return_request_id}", response_model=VendorReturnRequestRead)
+def get_vendor_return_detail(
+    return_request_id: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return get_vendor_return_request(db, current_user, return_request_id)
 
 
 @router.get("/wallet", response_model=VendorWalletRead)

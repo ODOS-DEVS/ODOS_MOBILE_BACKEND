@@ -201,6 +201,9 @@ def compute_server_subtotal(
     subtotal = 0.0
     for item in items:
         pricing = resolved.get(item.product_id)
-        unit_price = pricing.sale_price if pricing else float(item.unit_price)
-        subtotal += unit_price * item.quantity
+        if not pricing:
+            raise ValueError(
+                f"Product {item.product_id} is no longer available for checkout."
+            )
+        subtotal += pricing.sale_price * item.quantity
     return round_money(subtotal), resolved

@@ -500,8 +500,52 @@ class VendorOrderRead(BaseModel):
     payment_label: str | None = None
     product_count: int
     total_amount: float
+    gross_amount: float | None = None
+    commission_amount: float | None = None
+    net_amount: float | None = None
+    is_settled: bool = False
+    currency: str = "GHS"
     status: str
     placed_at: datetime | None = None
     paid_at: datetime | None = None
     created_at: datetime
     items: list[VendorOrderItemRead]
+
+
+class VendorReturnRequestRead(BaseModel):
+    id: uuid.UUID
+    order_id: uuid.UUID
+    order_number: str
+    order_item_id: uuid.UUID
+    product_id: str
+    product_title: str
+    product_image_url: str | None = None
+    customer_name: str | None = None
+    request_type: str
+    status: str
+    quantity: int
+    reason: str
+    details: str | None = None
+    evidence_image_urls: list[str] | None = None
+    admin_note: str | None = None
+    refund_amount: float | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class VendorTopProductRead(BaseModel):
+    product_id: str
+    product_title: str
+    product_image_url: str | None = None
+    units_sold: int
+    gross_sales: float
+
+
+class VendorAnalyticsRead(BaseModel):
+    currency: str = "GHS"
+    today_sales: float
+    week_sales: float
+    today_orders: int
+    week_orders: int
+    open_returns: int
+    top_products: list[VendorTopProductRead]

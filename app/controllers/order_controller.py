@@ -11,7 +11,7 @@ from app.controllers.notification_controller import create_notification_event, o
 from app.controllers.vendor_controller import fetch_vendor_dashboard, list_vendor_orders_payloads
 from app.controllers.voucher_controller import build_voucher_quote
 from app.models import CartItem, NotificationEvent, Order, OrderItem, Product, ReturnRequest, User, VoucherRedemption
-from app.schemas.order import OrderCreate, OrderRead, ReturnRequestCreate, ReturnRequestRead
+from app.schemas.order import OrderCreate, OrderItemCreate, OrderRead, ReturnRequestCreate, ReturnRequestRead
 from app.services.pricing_service import compute_server_subtotal
 from app.services.delivery_service import (
     get_delivery_config,
@@ -214,6 +214,73 @@ def _dispatch_order_push(
         logger.exception("Failed to send order push for %s", order.id)
 
 
+def _validate_checkout_items(db: Session, items: list[OrderItemCreate]) -> None:
+    product_ids = [item.product_id for item in items]
+    if not product_ids:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Your order must include at least one item.",
+        )
+
+    products = {
+        product.id: product
+        for product in db.scalars(select(Product).where(Product.id.in_(product_ids))).all()
+    }
+
+    for item in items:
+        product = products.get(item.product_id)
+        if not product:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="One or more items are no longer available.",
+            )
+        if not product.is_active or product.status != "active":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{item.title} is no longer available.",
+            )
+        if product.stock < item.quantity:
+            remaining = max(product.stock, 0)
+            detail = (
+                f"Only {remaining} left in stock for {item.title}."
+                if remaining
+                else f"{item.title} is out of stock."
+            )
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=detail,
+            )
+
+
+def _decrement_order_inventory(db: Session, order: Order) -> None:
+    product_ids = [item.product_id for item in order.items if item.product_id]
+    if not product_ids:
+        return
+
+    products = {
+        product.id: product
+        for product in db.scalars(
+            select(Product).where(Product.id.in_(product_ids)).with_for_update()
+        ).all()
+    }
+
+    for item in order.items:
+        if not item.product_id:
+            continue
+        product = products.get(item.product_id)
+        if not product:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"{item.title} is no longer available.",
+            )
+        if product.stock < item.quantity:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Not enough stock left for {item.title}.",
+            )
+        product.stock -= item.quantity
+
+
 def _load_product_snapshot_map(db: Session, payload: OrderCreate) -> dict[str, dict[str, object | None]]:
     return {
         product_id: {
@@ -265,8 +332,15 @@ def prepare_order_for_checkout(
 ) -> Order:
     computed_subtotal = 0.0
     voucher_quote = None
+    _validate_checkout_items(db, payload.items)
     product_snapshot_map = _load_product_snapshot_map(db, payload)
-    server_subtotal, resolved_prices = compute_server_subtotal(db, payload.items)
+    try:
+        server_subtotal, resolved_prices = compute_server_subtotal(db, payload.items)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
 
     for item in payload.items:
         pricing = resolved_prices.get(item.product_id)
@@ -418,6 +492,8 @@ def activate_order_after_payment(
     order.paid_at = datetime.now(timezone.utc)
     order.cancelled_at = None
     order.cancellation_reason = None
+
+    _decrement_order_inventory(db, order)
 
     existing_redemption = db.scalar(
         select(VoucherRedemption.id).where(VoucherRedemption.order_id == order.id)

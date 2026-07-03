@@ -362,21 +362,42 @@ def create_checkout_session(
         str(request.url_for("paystack_checkout_redirect")),
         return_url=app_cancel_url,
     )
-    paystack_response = initialize_transaction(
-        email=current_user.email,
-        amount_subunit=amount_to_subunit(order.total_amount),
-        reference=reference,
-        callback_url=callback_url,
-        cancel_url=cancel_url,
-        currency=settings.paystack_currency,
-        channels=None,
-        metadata={
-            "order_id": str(order.id),
-            "order_number": order.order_number,
-            "user_id": str(current_user.id),
-            "payment_type": payload.payment_type,
-        },
-    )
+    preferred_channels = _preferred_channel(payload.payment_type)
+    try:
+        paystack_response = initialize_transaction(
+            email=current_user.email,
+            amount_subunit=amount_to_subunit(order.total_amount),
+            reference=reference,
+            callback_url=callback_url,
+            cancel_url=cancel_url,
+            currency=settings.paystack_currency,
+            channels=preferred_channels,
+            metadata={
+                "order_id": str(order.id),
+                "order_number": order.order_number,
+                "user_id": str(current_user.id),
+                "payment_type": payload.payment_type,
+            },
+        )
+    except HTTPException as exc:
+        if preferred_channels and exc.status_code == status.HTTP_502_BAD_GATEWAY:
+            paystack_response = initialize_transaction(
+                email=current_user.email,
+                amount_subunit=amount_to_subunit(order.total_amount),
+                reference=reference,
+                callback_url=callback_url,
+                cancel_url=cancel_url,
+                currency=settings.paystack_currency,
+                channels=None,
+                metadata={
+                    "order_id": str(order.id),
+                    "order_number": order.order_number,
+                    "user_id": str(current_user.id),
+                    "payment_type": payload.payment_type,
+                },
+            )
+        else:
+            raise
     response_data = paystack_response.get("data", {})
     transaction = PaymentTransaction(
         order_id=order.id,
