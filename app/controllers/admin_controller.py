@@ -16,6 +16,16 @@ from app.core.promo_banner_config import (
 )
 from app.controllers.auth_controller import build_auth_token, login_user
 from app.core.admin_pagination import paginate_scalars
+from app.core.admin_permissions import AdminPermissionLevel, require_super_admin
+from app.core.event_types import USER_LOGIN
+from app.helpers.admin_audit import (
+    log_admin_order_status_change,
+    log_admin_product_mutation,
+    log_admin_user_status_change,
+    log_admin_vendor_status_change,
+    log_admin_role_change,
+)
+from app.services.event_log_service import record_admin_event
 from app.schemas.pagination import AdminPageRead
 from app.controllers.finance_controller import (
     get_admin_finance_overview,
@@ -123,6 +133,7 @@ from app.schemas.admin import (
     AdminUserStoreSummaryRead,
     AdminUserRead,
     AdminUserStatusUpdate,
+    AdminPermissionUpdate,
     AdminUserVendorApplicationRead,
     AdminVendorRead,
     AdminVendorStatusUpdate,
@@ -304,6 +315,7 @@ def _serialize_user(user: User) -> AdminUserRead:
         phone_number=user.phone_number,
         avatar_url=user.avatar_url,
         roles=user.roles,
+        admin_permission=getattr(user, "admin_permission", None),
         vendor_status=user.vendor_status,
         account_status=_account_status(user),
         joined_at=user.created_at,
@@ -1089,13 +1101,22 @@ def _sync_platform_store_avatar(store: Store, avatar_url: str | None) -> None:
         store.image_banner_url = avatar_url
 
 
-def login_admin_user(db: Session, credentials: UserLogin) -> AuthToken:
-    session = login_user(db, credentials)
+def login_admin_user(db: Session, credentials: UserLogin, request=None) -> AuthToken:
+    session = login_user(db, credentials, request=request)
     if session.user.role != UserRole.ADMIN:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="This account does not have admin access.",
         )
+    record_admin_event(
+        db,
+        admin_user=session.user,
+        event_type=USER_LOGIN,
+        action="admin.login",
+        entity_type="user",
+        entity_id=str(session.user.id),
+        metadata={"email": session.user.email},
+    )
     return session
 
 
@@ -1137,6 +1158,7 @@ def bootstrap_first_admin(db: Session, payload: UserCreate) -> AuthToken:
         phone_number=payload.phone_number,
         hashed_password=hash_password(payload.password),
         role=UserRole.ADMIN,
+        admin_permission="super_admin",
         is_active=True,
         is_verified=True,
     )
@@ -1343,9 +1365,17 @@ def update_admin_user_status(
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
 
+    before_active = user.is_active
     user.is_active = payload.account_status == "active"
     db.commit()
     db.refresh(user)
+    log_admin_user_status_change(
+        db,
+        admin_user=current_user,
+        target_user=user,
+        before_active=before_active,
+        after_active=user.is_active,
+    )
     return _serialize_user(user)
 
 
@@ -1391,6 +1421,7 @@ def update_admin_vendor_status(
     if not vendor:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vendor not found.")
 
+    before_status = vendor.vendor_status.value
     if payload.status == "suspended":
         vendor.vendor_status = VendorStatus.SUSPENDED
         for store in db.scalars(select(Store).where(Store.vendor_user_id == vendor.id)).all():
@@ -1407,6 +1438,13 @@ def update_admin_vendor_status(
 
     db.commit()
     db.refresh(vendor)
+    log_admin_vendor_status_change(
+        db,
+        admin_user=current_user,
+        vendor=vendor,
+        before_status=before_status,
+        after_status=vendor.vendor_status.value,
+    )
     return _serialize_vendor(db, vendor)
 
 
@@ -1626,6 +1664,19 @@ def _validate_promo_banner_payload(payload: AdminPromoBannerUpsert) -> None:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Choose a campaign for this banner.",
         )
+    if link_type == "discounted_products" and target:
+        try:
+            percent = int(target)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Minimum discount must be a whole number between 1 and 90.",
+            ) from exc
+        if percent < 1 or percent > 90:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Minimum discount must be between 1 and 90 percent.",
+            )
     if link_type == "external" and target and not (
         target.startswith("http://") or target.startswith("https://")
     ):
@@ -2304,6 +2355,18 @@ async def create_admin_product(
     db.add(product)
     db.commit()
     db.refresh(product)
+    log_admin_product_mutation(
+        db,
+        admin_user=current_user,
+        action="product.created",
+        product_id=product.id,
+        after_state={
+            "price": product.price,
+            "stock": product.stock,
+            "status": product.status,
+        },
+        metadata={"title": product.title, "store_id": product.store_id},
+    )
     broadcast_catalog_product_change(product)
     vendor = None
     if product.vendor_user_id:
@@ -2338,6 +2401,11 @@ async def update_admin_product(
     if not product:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found.")
 
+    before_state = {
+        "price": product.price,
+        "stock": product.stock,
+        "status": product.status,
+    }
     store = _get_store_for_admin_product(db, payload.store_id)
     uploaded_image_urls = await save_image_uploads(images, folder="products")
     existing_image_urls = list(product.image_urls or ([] if not product.image_url else [product.image_url]))
@@ -2383,6 +2451,19 @@ async def update_admin_product(
 
     db.commit()
     db.refresh(product)
+    log_admin_product_mutation(
+        db,
+        admin_user=current_user,
+        action="product.updated",
+        product_id=product.id,
+        before_state=before_state,
+        after_state={
+            "price": product.price,
+            "stock": product.stock,
+            "status": product.status,
+        },
+        metadata={"title": product.title, "store_id": product.store_id},
+    )
     broadcast_catalog_product_change(product)
     vendor = None
     if product.vendor_user_id:
@@ -3005,6 +3086,7 @@ def update_admin_order_status(
     if not order:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found.")
 
+    before_status = order.vendor_status
     order.vendor_status = payload.status
     changed_wallet_vendor_ids: set[uuid.UUID] = set()
     if payload.status == "delivered":
@@ -3045,6 +3127,14 @@ def update_admin_order_status(
     db.refresh(order)
     for vendor_user_id in changed_wallet_vendor_ids:
         publish_vendor_wallet_updates(vendor_user_id)
+    log_admin_order_status_change(
+        db,
+        admin_user=current_user,
+        order_id=str(order.id),
+        order_number=order.order_number,
+        before_status=before_status,
+        after_status=payload.status,
+    )
     return _serialize_order(db, order)
 
 
@@ -3125,3 +3215,37 @@ def mark_admin_notification_read(
         db.commit()
 
     return NotificationMarkReadResponse(notification_key=str(notification.id))
+
+
+def update_admin_user_permission(
+    db: Session,
+    current_user: User,
+    user_id: str,
+    payload: AdminPermissionUpdate,
+) -> AdminUserRead:
+    require_super_admin(current_user)
+
+    try:
+        permission = AdminPermissionLevel(payload.admin_permission)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unsupported admin permission level.",
+        ) from exc
+
+    user = db.scalar(select(User).where(User.id == user_id))
+    if not user or user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Admin user not found.")
+
+    before_permission = getattr(user, "admin_permission", None)
+    user.admin_permission = permission.value
+    db.commit()
+    db.refresh(user)
+    log_admin_role_change(
+        db,
+        admin_user=current_user,
+        target_user=user,
+        before_permission=before_permission,
+        after_permission=permission.value,
+    )
+    return _serialize_user(user)

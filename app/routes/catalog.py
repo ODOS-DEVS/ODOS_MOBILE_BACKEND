@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 
-from app.controllers.deals_controller import get_deals_hub
+from app.controllers.deals_controller import get_deals_hub, GHANA_CAMPAIGN_TAGS
 from app.controllers.catalog_controller import (
     get_catalog_product,
     get_store,
@@ -33,6 +33,7 @@ from app.core.cache import (
     set_cache_control,
 )
 from app.core.database import get_db
+from app.services.deal_catalog_service import list_deal_products
 from app.schemas.catalog import (
     CategoryRead,
     FlashSaleEventRead,
@@ -197,6 +198,50 @@ def get_store_by_id(store_id: str, response: Response, db: Session = Depends(get
 @router.get("/deals-hub", response_model=DealsHubRead)
 def get_deals_hub_endpoint(db: Session = Depends(get_db)):
     return get_deals_hub(db)
+
+
+@router.get("/campaign-tags")
+def get_campaign_tags():
+    return [{"tag": tag, "label": label} for tag, label in GHANA_CAMPAIGN_TAGS]
+
+
+@router.get("/deal-products", response_model=list[ProductRead])
+def get_deal_products(
+    response: Response,
+    db: Session = Depends(get_db),
+    min_discount_percent: int | None = Query(default=None, ge=1, le=90),
+    campaign_tag: str | None = Query(default=None, max_length=50),
+    limit: int = Query(default=30, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+):
+    cache_key = ":".join(
+        [
+            "catalog",
+            "deal-products",
+            f"min={min_discount_percent or 'any'}",
+            f"campaign={campaign_tag or 'all'}",
+            f"limit={limit}",
+            f"offset={offset}",
+        ]
+    )
+    ttl = products_list_ttl(section=None, placement=None)
+
+    cached = cache_get_json(cache_key)
+    if cached is not None:
+        set_cache_control(response, ttl, hit=True)
+        return [ProductRead.model_validate(item) for item in cached]
+
+    serialized = list_deal_products(
+        db,
+        min_discount_percent=min_discount_percent,
+        campaign_tag=campaign_tag,
+        limit=limit,
+        offset=offset,
+    )
+    payload = [item.model_dump(mode="json") for item in serialized]
+    cache_set_json(cache_key, payload, ttl)
+    set_cache_control(response, ttl, hit=False)
+    return serialized
 
 
 @router.get("/promo-banners", response_model=list[PromoBannerRead])

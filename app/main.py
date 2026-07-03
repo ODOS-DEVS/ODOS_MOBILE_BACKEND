@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
+from app.middleware.event_logging import EventLoggingMiddleware
 from app.routes import (
     admin,
     account,
@@ -66,6 +67,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(EventLoggingMiddleware)
 
 uploads_directory = Path(settings.media_root)
 uploads_directory.mkdir(parents=True, exist_ok=True)

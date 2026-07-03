@@ -45,6 +45,7 @@ class UserLogin(BaseModel):
 
 class GoogleAuthRequest(BaseModel):
     id_token: str = Field(min_length=1)
+    picture_url: str | None = Field(default=None, max_length=2000)
 
 
 class VerifyEmailRequest(BaseModel):
@@ -251,6 +252,7 @@ class UserRead(BaseModel):
     personalization_enabled: bool
     analytics_enabled: bool
     role: UserRole
+    admin_permission: str | None = None
     roles: list[str]
     vendor_status: VendorStatus
     vendor_id: str | None

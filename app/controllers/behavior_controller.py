@@ -6,7 +6,13 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.event_types import (
+    CART_UPDATED,
+    PRODUCT_VIEW,
+    SEARCH_QUERY,
+)
 from app.models import Order, OrderItem, User, UserBehaviorEvent
+from app.services.event_log_service import record_user_event
 from app.schemas.behavior import (
     SUPPORTED_BEHAVIOR_EVENT_TYPES,
     BehaviorEventBatchCreate,
@@ -37,6 +43,13 @@ def record_behavior_event_batch(
     accepted = 0
     now = datetime.now(timezone.utc)
 
+    behavior_to_audit = {
+        "product_view": (PRODUCT_VIEW, "commerce.product_view"),
+        "search_query": (SEARCH_QUERY, "commerce.search_query"),
+        "add_to_cart": (CART_UPDATED, "commerce.cart_add"),
+        "remove_from_cart": (CART_UPDATED, "commerce.cart_remove"),
+    }
+
     for event in payload.events:
         if event.event_type not in SUPPORTED_BEHAVIOR_EVENT_TYPES:
             continue
@@ -58,6 +71,25 @@ def record_behavior_event_batch(
             )
         )
         accepted += 1
+
+        audit_mapping = behavior_to_audit.get(event.event_type)
+        if audit_mapping:
+            audit_type, audit_action = audit_mapping
+            record_user_event(
+                db,
+                user_id=str(user.id),
+                event_type=audit_type,
+                action=audit_action,
+                entity_type="product" if event.product_id else None,
+                entity_id=event.product_id,
+                metadata={
+                    "session_id": payload.session_id,
+                    "search_query": _normalize_search_query(event.search_query),
+                    "source_screen": event.source_screen,
+                    **(event.metadata or {}),
+                },
+                commit=False,
+            )
 
     if accepted:
         db.commit()

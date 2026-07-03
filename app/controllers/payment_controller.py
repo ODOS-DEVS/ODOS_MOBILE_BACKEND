@@ -26,7 +26,10 @@ from app.controllers.wallet_controller import (
     reconcile_paystack_transfer_event,
 )
 from app.core.config import settings
+from app.core.event_types import CHECKOUT_STARTED, ORDER_CREATED, PAYMENT_ATTEMPT
+from app.helpers.event_context import request_ip, request_user_agent
 from app.models import Order, PaymentTransaction, PaymentWebhookEvent, User
+from app.services.event_log_service import record_user_event
 from app.schemas.order import OrderRead
 from app.schemas.payment import (
     CheckoutSessionCreate,
@@ -413,6 +416,36 @@ def create_checkout_session(
     )
     db.add(transaction)
     db.commit()
+    record_user_event(
+        db,
+        user_id=str(current_user.id),
+        event_type=CHECKOUT_STARTED,
+        action="commerce.checkout_started",
+        entity_type="order",
+        entity_id=str(order.id),
+        metadata={
+            "order_number": order.order_number,
+            "payment_type": payload.payment_type,
+            "amount": order.total_amount,
+        },
+        ip_address=request_ip(request),
+        user_agent=request_user_agent(request),
+    )
+    record_user_event(
+        db,
+        user_id=str(current_user.id),
+        event_type=PAYMENT_ATTEMPT,
+        action="commerce.payment_attempt",
+        entity_type="payment_transaction",
+        entity_id=reference,
+        metadata={
+            "order_id": str(order.id),
+            "provider": "paystack",
+            "amount": order.total_amount,
+        },
+        ip_address=request_ip(request),
+        user_agent=request_user_agent(request),
+    )
     return CheckoutSessionRead(
         order_id=order.id,
         order_number=order.order_number,

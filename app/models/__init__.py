@@ -37,6 +37,7 @@ from app.models.user import (
     VendorStatus,
     WishlistItem,
 )
+from app.models.system_event_log import SystemEventLog
 from app.models.user_behavior import UserBehaviorEvent
 from app.models.user_verified_phone import UserVerifiedPhone
 from app.models.vendor import VendorApplication
@@ -73,6 +74,7 @@ __all__ = [
     "SavedAddress",
     "SavedPaymentMethod",
     "Store",
+    "SystemEventLog",
     "User",
     "UserAuthAccount",
     "UserBehaviorEvent",

@@ -60,10 +60,18 @@ from app.controllers.admin_controller import (
     update_admin_return_request,
     update_admin_store_status,
     update_admin_user_status,
+    update_admin_user_permission,
     update_admin_vendor_status,
     update_admin_voucher,
     review_admin_voucher,
 )
+from app.controllers.event_log_controller import (
+    admin_event_log_list_dependency,
+    get_admin_event_log_stats,
+)
+from app.core.admin_permissions import require_audit_access, require_super_admin
+from app.core.rate_limit import limit_login
+from app.schemas.event_log import EventLogPageRead, EventLogStatsRead
 from app.controllers.delivery_settings_controller import (
     get_admin_delivery_settings,
     update_admin_delivery_settings,
@@ -124,6 +132,7 @@ from app.schemas.admin import (
     AdminUserDetailRead,
     AdminUserRead,
     AdminUserStatusUpdate,
+    AdminPermissionUpdate,
     AdminVendorWithdrawalRequestRead,
     AdminVendorWithdrawalUpdate,
     AdminVendorRead,
@@ -198,7 +207,8 @@ async def admin_login(request: Request, db: Session = Depends(get_db)):
     except ValidationError as exc:
         raise RequestValidationError(exc.errors()) from exc
 
-    return login_admin_user(db, credentials)
+    limit_login(request, credentials.email)
+    return login_admin_user(db, credentials, request=request)
 
 
 @router.get("/auth/me", response_model=UserRead)
@@ -258,6 +268,16 @@ def patch_user_status(
     db: Session = Depends(get_db),
 ):
     return update_admin_user_status(db, current_user, user_id, payload)
+
+
+@router.patch("/users/{user_id}/permission", response_model=AdminUserRead)
+def patch_user_permission(
+    user_id: str,
+    payload: AdminPermissionUpdate,
+    current_user: Annotated[User, Depends(require_super_admin)],
+    db: Session = Depends(get_db),
+):
+    return update_admin_user_permission(db, current_user, user_id, payload)
 
 
 @router.get("/vendors", response_model=AdminPageRead[AdminVendorRead])
@@ -1028,4 +1048,19 @@ def admin_update_delivery_settings(
     db: Session = Depends(get_db),
 ):
     return update_admin_delivery_settings(db, current_user, payload)
+
+
+@router.get("/event-logs", response_model=EventLogPageRead)
+def admin_event_logs(
+    page: Annotated[EventLogPageRead, Depends(admin_event_log_list_dependency)],
+):
+    return page
+
+
+@router.get("/event-logs/stats", response_model=EventLogStatsRead)
+def admin_event_log_stats(
+    current_user: Annotated[User, Depends(require_audit_access)],
+    db: Session = Depends(get_db),
+):
+    return get_admin_event_log_stats(db, current_user)
 

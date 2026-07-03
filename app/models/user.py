@@ -123,6 +123,11 @@ class User(Base):
         server_default=UserRole.CUSTOMER.value,
         nullable=False,
     )
+    admin_permission: Mapped[str | None] = mapped_column(
+        String(30),
+        nullable=True,
+        index=True,
+    )
     vendor_status: Mapped[VendorStatus] = mapped_column(
         Enum(
             VendorStatus,

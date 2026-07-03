@@ -188,6 +188,87 @@ async def save_image_uploads(uploads: list[UploadFile] | None, *, folder: str) -
     return image_urls
 
 
+def normalize_remote_avatar_url(url: str | None) -> str | None:
+    if not url or not isinstance(url, str):
+        return None
+
+    cleaned = url.strip()
+    if not cleaned.startswith("http://") and not cleaned.startswith("https://"):
+        return None
+
+    if "googleusercontent.com" in cleaned and "=s" in cleaned:
+        base = cleaned.split("=s", 1)[0]
+        return f"{base}=s256-c"
+
+    return cleaned
+
+
+def is_google_avatar_url(url: str | None) -> bool:
+    return bool(url and "googleusercontent.com" in url)
+
+
+def is_managed_avatar_url(url: str | None) -> bool:
+    if not url:
+        return False
+    cleaned = url.strip()
+    return "res.cloudinary.com" in cleaned or cleaned.startswith("/uploads")
+
+
+def import_avatar_from_url(source_url: str | None) -> str | None:
+    normalized = normalize_remote_avatar_url(source_url)
+    if not normalized:
+        return None
+
+    if not settings.cloudinary_is_configured:
+        return normalized[:500]
+
+    try:
+        download = requests.get(normalized, timeout=12)
+        download.raise_for_status()
+    except requests.RequestException:
+        return normalized[:500]
+
+    content_type = (download.headers.get("content-type") or "image/jpeg").split(";")[0].strip()
+    extension = ALLOWED_IMAGE_CONTENT_TYPES.get(content_type, ".jpg")
+
+    target = _resolve_target("users/avatars")
+    timestamp = str(int(time.time()))
+    upload_payload = {
+        "timestamp": timestamp,
+        "folder": target["asset_folder"],
+    }
+
+    try:
+        response = requests.post(
+            _cloudinary_upload_url(),
+            data={
+                **upload_payload,
+                "api_key": settings.cloudinary_api_key,
+                "signature": _sign_cloudinary_payload(upload_payload),
+            },
+            files={
+                "file": (
+                    f"google-avatar{extension}",
+                    download.content,
+                    content_type,
+                )
+            },
+            timeout=30,
+        )
+    except requests.RequestException:
+        return normalized[:500]
+
+    if not response.ok:
+        return normalized[:500]
+
+    payload = response.json()
+    secure_url = payload.get("secure_url")
+    if not secure_url:
+        return normalized[:500]
+
+    return str(secure_url)
+
+
 def remove_media_file(file_url: str | None) -> None:
     _require_cloudinary_configuration()
 

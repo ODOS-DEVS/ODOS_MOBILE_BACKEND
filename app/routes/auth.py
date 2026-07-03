@@ -67,7 +67,7 @@ def signup(
     db: Session = Depends(get_db),
 ):
     limit_signup(request)
-    return signup_user(db, user_data)
+    return signup_user(db, user_data, request=request)
 
 
 @router.post("/login", response_model=AuthToken)
@@ -94,7 +94,7 @@ async def login(
         raise RequestValidationError(exc.errors()) from exc
 
     limit_login(request, credentials.email)
-    return login_user(db, credentials)
+    return login_user(db, credentials, request=request)
 
 
 @router.post("/google", response_model=AuthToken)
@@ -104,7 +104,7 @@ def google_auth(
     db: Session = Depends(get_db),
 ):
     limit_google_auth(request)
-    return google_auth_user(db, payload)
+    return google_auth_user(db, payload, request=request)
 
 
 @router.post("/verify-email", response_model=UserRead)

@@ -27,6 +27,7 @@ class AdminUserRead(BaseModel):
     phone_number: str | None
     avatar_url: str | None
     roles: list[str]
+    admin_permission: str | None = None
     vendor_status: VendorStatus
     account_status: str
     joined_at: datetime
@@ -194,6 +195,15 @@ class AdminUserStatusUpdate(BaseModel):
     @field_validator("account_status", mode="before")
     @classmethod
     def normalize_status(cls, value: str) -> str:
+        return value.strip().lower()
+
+
+class AdminPermissionUpdate(BaseModel):
+    admin_permission: str = Field(min_length=1, max_length=30)
+
+    @field_validator("admin_permission", mode="before")
+    @classmethod
+    def normalize_permission(cls, value: str) -> str:
         return value.strip().lower()
 
 

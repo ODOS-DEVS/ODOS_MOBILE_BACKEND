@@ -3,13 +3,19 @@ import logging
 import secrets
 from datetime import UTC, datetime, timedelta
 
-from fastapi import HTTPException, status
+from fastapi import HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.auth import raise_account_blocked
 from app.core.config import settings
+from app.core.event_types import (
+    USER_GOOGLE_AUTH,
+    USER_LOGIN,
+    USER_LOGIN_FAILED,
+    USER_SIGNUP,
+)
 from app.core.google_auth import verify_google_identity_token
 from app.core.phone import normalize_ghana_phone
 from app.core.security import (
@@ -19,8 +25,14 @@ from app.core.security import (
     hash_password,
     verify_password,
 )
-from app.models import AuthProvider, User, UserAuthAccount
-from app.controllers.notification_controller import create_notification_event
+from app.helpers.event_context import request_ip, request_user_agent
+from app.models import AuthProvider, User, UserAuthAccount, UserRole
+from app.services.media_service import (
+    import_avatar_from_url,
+    is_google_avatar_url,
+    is_managed_avatar_url,
+    normalize_remote_avatar_url,
+)
 from app.schemas.user import (
     AuthToken,
     ForgotPasswordRequest,
@@ -44,6 +56,7 @@ from app.services.phone_verification_service import (
     record_verified_phone,
 )
 from app.services.sms_service import send_phone_verification_code
+from app.services.event_log_service import record_anonymous_security_event, record_user_event
 from app.services.email_service import (
     send_email_verified_success,
     send_password_changed_success,
@@ -192,7 +205,11 @@ def _dispatch_password_changed_success(user: User) -> None:
         )
 
 
-def signup_user(db: Session, user_data: UserCreate) -> User:
+def signup_user(
+    db: Session,
+    user_data: UserCreate,
+    request: Request | None = None,
+) -> User:
     email = user_data.email.lower()
     phone_number = user_data.phone_number
 
@@ -248,14 +265,38 @@ def signup_user(db: Session, user_data: UserCreate) -> User:
     db.refresh(user)
     _dispatch_email_verification_code(user=user, code=code, strict=False)
 
+    record_user_event(
+        db,
+        user_id=str(user.id),
+        event_type=USER_SIGNUP,
+        action="user.signup",
+        entity_type="user",
+        entity_id=str(user.id),
+        metadata={"email": user.email, "role": user.role.value},
+        ip_address=request_ip(request),
+        user_agent=request_user_agent(request),
+    )
+
     return user
 
 
-def login_user(db: Session, credentials: UserLogin) -> AuthToken:
+def login_user(
+    db: Session,
+    credentials: UserLogin,
+    request: Request | None = None,
+) -> AuthToken:
     email = credentials.email.lower()
     user = db.scalar(select(User).where(User.email == email))
 
     if not user:
+        record_anonymous_security_event(
+            db,
+            event_type=USER_LOGIN_FAILED,
+            action="user.login_failed",
+            metadata={"email": email, "reason": "unknown_email"},
+            ip_address=request_ip(request),
+            user_agent=request_user_agent(request),
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password.",
@@ -269,6 +310,14 @@ def login_user(db: Session, credentials: UserLogin) -> AuthToken:
         )
 
     if not verify_password(credentials.password, user.hashed_password):
+        record_anonymous_security_event(
+            db,
+            event_type=USER_LOGIN_FAILED,
+            action="user.login_failed",
+            metadata={"email": email, "reason": "invalid_password"},
+            ip_address=request_ip(request),
+            user_agent=request_user_agent(request),
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid email or password.",
@@ -278,10 +327,67 @@ def login_user(db: Session, credentials: UserLogin) -> AuthToken:
     if not user.is_active:
         raise_account_blocked()
 
-    return build_auth_token(db, user)
+    login_event_type = USER_LOGIN
+    if user.role == UserRole.ADMIN:
+        login_event_type = USER_LOGIN
+
+    return build_auth_token(
+        db,
+        user,
+        request=request,
+        login_event_type=login_event_type,
+        login_method="password",
+    )
 
 
-def google_auth_user(db: Session, payload: GoogleAuthRequest) -> AuthToken:
+def _resolve_google_picture_url(
+    *,
+    token_picture: str | None,
+    fallback_picture: str | None,
+) -> str | None:
+    token_normalized = normalize_remote_avatar_url(
+        token_picture if isinstance(token_picture, str) else None
+    )
+    if token_normalized:
+        return token_normalized
+
+    fallback_normalized = normalize_remote_avatar_url(
+        fallback_picture if isinstance(fallback_picture, str) else None
+    )
+    if fallback_normalized and "googleusercontent.com" in fallback_normalized:
+        return fallback_normalized
+
+    return None
+
+
+def _should_replace_avatar_with_google(user: User) -> bool:
+    current = (user.avatar_url or "").strip()
+    if not current:
+        return True
+    if is_google_avatar_url(current):
+        return True
+    if is_managed_avatar_url(current):
+        return False
+    return False
+
+
+def _apply_google_avatar(user: User, picture_url: str | None) -> None:
+    if not picture_url or not _should_replace_avatar_with_google(user):
+        return
+
+    imported = import_avatar_from_url(picture_url)
+    if not imported:
+        return
+
+    if user.avatar_url != imported:
+        user.avatar_url = imported
+
+
+def google_auth_user(
+    db: Session,
+    payload: GoogleAuthRequest,
+    request: Request | None = None,
+) -> AuthToken:
     try:
         google_payload = verify_google_identity_token(payload.id_token)
     except ValueError as exc:
@@ -295,7 +401,10 @@ def google_auth_user(db: Session, payload: GoogleAuthRequest) -> AuthToken:
     email = google_payload.get("email")
     email_verified = bool(google_payload.get("email_verified"))
     full_name = google_payload.get("name") or (email.split("@")[0] if email else "Google User")
-    avatar_url = google_payload.get("picture")
+    avatar_url = _resolve_google_picture_url(
+        token_picture=google_payload.get("picture"),
+        fallback_picture=payload.picture_url,
+    )
 
     if not google_sub or not email:
         raise HTTPException(
@@ -314,12 +423,18 @@ def google_auth_user(db: Session, payload: GoogleAuthRequest) -> AuthToken:
         user = linked_account.user
         if not user.is_active:
             raise_account_blocked()
-        if avatar_url and not user.avatar_url:
-            user.avatar_url = avatar_url
-        return build_auth_token(db, user)
+        _apply_google_avatar(user, avatar_url)
+        return build_auth_token(
+            db,
+            user,
+            request=request,
+            login_event_type=USER_GOOGLE_AUTH,
+            login_method="google",
+        )
 
     normalized_email = email.lower()
     user = db.scalar(select(User).where(User.email == normalized_email))
+    is_new_user = user is None
 
     if user:
         if not user.is_active:
@@ -329,16 +444,16 @@ def google_auth_user(db: Session, payload: GoogleAuthRequest) -> AuthToken:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Google account email is not verified.",
             )
-        if avatar_url and not user.avatar_url:
-            user.avatar_url = avatar_url
         if not user.is_verified:
             user.is_verified = True
+        _apply_google_avatar(user, avatar_url)
     else:
+        imported_avatar = import_avatar_from_url(avatar_url) if avatar_url else None
         user = User(
             full_name=full_name,
             email=normalized_email,
             hashed_password=None,
-            avatar_url=avatar_url,
+            avatar_url=imported_avatar,
             is_verified=email_verified,
         )
         db.add(user)
@@ -354,13 +469,55 @@ def google_auth_user(db: Session, payload: GoogleAuthRequest) -> AuthToken:
     db.commit()
     db.refresh(user)
 
-    return build_auth_token(db, user)
+    if is_new_user:
+        record_user_event(
+            db,
+            user_id=str(user.id),
+            event_type=USER_SIGNUP,
+            action="user.signup",
+            entity_type="user",
+            entity_id=str(user.id),
+            metadata={"email": user.email, "provider": "google"},
+            ip_address=request_ip(request),
+            user_agent=request_user_agent(request),
+        )
+
+    return build_auth_token(
+        db,
+        user,
+        request=request,
+        login_event_type=USER_GOOGLE_AUTH,
+        login_method="google",
+    )
 
 
-def build_auth_token(db: Session, user: User) -> AuthToken:
+def build_auth_token(
+    db: Session,
+    user: User,
+    *,
+    request: Request | None = None,
+    login_event_type: str = USER_LOGIN,
+    login_method: str = "password",
+) -> AuthToken:
     user.last_login_at = datetime.now(UTC)
     db.commit()
     db.refresh(user)
+
+    record_user_event(
+        db,
+        user_id=str(user.id),
+        event_type=login_event_type,
+        action="user.login",
+        entity_type="user",
+        entity_id=str(user.id),
+        metadata={
+            "email": user.email,
+            "role": user.role.value,
+            "method": login_method,
+        },
+        ip_address=request_ip(request),
+        user_agent=request_user_agent(request),
+    )
 
     access_token = create_access_token(subject=str(user.id))
     return AuthToken(

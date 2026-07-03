@@ -6,6 +6,7 @@ DEFAULT_PROMO_PLACEMENT = "home"
 SUPPORTED_PROMO_LINK_TYPES = frozenset(
     {
         "deals",
+        "discounted_products",
         "flash_sales",
         "popular",
         "search",
@@ -40,6 +41,7 @@ PROMO_CAMPAIGN_TAGS: list[tuple[str, str]] = [
 
 PROMO_DESTINATION_LABELS: dict[str, str] = {
     "deals": "Deals & offers hub",
+    "discounted_products": "Vendor sale products",
     "flash_sales": "Flash sales",
     "popular": "Popular products",
     "search": "Search results",
@@ -82,6 +84,8 @@ def describe_promo_destination(
     if resolved_type == "campaign" and tag:
         tag_label = dict(PROMO_CAMPAIGN_TAGS).get(tag, tag.replace("-", " ").title())
         return f"{base} · {tag_label}"
+    if resolved_type == "discounted_products" and target.isdigit():
+        return f"{base} · {target}%+ off"
     if resolved_type in {"category", "product", "store", "search", "external", "screen"} and target:
         return f"{base} · {target}"
     return base

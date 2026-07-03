@@ -10,7 +10,9 @@ from sqlalchemy.orm import Session, selectinload
 from app.controllers.notification_controller import create_notification_event, order_notification_image
 from app.controllers.vendor_controller import fetch_vendor_dashboard, list_vendor_orders_payloads
 from app.controllers.voucher_controller import build_voucher_quote
+from app.core.event_types import ORDER_CREATED
 from app.models import CartItem, NotificationEvent, Order, OrderItem, Product, ReturnRequest, User, VoucherRedemption
+from app.services.event_log_service import record_user_event
 from app.schemas.order import OrderCreate, OrderItemCreate, OrderRead, ReturnRequestCreate, ReturnRequestRead
 from app.services.pricing_service import compute_server_subtotal
 from app.services.delivery_service import (
@@ -577,6 +579,20 @@ def create_order(db: Session, user: User, payload: OrderCreate) -> Order:
     _broadcast_order_realtime(db, created_order)
     _dispatch_vendor_new_order_alerts(db, created_order)
     db.commit()
+
+    record_user_event(
+        db,
+        user_id=str(user.id),
+        event_type=ORDER_CREATED,
+        action="commerce.order_created",
+        entity_type="order",
+        entity_id=str(created_order.id),
+        metadata={
+            "order_number": created_order.order_number,
+            "total_amount": created_order.total_amount,
+            "payment_type": created_order.payment_type,
+        },
+    )
 
     return created_order
 
