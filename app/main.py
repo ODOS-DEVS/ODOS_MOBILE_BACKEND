@@ -51,7 +51,7 @@ async def _vendor_order_reminder_loop() -> None:
 @app.on_event("startup")
 async def on_startup() -> None:
     realtime_manager.bind_loop(asyncio.get_running_loop())
-    get_redis()
+    asyncio.create_task(asyncio.to_thread(get_redis))
     asyncio.create_task(_vendor_order_reminder_loop())
 
 

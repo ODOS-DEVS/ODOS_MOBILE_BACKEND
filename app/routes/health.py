@@ -12,10 +12,21 @@ router = APIRouter(tags=["health"])
 
 @router.get("/health")
 def health_check():
+    """Fast liveness probe for Render and admin warmup — must not block on Redis/DB."""
+    return {
+        "status": "ok",
+        "rate_limit": "active" if settings.rate_limit_is_active else "disabled",
+        "cache": "active" if settings.cache_is_active else "disabled",
+    }
+
+
+@router.get("/health/services")
+def services_health_check(db: Session = Depends(get_db)):
     payload = {
         "status": "ok",
         "rate_limit": "disabled",
         "cache": "disabled",
+        "database": "unknown",
     }
 
     if redis_is_enabled() or cache_is_enabled():
@@ -39,6 +50,13 @@ def health_check():
 
     if not settings.cache_enabled:
         payload["cache"] = "disabled"
+
+    try:
+        db.execute(text("SELECT 1"))
+        payload["database"] = "connected"
+    except Exception as exc:
+        payload["database"] = "unavailable"
+        payload["database_error"] = str(exc)[:160]
 
     return payload
 
