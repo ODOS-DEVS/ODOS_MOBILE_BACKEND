@@ -117,7 +117,7 @@ class Settings(BaseSettings):
 
     assistant_enabled: bool = True
     assistant_provider: str = "gemini"
-    assistant_model: str = "gemini-2.0-flash"
+    assistant_model: str = "gemini-2.0-flash-lite"
     gemini_api_key: str = ""
     gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta"
     openrouter_api_key: str = ""
@@ -138,8 +138,8 @@ class Settings(BaseSettings):
         if self.assistant_provider_normalized == "openai":
             return self.openai_assistant_model.strip() or self.assistant_model.strip()
         if self.assistant_provider_normalized == "gemini":
-            return self.assistant_model.strip() or "gemini-2.0-flash"
-        return self.assistant_model.strip() or "gemini-2.0-flash"
+            return self.assistant_model.strip() or "gemini-2.0-flash-lite"
+        return self.assistant_model.strip() or "gemini-2.0-flash-lite"
 
     @property
     def gemini_api_base(self) -> str:

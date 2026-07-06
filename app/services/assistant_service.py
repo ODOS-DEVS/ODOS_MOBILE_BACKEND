@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -200,19 +201,44 @@ OPENROUTER_FALLBACK_MODELS = (
 
 GEMINI_FALLBACK_MODELS = (
     "gemini-2.0-flash-lite",
-    "gemini-1.5-flash",
+    "gemini-2.0-flash",
+    "gemini-1.5-flash-8b",
 )
+
+GEMINI_RETRY_DELAYS_SECONDS = (1.0, 2.5)
+
+
+def _is_gemini_capacity_error(status_code: int, body: str) -> bool:
+    if status_code == 429:
+        return True
+
+    lowered = body.lower()
+    capacity_markers = (
+        "resource_exhausted",
+        "resource has been exhausted",
+        "quota exceeded",
+        "exceeded your current quota",
+        "rate limit",
+        "rate-limit",
+        "too many requests",
+    )
+    if status_code in {403, 503} and any(marker in lowered for marker in capacity_markers):
+        return True
+    return any(marker in lowered for marker in capacity_markers)
 
 
 def _gemini_error_message(status_code: int, body: str) -> str:
     lowered = body.lower()
-    if status_code in {401, 403} or "api key" in lowered:
+    if status_code in {401, 403} and "api key" in lowered:
         return (
             "The Gemini API key on the server is invalid or missing. "
             "Create a free key at aistudio.google.com/apikey and set GEMINI_API_KEY on Render."
         )
-    if status_code == 429 or "quota" in lowered or "rate" in lowered:
-        return "Gemini rate limit reached. Wait a minute and try again."
+    if _is_gemini_capacity_error(status_code, body):
+        return (
+            "Gemini free-tier quota is used up for now. "
+            "Wait a few minutes, or set ASSISTANT_MODEL=gemini-2.0-flash-lite on Render."
+        )
     if status_code == 404 or "not found" in lowered:
         return (
             "That Gemini model is unavailable. "
@@ -268,6 +294,7 @@ def _messages_to_gemini_payload(messages: list[dict[str, str]]) -> dict[str, Any
         "contents": contents,
         "generationConfig": {
             "temperature": 0.35,
+            "maxOutputTokens": 512,
             "responseMimeType": "application/json",
         },
     }
@@ -311,23 +338,40 @@ async def _call_gemini(
     async with httpx.AsyncClient(timeout=45.0) as client:
         for candidate_model in models_to_try:
             url = f"{base_url}/models/{candidate_model}:generateContent"
-            response = await client.post(
-                url,
-                params={"key": api_key},
-                headers={"Content-Type": "application/json"},
-                json=request_body,
-            )
-            if response.is_success:
-                payload = response.json()
-                content = _extract_gemini_text(payload)
-                return _parse_llm_json(content)
+            retries = (*GEMINI_RETRY_DELAYS_SECONDS, None)
 
-            last_error = httpx.HTTPStatusError(
-                f"Gemini error for {candidate_model}",
-                request=response.request,
-                response=response,
-            )
-            if response.status_code not in {404, 429, 502, 503}:
+            for attempt_index, delay_seconds in enumerate(retries):
+                response = await client.post(
+                    url,
+                    params={"key": api_key},
+                    headers={"Content-Type": "application/json"},
+                    json=request_body,
+                )
+                if response.is_success:
+                    payload = response.json()
+                    content = _extract_gemini_text(payload)
+                    return _parse_llm_json(content)
+
+                if (
+                    delay_seconds is not None
+                    and _is_gemini_capacity_error(response.status_code, response.text)
+                ):
+                    logger.info(
+                        "Gemini capacity limit on %s (HTTP %s), retrying in %ss",
+                        candidate_model,
+                        response.status_code,
+                        delay_seconds,
+                    )
+                    await asyncio.sleep(delay_seconds)
+                    continue
+
+                last_error = httpx.HTTPStatusError(
+                    f"Gemini error for {candidate_model}",
+                    request=response.request,
+                    response=response,
+                )
+                if response.status_code not in {404, 429, 403, 503}:
+                    break
                 break
 
     if last_error is not None:
@@ -576,7 +620,10 @@ async def chat_with_assistant(
             status_code or "unknown",
             detail or str(exc),
         )
-        if status_code in {402, 429, 502, 503, 504}:
+        if (
+            status_code in {402, 429, 502, 503, 504}
+            or (provider == "gemini" and _is_gemini_capacity_error(status_code, detail))
+        ):
             return _fallback_reply(payload, user)
         return AssistantChatResponse(
             reply=_provider_error_message(provider, status_code, detail),
