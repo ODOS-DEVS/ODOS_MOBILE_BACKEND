@@ -200,12 +200,10 @@ OPENROUTER_FALLBACK_MODELS = (
 )
 
 GEMINI_FALLBACK_MODELS = (
-    "gemini-2.0-flash-lite",
-    "gemini-2.0-flash",
-    "gemini-1.5-flash-8b",
+    "gemini-3-flash-preview",
 )
 
-GEMINI_RETRY_DELAYS_SECONDS = (1.0, 2.5)
+GEMINI_RETRY_DELAYS_SECONDS = (1.5,)
 
 
 def _is_gemini_capacity_error(status_code: int, body: str) -> bool:
@@ -237,12 +235,12 @@ def _gemini_error_message(status_code: int, body: str) -> str:
     if _is_gemini_capacity_error(status_code, body):
         return (
             "Gemini free-tier quota is used up for now. "
-            "Wait a few minutes, or set ASSISTANT_MODEL=gemini-2.0-flash-lite on Render."
+            "Wait a few minutes and try again."
         )
     if status_code == 404 or "not found" in lowered:
         return (
-            "That Gemini model is unavailable. "
-            "Try ASSISTANT_MODEL=gemini-2.0-flash or gemini-2.0-flash-lite on Render."
+            "The configured Gemini model is no longer available. "
+            "Set ASSISTANT_MODEL=gemini-3.1-flash-lite on Render and redeploy."
         )
     if status_code == 400:
         return (
@@ -369,6 +367,12 @@ async def _call_gemini(
                     f"Gemini error for {candidate_model}",
                     request=response.request,
                     response=response,
+                )
+                logger.warning(
+                    "Gemini model %s failed (HTTP %s): %s",
+                    candidate_model,
+                    response.status_code,
+                    response.text[:240],
                 )
                 if response.status_code not in {404, 429, 403, 503}:
                     break
@@ -621,7 +625,7 @@ async def chat_with_assistant(
             detail or str(exc),
         )
         if (
-            status_code in {402, 429, 502, 503, 504}
+            status_code in {402, 404, 429, 502, 503, 504}
             or (provider == "gemini" and _is_gemini_capacity_error(status_code, detail))
         ):
             return _fallback_reply(payload, user)
