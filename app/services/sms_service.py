@@ -12,6 +12,12 @@ def _format_ghs(amount: float) -> str:
     return f"GHS {amount:.2f}"
 
 
+def _format_delivery(shipping_amount: float) -> str:
+    if shipping_amount <= 0:
+        return "FREE"
+    return _format_ghs(shipping_amount)
+
+
 def build_order_payment_confirmation_message(
     *,
     order_number: str,
@@ -27,20 +33,39 @@ def build_order_payment_confirmation_message(
     payment_kind = (payment_type or "").strip().lower()
     via_wallet = payment_kind == "wallet" or "wallet" in payment_text.lower()
 
-    lines = [f"ODOS: Order #{order_number} payment confirmed."]
-    lines.append(f"Products: {_format_ghs(subtotal_amount)}")
-    lines.append(f"Delivery: {_format_ghs(shipping_amount)}")
+    breakdown_lines = [
+        f"Products: {_format_ghs(subtotal_amount)}",
+        f"Delivery: {_format_delivery(shipping_amount)}",
+    ]
     if discount_amount > 0:
-        lines.append(f"Voucher: -{_format_ghs(discount_amount)}")
-    lines.append(f"Total paid: {_format_ghs(total_amount)}")
+        breakdown_lines.append(f"Voucher: -{_format_ghs(discount_amount)}")
+    breakdown_lines.append(f"Total paid: {_format_ghs(total_amount)}")
+
+    sections = [
+        "ODOS: Payment confirmed",
+        f"Order #{order_number}",
+        "",
+        *breakdown_lines,
+        "",
+    ]
 
     if via_wallet and wallet_balance_after is not None:
-        lines.append(f"Wallet balance left: {_format_ghs(wallet_balance_after)}")
+        sections.extend(
+            [
+                f"Wallet balance left: {_format_ghs(wallet_balance_after)}",
+                "",
+            ]
+        )
     else:
-        lines.append(f"Paid via {payment_text}")
+        sections.extend(
+            [
+                f"Paid via: {payment_text}",
+                "",
+            ]
+        )
 
-    lines.append("Track your order in the ODOS app.")
-    return " ".join(lines)
+    sections.append("Track your order in the ODOS app.")
+    return "\n".join(sections)
 
 
 def send_phone_verification_code(*, phone_number: str, code: str) -> None:
