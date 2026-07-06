@@ -116,8 +116,10 @@ class Settings(BaseSettings):
         )
 
     assistant_enabled: bool = True
-    assistant_provider: str = "openrouter"
-    assistant_model: str = "meta-llama/llama-3.2-3b-instruct:free"
+    assistant_provider: str = "gemini"
+    assistant_model: str = "gemini-2.0-flash"
+    gemini_api_key: str = ""
+    gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta"
     openrouter_api_key: str = ""
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     ollama_base_url: str = "http://127.0.0.1:11434"
@@ -127,15 +129,24 @@ class Settings(BaseSettings):
     @property
     def assistant_provider_normalized(self) -> str:
         value = self.assistant_provider.strip().lower()
-        if value in {"openrouter", "ollama", "openai"}:
+        if value in {"gemini", "openrouter", "ollama", "openai"}:
             return value
-        return "openrouter"
+        return "gemini"
 
     @property
     def assistant_model_name(self) -> str:
         if self.assistant_provider_normalized == "openai":
             return self.openai_assistant_model.strip() or self.assistant_model.strip()
-        return self.assistant_model.strip() or "meta-llama/llama-3.2-3b-instruct:free"
+        if self.assistant_provider_normalized == "gemini":
+            return self.assistant_model.strip() or "gemini-2.0-flash"
+        return self.assistant_model.strip() or "gemini-2.0-flash"
+
+    @property
+    def gemini_api_base(self) -> str:
+        return (
+            self.gemini_base_url.strip().rstrip("/")
+            or "https://generativelanguage.googleapis.com/v1beta"
+        )
 
     @property
     def openrouter_api_base(self) -> str:
@@ -151,6 +162,8 @@ class Settings(BaseSettings):
         if not self.assistant_enabled:
             return False
         provider = self.assistant_provider_normalized
+        if provider == "gemini":
+            return bool(self.gemini_api_key.strip())
         if provider == "openrouter":
             return bool(self.openrouter_api_key.strip())
         if provider == "ollama":

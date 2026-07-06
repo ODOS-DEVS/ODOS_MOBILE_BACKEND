@@ -198,6 +198,173 @@ OPENROUTER_FALLBACK_MODELS = (
     "mistralai/mistral-7b-instruct:free",
 )
 
+GEMINI_FALLBACK_MODELS = (
+    "gemini-2.0-flash-lite",
+    "gemini-1.5-flash",
+)
+
+
+def _gemini_error_message(status_code: int, body: str) -> str:
+    lowered = body.lower()
+    if status_code in {401, 403} or "api key" in lowered:
+        return (
+            "The Gemini API key on the server is invalid or missing. "
+            "Create a free key at aistudio.google.com/apikey and set GEMINI_API_KEY on Render."
+        )
+    if status_code == 429 or "quota" in lowered or "rate" in lowered:
+        return "Gemini rate limit reached. Wait a minute and try again."
+    if status_code == 404 or "not found" in lowered:
+        return (
+            "That Gemini model is unavailable. "
+            "Try ASSISTANT_MODEL=gemini-2.0-flash or gemini-2.0-flash-lite on Render."
+        )
+    if status_code == 400:
+        return (
+            "Gemini rejected the request (HTTP 400). "
+            "Check ASSISTANT_MODEL and redeploy with a valid GEMINI_API_KEY."
+        )
+    if status_code in {502, 503, 504}:
+        return (
+            f"Gemini is temporarily unavailable (HTTP {status_code}). "
+            "Try again in a minute."
+        )
+    if status_code:
+        return (
+            f"I'm having trouble reaching Gemini (HTTP {status_code}). "
+            "Verify GEMINI_API_KEY at aistudio.google.com/apikey."
+        )
+    return (
+        "I'm having trouble reaching the AI service right now. "
+        "Try again in a moment, or chat with our support team."
+    )
+
+
+def _provider_error_message(provider: str, status_code: int, body: str) -> str:
+    if provider == "gemini":
+        return _gemini_error_message(status_code, body)
+    if provider == "openrouter":
+        return _openrouter_error_message(status_code, body)
+    return (
+        "I'm having trouble reaching the AI service right now. "
+        "Try again in a moment, or chat with our support team."
+    )
+
+
+def _messages_to_gemini_payload(messages: list[dict[str, str]]) -> dict[str, Any]:
+    system_parts: list[str] = []
+    contents: list[dict[str, Any]] = []
+
+    for message in messages:
+        role = message["role"]
+        content = message["content"]
+        if role == "system":
+            system_parts.append(content)
+        elif role == "user":
+            contents.append({"role": "user", "parts": [{"text": content}]})
+        elif role == "assistant":
+            contents.append({"role": "model", "parts": [{"text": content}]})
+
+    payload: dict[str, Any] = {
+        "contents": contents,
+        "generationConfig": {
+            "temperature": 0.35,
+            "responseMimeType": "application/json",
+        },
+    }
+    if system_parts:
+        payload["systemInstruction"] = {
+            "parts": [{"text": "\n\n".join(system_parts)}],
+        }
+    return payload
+
+
+def _extract_gemini_text(payload: dict[str, Any]) -> str:
+    candidates = payload.get("candidates") or []
+    if not candidates:
+        raise RuntimeError("Gemini returned no candidates.")
+    parts = candidates[0].get("content", {}).get("parts") or []
+    text_parts = [part.get("text", "") for part in parts if isinstance(part, dict)]
+    content = "".join(text_parts).strip()
+    if not content:
+        raise RuntimeError("Gemini returned an empty response.")
+    return content
+
+
+async def _call_gemini(
+    *,
+    model: str,
+    messages: list[dict[str, str]],
+) -> dict[str, Any]:
+    api_key = settings.gemini_api_key.strip()
+    if not api_key:
+        raise RuntimeError("Gemini API key is not configured.")
+
+    base_url = settings.gemini_api_base
+    request_body = _messages_to_gemini_payload(messages)
+    models_to_try: list[str] = []
+    for candidate in (model, *GEMINI_FALLBACK_MODELS):
+        if candidate not in models_to_try:
+            models_to_try.append(candidate)
+
+    last_error: httpx.HTTPStatusError | None = None
+
+    async with httpx.AsyncClient(timeout=45.0) as client:
+        for candidate_model in models_to_try:
+            url = f"{base_url}/models/{candidate_model}:generateContent"
+            response = await client.post(
+                url,
+                params={"key": api_key},
+                headers={"Content-Type": "application/json"},
+                json=request_body,
+            )
+            if response.is_success:
+                payload = response.json()
+                content = _extract_gemini_text(payload)
+                return _parse_llm_json(content)
+
+            last_error = httpx.HTTPStatusError(
+                f"Gemini error for {candidate_model}",
+                request=response.request,
+                response=response,
+            )
+            if response.status_code not in {404, 429, 502, 503}:
+                break
+
+    if last_error is not None:
+        raise last_error
+
+    raise RuntimeError("No Gemini model candidates were available.")
+
+
+async def _probe_gemini() -> tuple[bool, str | None]:
+    api_key = settings.gemini_api_key.strip()
+    if not api_key:
+        return False, "Assistant is not configured (missing GEMINI_API_KEY)."
+
+    model = settings.assistant_model_name
+    url = f"{settings.gemini_api_base}/models/{model}:generateContent"
+    body = {
+        "contents": [{"role": "user", "parts": [{"text": "ping"}]}],
+        "generationConfig": {"maxOutputTokens": 8},
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            response = await client.post(
+                url,
+                params={"key": api_key},
+                headers={"Content-Type": "application/json"},
+                json=body,
+            )
+        if response.is_success:
+            return True, None
+        return False, _gemini_error_message(response.status_code, response.text[:500])
+    except httpx.RequestError as exc:
+        return False, f"Could not reach Gemini ({exc.__class__.__name__}). Check GEMINI_BASE_URL."
+    except Exception as exc:
+        logger.warning("Assistant Gemini probe error: %s", exc)
+        return False, "Unexpected error while probing Gemini."
+
 
 def _openrouter_error_message(status_code: int, body: str) -> str:
     lowered = body.lower()
@@ -267,6 +434,9 @@ async def _call_llm(
 
     messages.append({"role": "user", "content": message})
 
+    if provider == "gemini":
+        return await _call_gemini(model=model, messages=messages)
+
     request_body = {
         "model": model,
         "temperature": 0.35,
@@ -289,13 +459,15 @@ async def _call_llm(
         base_url = settings.ollama_base_url.rstrip("/")
         url = f"{base_url}/v1/chat/completions"
         request_body["format"] = "json"
-    else:
+    elif provider == "openai":
         api_key = settings.openai_api_key.strip()
         if not api_key:
             raise RuntimeError("OpenAI API key is not configured.")
         url = "https://api.openai.com/v1/chat/completions"
         headers["Authorization"] = f"Bearer {api_key}"
         request_body["response_format"] = {"type": "json_object"}
+    else:
+        raise RuntimeError(f"Unsupported assistant provider: {provider}")
 
     timeout = 90.0 if provider == "ollama" else 45.0
 
@@ -336,42 +508,44 @@ def assistant_is_enabled() -> bool:
 
 
 async def probe_assistant_llm() -> tuple[bool, str | None]:
-    """Lightweight OpenRouter ping for /assistant/status?probe=1 diagnostics."""
+    """Lightweight provider ping for /assistant/status?probe=1 diagnostics."""
     if not assistant_is_enabled():
         return False, "Assistant is not configured (missing API key)."
 
     provider = settings.assistant_provider_normalized
-    if provider != "openrouter":
-        return True, None
+    if provider == "gemini":
+        return await _probe_gemini()
+    if provider == "openrouter":
+        api_key = settings.openrouter_api_key.strip()
+        base_url = settings.openrouter_api_base
+        url = f"{base_url}/chat/completions"
+        model = settings.assistant_model_name
 
-    api_key = settings.openrouter_api_key.strip()
-    base_url = settings.openrouter_api_base
-    url = f"{base_url}/chat/completions"
-    model = settings.assistant_model_name
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+            "HTTP-Referer": "https://odos.app",
+            "X-Title": "ODOS Mobile Assistant",
+        }
+        body = {
+            "model": model,
+            "max_tokens": 8,
+            "messages": [{"role": "user", "content": "ping"}],
+        }
 
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {api_key}",
-        "HTTP-Referer": "https://odos.app",
-        "X-Title": "ODOS Mobile Assistant",
-    }
-    body = {
-        "model": model,
-        "max_tokens": 8,
-        "messages": [{"role": "user", "content": "ping"}],
-    }
+        try:
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                response = await client.post(url, headers=headers, json=body)
+            if response.is_success:
+                return True, None
+            return False, _openrouter_error_message(response.status_code, response.text[:500])
+        except httpx.RequestError as exc:
+            return False, f"Could not reach OpenRouter ({exc.__class__.__name__}). Check OPENROUTER_BASE_URL."
+        except Exception as exc:
+            logger.warning("Assistant probe error: %s", exc)
+            return False, "Unexpected error while probing OpenRouter."
 
-    try:
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            response = await client.post(url, headers=headers, json=body)
-        if response.is_success:
-            return True, None
-        return False, _openrouter_error_message(response.status_code, response.text[:500])
-    except httpx.RequestError as exc:
-        return False, f"Could not reach OpenRouter ({exc.__class__.__name__}). Check OPENROUTER_BASE_URL."
-    except Exception as exc:
-        logger.warning("Assistant probe error: %s", exc)
-        return False, "Unexpected error while probing OpenRouter."
+    return True, None
 
 
 async def chat_with_assistant(
@@ -394,6 +568,7 @@ async def chat_with_assistant(
     except httpx.HTTPStatusError as exc:
         detail = ""
         status_code = exc.response.status_code if exc.response is not None else 0
+        provider = settings.assistant_provider_normalized
         if exc.response is not None:
             detail = exc.response.text[:500]
         logger.warning(
@@ -404,7 +579,7 @@ async def chat_with_assistant(
         if status_code in {402, 429, 502, 503, 504}:
             return _fallback_reply(payload, user)
         return AssistantChatResponse(
-            reply=_openrouter_error_message(status_code, detail),
+            reply=_provider_error_message(provider, status_code, detail),
             suggested_actions=[
                 AssistantActionRead(label="Contact support", route="/screens/support/chat"),
             ],
