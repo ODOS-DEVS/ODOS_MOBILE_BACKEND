@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import UTC, datetime
 
@@ -7,6 +8,7 @@ from fastapi import HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
+from app.controllers.notification_controller import create_notification_event
 from app.controllers.order_controller import (
     _broadcast_order_realtime,
     _dispatch_vendor_new_order_alerts,
@@ -26,6 +28,84 @@ from app.schemas.customer_wallet import (
 from app.schemas.order import OrderRead
 from app.services.finance_math import amount_to_subunit, round_money
 from app.services.paystack_service import initialize_transaction, verify_transaction
+from app.services.push_service import build_push_data, send_expo_push_notification
+from app.services.sms_service import send_wallet_topup_confirmation_sms
+
+logger = logging.getLogger(__name__)
+
+
+def _topup_payment_label(topup: CustomerWalletTopUp) -> str | None:
+    metadata = (topup.raw_response or {}).get("metadata")
+    if not isinstance(metadata, dict):
+        return None
+    label = metadata.get("payment_label")
+    return str(label).strip() if label else None
+
+
+def _dispatch_wallet_topup_notifications(
+    db: Session,
+    *,
+    user: User,
+    topup: CustomerWalletTopUp,
+    wallet: CustomerWallet,
+) -> None:
+    amount = round_money(topup.amount_subunit / 100)
+    balance_after = round_money(wallet.available_balance)
+    payment_label = _topup_payment_label(topup)
+
+    event = create_notification_event(
+        db,
+        user,
+        kind="wallet_topup",
+        title="Wallet topped up",
+        body=(
+            f"{wallet.currency} {amount:.2f} was added to your ODOS wallet. "
+            f"New balance: {wallet.currency} {balance_after:.2f}."
+        ),
+        icon="wallet-outline",
+        accent="success",
+        action_label="View wallet",
+        route_type="customer_wallet",
+        route_target_id=str(wallet.id),
+    )
+
+    db.flush()
+
+    try:
+        send_expo_push_notification(
+            user=user,
+            title="Wallet topped up",
+            body=f"{wallet.currency} {amount:.2f} added · Balance {wallet.currency} {balance_after:.2f}",
+            data=build_push_data(
+                push_type="wallet_topup",
+                route_type="customer_wallet",
+                route_target_id=str(wallet.id),
+                notification_event=event,
+                extra={
+                    "amount": amount,
+                    "currency": wallet.currency,
+                    "balanceAfter": balance_after,
+                },
+            ),
+        )
+    except Exception:
+        logger.exception("Failed to send wallet top-up push for user %s", user.id)
+
+    if user.phone_verified and user.phone_number:
+        try:
+            send_wallet_topup_confirmation_sms(
+                phone_number=user.phone_number,
+                amount=amount,
+                currency=wallet.currency,
+                balance_after=balance_after,
+                payment_label=payment_label,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to send wallet top-up SMS for user %s topup %s",
+                user.id,
+                topup.id,
+            )
 
 
 def _preferred_channel(payment_type: str | None) -> list[str] | None:
@@ -217,6 +297,7 @@ def initialize_wallet_topup(
         amount_subunit=amount_to_subunit(amount),
         currency=wallet.currency,
         status="pending",
+        raw_response={"metadata": metadata},
     )
     db.add(topup)
     db.commit()
@@ -291,7 +372,18 @@ def _reconcile_wallet_topup(db: Session, topup: CustomerWalletTopUp) -> str:
     currency = str(provider_payload.get("currency") or topup.currency).upper()
     now = datetime.now(UTC)
 
-    topup.raw_response = provider_payload
+    previous_raw = topup.raw_response if isinstance(topup.raw_response, dict) else {}
+    previous_metadata = previous_raw.get("metadata")
+    provider_metadata = provider_payload.get("metadata")
+    if isinstance(previous_metadata, dict):
+        merged_metadata = (
+            {**previous_metadata, **provider_metadata}
+            if isinstance(provider_metadata, dict)
+            else previous_metadata
+        )
+        topup.raw_response = {**provider_payload, "metadata": merged_metadata}
+    else:
+        topup.raw_response = provider_payload
     topup.verified_at = now
     topup.gateway_response = provider_payload.get("gateway_response")
     topup.provider_transaction_id = (
@@ -326,6 +418,16 @@ def _reconcile_wallet_topup(db: Session, topup: CustomerWalletTopUp) -> str:
             balance_after=wallet.available_balance,
         )
     )
+
+    user = db.get(User, topup.user_id)
+    if user:
+        _dispatch_wallet_topup_notifications(
+            db,
+            user=user,
+            topup=topup,
+            wallet=wallet,
+        )
+
     db.commit()
     return topup.status
 

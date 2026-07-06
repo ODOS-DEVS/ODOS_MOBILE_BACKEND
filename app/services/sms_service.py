@@ -68,6 +68,64 @@ def build_order_payment_confirmation_message(
     return "\n".join(sections)
 
 
+def build_wallet_topup_confirmation_message(
+    *,
+    amount: float,
+    currency: str,
+    balance_after: float,
+    payment_label: str | None = None,
+) -> str:
+    payment_text = (payment_label or "Paystack").strip()
+    amount_label = f"{currency} {amount:.2f}" if currency != "GHS" else _format_ghs(amount)
+    balance_label = (
+        f"{currency} {balance_after:.2f}"
+        if currency != "GHS"
+        else _format_ghs(balance_after)
+    )
+
+    sections = [
+        "ODOS: Wallet top-up confirmed",
+        "",
+        f"Amount added: {amount_label}",
+        f"Paid via: {payment_text}",
+        "",
+        f"New balance: {balance_label}",
+        "",
+        "Use your wallet at checkout in the ODOS app.",
+    ]
+    return "\n".join(sections)
+
+
+def send_wallet_topup_confirmation_sms(
+    *,
+    phone_number: str,
+    amount: float,
+    currency: str,
+    balance_after: float,
+    payment_label: str | None = None,
+) -> None:
+    message = build_wallet_topup_confirmation_message(
+        amount=amount,
+        currency=currency,
+        balance_after=balance_after,
+        payment_label=payment_label,
+    )
+
+    if settings.arkesel_is_configured:
+        try:
+            send_sms(phone_number=phone_number, message=message)
+        except ArkeselSmsError:
+            raise
+        except Exception as exc:
+            logger.exception("Unexpected Arkesel SMS failure for %s", phone_number)
+            raise ArkeselSmsError(
+                "We couldn't send that text message right now. Try again shortly."
+            ) from exc
+        return
+
+    logger.info("ODOS wallet top-up SMS for %s: %s", phone_number, message)
+
+
 def send_phone_verification_code(*, phone_number: str, code: str) -> None:
     """
     Dispatch an SMS verification code.
