@@ -364,7 +364,13 @@ def create_wallet_checkout(
     )
     wallet.available_balance = round_money(wallet.available_balance - order_total)
     wallet.lifetime_spend = round_money(wallet.lifetime_spend + order_total)
-    activate_order_after_payment(db, current_user, order)
+    wallet_balance_after = round_money(wallet.available_balance)
+    activate_order_after_payment(
+        db,
+        current_user,
+        order,
+        wallet_balance_after=wallet_balance_after,
+    )
     order.payment_type = "wallet"
     order.payment_label = payload.payment_label or "Wallet"
     order.payment_provider = "wallet"

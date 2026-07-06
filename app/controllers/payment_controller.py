@@ -339,6 +339,12 @@ def create_checkout_session(
     current_user: User,
     payload: CheckoutSessionCreate,
 ) -> CheckoutSessionRead:
+    if payload.payment_type.strip().lower() == "wallet":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="In-app wallet payments must use POST /wallet/customer/checkout.",
+        )
+
     reference = f"odos-{uuid.uuid4().hex}"
     order = prepare_order_for_checkout(
         db,

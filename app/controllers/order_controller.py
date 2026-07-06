@@ -473,7 +473,12 @@ def prepare_order_for_checkout(
     return order
 
 
-def _maybe_send_order_payment_confirmation_sms(user: User, order: Order) -> None:
+def _maybe_send_order_payment_confirmation_sms(
+    user: User,
+    order: Order,
+    *,
+    wallet_balance_after: float | None = None,
+) -> None:
     if not user.phone_verified or not user.phone_number:
         return
 
@@ -481,8 +486,13 @@ def _maybe_send_order_payment_confirmation_sms(user: User, order: Order) -> None
         send_order_payment_confirmation_sms(
             phone_number=user.phone_number,
             order_number=order.order_number,
+            subtotal_amount=order.subtotal_amount,
+            shipping_amount=order.shipping_amount,
+            discount_amount=order.discount_amount,
             total_amount=order.total_amount,
             payment_label=order.payment_label,
+            payment_type=order.payment_type,
+            wallet_balance_after=wallet_balance_after,
         )
     except Exception:
         logger.exception(
@@ -495,6 +505,8 @@ def activate_order_after_payment(
     db: Session,
     user: User,
     order: Order,
+    *,
+    wallet_balance_after: float | None = None,
 ) -> NotificationEvent:
     order.status = "processing"
     order.progress = 0.18
@@ -548,7 +560,11 @@ def activate_order_after_payment(
         image_url=preview["image_url"],
     )
 
-    _maybe_send_order_payment_confirmation_sms(user, order)
+    _maybe_send_order_payment_confirmation_sms(
+        user,
+        order,
+        wallet_balance_after=wallet_balance_after,
+    )
     return event
 
 
