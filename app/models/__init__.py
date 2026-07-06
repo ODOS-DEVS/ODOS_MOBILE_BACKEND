@@ -1,4 +1,10 @@
 from app.models.account import PaymentMethodType, SavedAddress, SavedPaymentMethod
+from app.models.assistant import (
+    AssistantConversation,
+    AssistantMessage,
+    AssistantMessageFeedback,
+    AssistantMessageRole,
+)
 from app.models.chat import ChatMessage, ChatThread, ChatThreadType, SupportChatStatus
 from app.models.notification import NotificationEvent, NotificationRead
 from app.models.catalog import (
@@ -43,6 +49,10 @@ from app.models.user_verified_phone import UserVerifiedPhone
 from app.models.vendor import VendorApplication
 
 __all__ = [
+    "AssistantConversation",
+    "AssistantMessage",
+    "AssistantMessageFeedback",
+    "AssistantMessageRole",
     "AuthProvider",
     "Category",
     "FlashSaleEvent",
