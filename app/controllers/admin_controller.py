@@ -55,7 +55,6 @@ from app.controllers.wallet_controller import (
     update_admin_vendor_withdrawal_request,
 )
 from app.controllers.voucher_controller import (
-    SUPPORTED_VOUCHER_DISCOUNT_TYPES,
     build_voucher_reward_text,
     validate_voucher_configuration,
     voucher_status,
