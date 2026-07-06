@@ -6,6 +6,7 @@ from sqlalchemy import pool
 from alembic import context
 
 import app.models  # noqa: F401
+from app.core.alembic_recovery import recover_alembic_version
 from app.core.config import settings
 from app.core.database import Base
 
@@ -62,6 +63,7 @@ def run_migrations_online() -> None:
     and associate a connection with the context.
 
     """
+    recover_alembic_version()
     config.set_main_option("sqlalchemy.url", settings.database_url)
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),
