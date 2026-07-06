@@ -318,10 +318,6 @@ OPENROUTER_FALLBACK_MODELS = (
     "mistralai/mistral-7b-instruct:free",
 )
 
-GEMINI_FALLBACK_MODELS = (
-    "gemini-3-flash-preview",
-)
-
 GEMINI_RETRY_DELAYS_SECONDS = (1.5,)
 
 
@@ -344,9 +340,32 @@ def _is_gemini_capacity_error(status_code: int, body: str) -> bool:
     return any(marker in lowered for marker in capacity_markers)
 
 
+GEMINI_FALLBACK_MODELS = (
+    "gemini-3-flash-preview",
+    "gemini-2.5-flash",
+)
+
+
+def _parse_gemini_error_detail(body: str) -> str | None:
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    error = payload.get("error")
+    if not isinstance(error, dict):
+        return None
+    message = error.get("message")
+    return str(message).strip() if message else None
+
+
 def _gemini_error_message(status_code: int, body: str) -> str:
     lowered = body.lower()
-    if status_code in {401, 403} and "api key" in lowered:
+    detail = _parse_gemini_error_detail(body)
+    detail_lower = detail.lower() if detail else lowered
+
+    if status_code in {401, 403} and "api key" in detail_lower:
         return (
             "The Gemini API key on the server is invalid or missing. "
             "Create a free key at aistudio.google.com/apikey and set GEMINI_API_KEY on Render."
@@ -356,12 +375,22 @@ def _gemini_error_message(status_code: int, body: str) -> str:
             "Gemini free-tier quota is used up for now. "
             "Wait a few minutes and try again."
         )
-    if status_code == 404 or "not found" in lowered:
+    if status_code == 404 or "not found" in detail_lower:
         return (
             "The configured Gemini model is no longer available. "
             "Set ASSISTANT_MODEL=gemini-3.1-flash-lite on Render and redeploy."
         )
     if status_code == 400:
+        if "thought" in detail_lower and "signature" in detail_lower:
+            return (
+                "Gemini rejected the assistant tool follow-up (HTTP 400). "
+                "The server fix is deploying — try again in a minute."
+            )
+        if detail:
+            return (
+                f"Gemini rejected the request (HTTP 400): {detail} "
+                "Check ASSISTANT_MODEL and GEMINI_API_KEY on Render, then redeploy."
+            )
         return (
             "Gemini rejected the request (HTTP 400). "
             "Check ASSISTANT_MODEL and redeploy with a valid GEMINI_API_KEY."
@@ -432,11 +461,14 @@ def _messages_to_gemini_payload(
     return payload
 
 
-def _parse_gemini_parts(payload: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
+def _parse_gemini_parts(payload: dict[str, Any]) -> tuple[str, list[dict[str, Any]], dict[str, Any] | None]:
     candidates = payload.get("candidates") or []
     if not candidates:
         raise RuntimeError("Gemini returned no candidates.")
-    parts = candidates[0].get("content", {}).get("parts") or []
+    model_content = candidates[0].get("content")
+    if not isinstance(model_content, dict):
+        model_content = {"role": "model", "parts": []}
+    parts = model_content.get("parts") or []
     text_parts: list[str] = []
     function_calls: list[dict[str, Any]] = []
     for part in parts:
@@ -446,11 +478,16 @@ def _parse_gemini_parts(payload: dict[str, Any]) -> tuple[str, list[dict[str, An
             text_parts.append(str(part["text"]))
         if part.get("functionCall"):
             function_calls.append(part["functionCall"])
-    return "".join(text_parts).strip(), function_calls
+    history_content = None
+    if function_calls:
+        history_content = dict(model_content)
+        if "role" not in history_content:
+            history_content["role"] = "model"
+    return "".join(text_parts).strip(), function_calls, history_content
 
 
 def _extract_gemini_text(payload: dict[str, Any]) -> str:
-    text, function_calls = _parse_gemini_parts(payload)
+    text, function_calls, _ = _parse_gemini_parts(payload)
     if function_calls:
         raise RuntimeError("Gemini returned function calls instead of text.")
     if not text:
@@ -490,7 +527,7 @@ async def _call_gemini_with_tools(
 
     tools = gemini_tools_payload(include_vendor_tools=is_vendor)
     request_body = _messages_to_gemini_payload(messages, json_mode=False, tools=tools)
-    contents = list(request_body["contents"])
+    base_contents = list(request_body["contents"])
 
     models_to_try: list[str] = []
     for candidate in (model, *GEMINI_FALLBACK_MODELS):
@@ -498,9 +535,11 @@ async def _call_gemini_with_tools(
             models_to_try.append(candidate)
 
     last_error: httpx.HTTPStatusError | None = None
+    latest_contents = list(base_contents)
 
     async with httpx.AsyncClient(timeout=60.0) as client:
         for candidate_model in models_to_try:
+            contents = list(base_contents)
             working_body = {**request_body, "contents": contents}
             for _ in range(MAX_TOOL_LOOP):
                 response = await _post_gemini(
@@ -514,13 +553,19 @@ async def _call_gemini_with_tools(
                         request=response.request,
                         response=response,
                     )
+                    logger.warning(
+                        "Gemini tool call failed for %s (HTTP %s): %s",
+                        candidate_model,
+                        response.status_code,
+                        response.text[:500],
+                    )
                     break
 
                 payload = response.json()
-                text, function_calls = _parse_gemini_parts(payload)
-                if function_calls:
-                    model_parts = [{"functionCall": call} for call in function_calls]
-                    contents.append({"role": "model", "parts": model_parts})
+                text, function_calls, model_content = _parse_gemini_parts(payload)
+                if function_calls and model_content:
+                    # Gemini 3 requires thoughtSignature on model parts — replay verbatim.
+                    contents.append(model_content)
                     response_parts = []
                     for call in function_calls:
                         name = str(call.get("name", "")).strip()
@@ -530,11 +575,12 @@ async def _call_gemini_with_tools(
                             {
                                 "functionResponse": {
                                     "name": name,
-                                    "response": {"result": result},
+                                    "response": result,
                                 }
                             }
                         )
                     contents.append({"role": "user", "parts": response_parts})
+                    latest_contents = list(contents)
                     working_body = {**request_body, "contents": contents}
                     continue
 
@@ -544,12 +590,16 @@ async def _call_gemini_with_tools(
                 break
 
             if last_error is not None and last_error.response.status_code not in {404, 429, 403, 503}:
-                break
+                continue
 
         if last_error is not None:
             raise last_error
 
-    # Final formatting pass — ask for JSON after tool loop
+    if latest_contents == base_contents:
+        raise RuntimeError("Gemini tool loop completed without a response.")
+
+    # Final formatting pass — ask for JSON after tool loop (no responseMimeType with tool history).
+    contents = list(latest_contents)
     contents.append(
         {
             "role": "user",
@@ -563,12 +613,12 @@ async def _call_gemini_with_tools(
             ],
         }
     )
-    final_body = _messages_to_gemini_payload(messages, json_mode=True)
+    final_body = _messages_to_gemini_payload(messages, json_mode=False, tools=tools)
     final_body["contents"] = contents
     async with httpx.AsyncClient(timeout=45.0) as client:
         response = await _post_gemini(client=client, model=model, request_body=final_body)
         response.raise_for_status()
-        text, _ = _parse_gemini_parts(response.json())
+        text, _, _ = _parse_gemini_parts(response.json())
         return _parse_llm_json(text)
 
 
