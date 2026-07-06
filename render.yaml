@@ -49,6 +49,14 @@ services:
         value: "0.10"
       - key: VENDOR_WITHDRAWAL_MINIMUM
         value: "20.0"
+      - key: ASSISTANT_PROVIDER
+        value: gemini
+      - key: ASSISTANT_MODEL
+        value: gemini-3.1-flash-lite
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_BASE_URL
+        value: https://generativelanguage.googleapis.com/v1beta
 
 databases:
   - name: odos-postgres

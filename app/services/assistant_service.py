@@ -801,13 +801,22 @@ async def _call_llm(
     messages.append({"role": "user", "content": message})
 
     if provider == "gemini":
-        return await _call_gemini_with_tools(
-            db=db,
-            user=user,
-            model=model,
-            messages=messages,
-            is_vendor=is_vendor,
-        )
+        try:
+            return await _call_gemini_with_tools(
+                db=db,
+                user=user,
+                model=model,
+                messages=messages,
+                is_vendor=is_vendor,
+            )
+        except httpx.HTTPStatusError as exc:
+            status_code = exc.response.status_code if exc.response is not None else 0
+            if status_code == 400:
+                logger.warning(
+                    "Gemini tool calling failed with HTTP 400; falling back to direct completion."
+                )
+                return await _call_gemini(model=model, messages=messages)
+            raise
 
     request_body = {
         "model": model,
