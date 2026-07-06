@@ -63,7 +63,10 @@ def run_migrations_online() -> None:
     and associate a connection with the context.
 
     """
-    recover_alembic_version()
+    try:
+        recover_alembic_version()
+    except Exception as exc:
+        print(f"Alembic recovery warning: {exc}")
     config.set_main_option("sqlalchemy.url", settings.database_url)
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),
