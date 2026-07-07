@@ -10,17 +10,30 @@ class AddressCreate(BaseModel):
     full_name: str = Field(min_length=2, max_length=120)
     phone: str = Field(min_length=7, max_length=30)
     street: str = Field(min_length=3, max_length=255)
+    gps_code: str | None = Field(default=None, max_length=32)
     city: str = Field(min_length=2, max_length=120)
     region: str = Field(min_length=2, max_length=120)
     is_default: bool = False
 
-    @field_validator("label", "full_name", "phone", "street", "city", "region", mode="before")
+    @field_validator("label", "full_name", "phone", "street", "gps_code", "city", "region", mode="before")
     @classmethod
     def strip_text(cls, value: str | None) -> str | None:
         if value is None:
             return None
         cleaned = value.strip()
         return cleaned or None
+
+    @field_validator("gps_code")
+    @classmethod
+    def validate_gps_code(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip().upper().replace(" ", "")
+        if not cleaned:
+            return None
+        if len(cleaned) < 4:
+            raise ValueError("Enter a valid GhanaPost GPS code.")
+        return cleaned
 
     @field_validator("phone")
     @classmethod
@@ -36,11 +49,12 @@ class AddressUpdate(BaseModel):
     full_name: str | None = Field(default=None, min_length=2, max_length=120)
     phone: str | None = Field(default=None, min_length=7, max_length=30)
     street: str | None = Field(default=None, min_length=3, max_length=255)
+    gps_code: str | None = Field(default=None, max_length=32)
     city: str | None = Field(default=None, min_length=2, max_length=120)
     region: str | None = Field(default=None, min_length=2, max_length=120)
     is_default: bool | None = None
 
-    @field_validator("label", "full_name", "phone", "street", "city", "region", mode="before")
+    @field_validator("label", "full_name", "phone", "street", "gps_code", "city", "region", mode="before")
     @classmethod
     def strip_optional_text(cls, value: str | None) -> str | None:
         if value is None:
@@ -65,6 +79,7 @@ class AddressRead(BaseModel):
     full_name: str
     phone: str
     street: str
+    gps_code: str | None
     city: str
     region: str
     is_default: bool

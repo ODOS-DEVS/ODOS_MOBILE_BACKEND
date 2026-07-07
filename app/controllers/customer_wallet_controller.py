@@ -15,7 +15,7 @@ from app.controllers.order_controller import (
     activate_order_after_payment,
     prepare_order_for_checkout,
 )
-from app.models import CustomerWallet, CustomerWalletTopUp, CustomerWalletTransaction, User
+from app.models import CustomerWallet, CustomerWalletTopUp, CustomerWalletTransaction, ReturnRequest, User
 from app.schemas.customer_wallet import (
     CustomerWalletRead,
     CustomerWalletTopUpCreate,
@@ -162,6 +162,68 @@ def get_or_create_customer_wallet_for_update(
     wallet = CustomerWallet(user_id=user_id, currency="GHS")
     db.add(wallet)
     db.flush()
+    return wallet
+
+
+def credit_customer_wallet_for_return(
+    db: Session,
+    request: ReturnRequest,
+) -> CustomerWallet | None:
+    if request.status != "refunded":
+        return None
+
+    order = request.order
+    order_item = request.order_item
+    user = order.user if order else None
+    if not user or not order_item:
+        return None
+
+    refund_amount = round_money(request.refund_amount or 0)
+    if refund_amount <= 0:
+        return None
+
+    existing_transactions = db.scalars(
+        select(CustomerWalletTransaction).where(
+            CustomerWalletTransaction.user_id == user.id,
+            CustomerWalletTransaction.kind == "credit_return",
+        )
+    ).all()
+    if any(
+        transaction.metadata_json
+        and transaction.metadata_json.get("return_request_id") == str(request.id)
+        for transaction in existing_transactions
+    ):
+        return get_or_create_customer_wallet(db, user.id)
+
+    wallet = get_or_create_customer_wallet_for_update(db, user.id)
+    wallet.available_balance = round_money(wallet.available_balance + refund_amount)
+    wallet.lifetime_refunds = round_money(wallet.lifetime_refunds + refund_amount)
+
+    db.add(
+        CustomerWalletTransaction(
+            wallet_id=wallet.id,
+            user_id=user.id,
+            order_id=order.id,
+            kind="credit_return",
+            title=f"Refund for {order_item.title}",
+            amount=refund_amount,
+            balance_after=wallet.available_balance,
+            metadata_json={"return_request_id": str(request.id)},
+        )
+    )
+
+    create_notification_event(
+        db,
+        user,
+        kind="wallet_refund",
+        title="Refund added to your wallet",
+        body=f"GHS {refund_amount:.2f} from your return is now in your ODOS wallet.",
+        icon="wallet-outline",
+        accent="success",
+        action_label="View wallet",
+        route_type="customer_wallet",
+        route_target_id=str(wallet.id),
+    )
     return wallet
 
 

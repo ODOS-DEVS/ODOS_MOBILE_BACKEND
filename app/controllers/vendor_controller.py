@@ -1106,6 +1106,32 @@ def get_vendor_return_request(
     return _serialize_vendor_return_request(request)
 
 
+def patch_vendor_return_request(
+    db: Session,
+    user: User,
+    return_request_id: str,
+    payload: "VendorReturnRequestUpdate",
+) -> VendorReturnRequestRead:
+    from app.schemas.vendor import VendorReturnRequestUpdate
+    from app.services.return_request_service import update_vendor_return_request
+
+    require_vendor_access(user)
+    try:
+        request = update_vendor_return_request(
+            db,
+            user,
+            return_request_id,
+            status=payload.status.strip().lower(),
+            vendor_note=payload.vendor_note,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
+    return _serialize_vendor_return_request(request)
+
+
 def fetch_vendor_analytics(db: Session, user: User) -> VendorAnalyticsRead:
     require_vendor_access(user)
 
@@ -1373,7 +1399,8 @@ def update_vendor_order_status(
         order.user,
         kind="vendor_order_update",
         title="Order update from your store",
-        body=f"Order #{order.order_number} is now {next_status.replace('_', ' ')}.",
+        body=f"Order #{order.order_number} is now {next_status.replace('_', ' ')}."
+        + (f" {order.tracking_eta}" if order.tracking_eta else "."),
         icon="bag-handle-outline",
         accent="neutral" if next_status != "cancelled" else "warning",
         action_label="Track order",

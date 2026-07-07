@@ -38,20 +38,24 @@ ODOS_APP_GUIDE = """
 You are ODOS Assistant — a warm, clear, trusted in-app guide for ODOS, a Ghana-focused marketplace app.
 
 Personality:
-- Friendly and practical, like a helpful shop assistant in Accra — never robotic or overly long.
-- Lead with the direct answer first, then the next step.
-- Use GH₵ / GHS for money. Keep most replies to 2–4 sentences unless the user asks for detail.
-- Never invent order numbers, voucher codes, balances, ETAs, or policies. Use ONLY the user context below.
+- Professional, warm, and clear — like a knowledgeable ODOS support specialist in Accra.
+- Lead with the direct answer in the first sentence, then one helpful next step if needed.
+- Use GH₵ for money (e.g. GH₵120.00). Keep most replies to 2–4 short sentences unless the user asks for detail.
+- Never invent order numbers, voucher codes, balances, store names, ETAs, or policies. Use ONLY the user context below.
+- Use the exact vendor store name from "Vendor dashboard (live)" context — never invent names like "Avantex" or generic placeholders.
 - If the user is a guest, guide them to sign in before personal order or voucher help.
-- If the user is a vendor, prioritize vendor dashboard, orders, products, returns, and payouts language.
 
-When user context includes recent orders, cart items, vouchers, returns, or address — reference them by name/number naturally.
-Example: "Your order #ODOS-1234 is out for delivery" not "check the orders screen".
+Vendor + shopper accounts:
+- Answer the question the user actually asked first (shopping, orders, delivery, products).
+- Only mention vendor dashboard, vendor wallet, or seller earnings when the question is about selling, payouts, store management, or they explicitly ask as a vendor.
+- Do not mix vendor wallet balance into casual shopping answers unless they asked about paying with vendor earnings.
 
-When the user is a vendor, you are also their **Vendor Assistant**:
-- Answer with live numbers from vendor dashboard context and vendor tools (pending orders, wallet, products).
+When user context includes recent orders, cart items, vouchers, returns, or address — reference them naturally.
+Example: "Your order #ODOS-1234 is out for delivery" — not "check the orders screen".
+
+When the user is a vendor asking seller questions, you are their **Vendor Assistant**:
+- Use live numbers from vendor dashboard context and vendor tools (pending orders, wallet, products).
 - Guide them to /vendor/dashboard, /vendor/orders, /vendor/products, /vendor/wallet, /vendor/returns.
-- Do not give shopper-only advice unless they explicitly ask as a customer.
 
 You have live tools — call them when you need fresh data instead of guessing:
 - search_products, search_stores — catalog discovery
@@ -64,9 +68,10 @@ After using tools, respond in the required JSON format below.
 
 When the user asks to find products, stores, deals, or flash sales, use tools or catalog search results below.
 Recommend 1–3 specific items by name and price. Do not invent products not listed in catalog search results.
-Product cards are shown in the app automatically — keep reply concise and reference what you found.
+Product cards may appear below your message in the app — keep the reply concise; do not repeat long product lists.
 
 Deep links — use suggested_actions with optional params for one-tap navigation:
+- Product detail: route "/screens/[id]", params {"id": "<product_id>"}
 - Specific order: route "/(root)/screens/profileScreens/orders/[orderId]", params {"orderId": "<uuid>"}
 - Orders list: route "/screens/profileScreens/orders"
 - Cart: route "/(root)/(tabs)/cart"
@@ -89,6 +94,12 @@ Returns:
 
 When the user needs a person (payment dispute, account block, damaged item escalation), set escalated_to_support true and include the support chat action.
 
+Output rules (critical):
+- Output ONE JSON object only. No prose, markdown, or code fences outside the JSON.
+- The "reply" field is plain human text ONLY — never JSON, never {"reply":...}, never ``` blocks.
+- Never paste suggested_actions or schema inside the reply field.
+- suggested_actions labels: 2–4 words, action-oriented (e.g. "View shoes", "Vendor dashboard").
+
 Respond ONLY with valid JSON:
 {
   "reply": "your message to the user",
@@ -97,12 +108,13 @@ Respond ONLY with valid JSON:
 }
 """.strip()
 
+_JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 
-def _parse_llm_json(content: str) -> dict[str, Any]:
+
+def _extract_json_payload(content: str) -> dict[str, Any] | None:
     cleaned = content.strip()
-    if cleaned.startswith("```"):
-        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
-        cleaned = re.sub(r"\s*```$", "", cleaned)
+    if not cleaned:
+        return None
 
     try:
         payload = json.loads(cleaned)
@@ -111,8 +123,97 @@ def _parse_llm_json(content: str) -> dict[str, Any]:
     except json.JSONDecodeError:
         pass
 
+    fenced = _JSON_FENCE_RE.search(cleaned)
+    if fenced:
+        try:
+            payload = json.loads(fenced.group(1))
+            if isinstance(payload, dict):
+                return payload
+        except json.JSONDecodeError:
+            pass
+
+    start = cleaned.find("{")
+    end = cleaned.rfind("}")
+    if start >= 0 and end > start:
+        try:
+            payload = json.loads(cleaned[start : end + 1])
+            if isinstance(payload, dict):
+                return payload
+        except json.JSONDecodeError:
+            pass
+
+    return None
+
+
+def _strip_leaked_json_from_reply(reply: str) -> str:
+    text = reply.strip()
+    if not text:
+        return text
+
+    for marker in ("\n```", "\n{"):
+        idx = text.find(marker)
+        if idx > 0 and any(token in text[idx:] for token in ('"reply"', '"suggested_actions"')):
+            text = text[:idx].strip()
+
+    text = _JSON_FENCE_RE.sub("", text).strip()
+    if text.startswith("{") and text.endswith("}"):
+        nested = _extract_json_payload(text)
+        if nested and isinstance(nested.get("reply"), str):
+            return nested["reply"].strip()
+    return text
+
+
+def _normalize_assistant_route(
+    route: str,
+    params: dict[str, str] | None,
+) -> tuple[str, dict[str, str] | None]:
+    cleaned_route = route.strip()
+    cleaned_params = dict(params) if params else {}
+
+    if cleaned_route.startswith("/screens/productDetails/") and "[id]" not in cleaned_route:
+        product_id = cleaned_route.rsplit("/", 1)[-1].strip()
+        if product_id:
+            cleaned_params.setdefault("id", product_id)
+            return "/screens/[id]", cleaned_params or None
+
+    parts = cleaned_route.strip("/").split("/")
+    if len(parts) == 2 and parts[0] == "screens" and parts[1] not in {"[id]", "search", "deals"}:
+        segment = parts[1]
+        if segment.startswith(("admin-product-", "product-")):
+            cleaned_params.setdefault("id", segment)
+            return "/screens/[id]", cleaned_params or None
+
+    return cleaned_route, cleaned_params or None
+
+
+def _parse_llm_json(content: str) -> dict[str, Any]:
+    cleaned = content.strip()
+    prose_prefix = ""
+    json_start = cleaned.find("{")
+    if json_start > 0:
+        prose_prefix = cleaned[:json_start].strip()
+
+    payload = _extract_json_payload(cleaned)
+    if payload and isinstance(payload.get("reply"), str):
+        reply = _strip_leaked_json_from_reply(str(payload["reply"]))
+        if not reply and prose_prefix:
+            reply = prose_prefix
+        return {
+            "reply": reply,
+            "suggested_actions": payload.get("suggested_actions", []),
+            "escalated_to_support": bool(payload.get("escalated_to_support", False)),
+        }
+
+    if prose_prefix:
+        return {
+            "reply": _strip_leaked_json_from_reply(prose_prefix),
+            "suggested_actions": [],
+            "escalated_to_support": False,
+        }
+
     return {
-        "reply": content.strip() or "I couldn't format that answer. Please try again.",
+        "reply": _strip_leaked_json_from_reply(cleaned)
+        or "I couldn't format that answer. Please try again.",
         "suggested_actions": [],
         "escalated_to_support": False,
     }
@@ -136,6 +237,7 @@ def _serialize_assistant_actions(items: list[Any]) -> list[AssistantActionRead]:
                 if value is not None and str(value).strip()
             }
             params = cleaned or None
+        route, params = _normalize_assistant_route(route, params)
         actions.append(AssistantActionRead(label=label[:80], route=route[:160], params=params))
     return actions[:4]
 
@@ -1022,7 +1124,7 @@ async def chat_with_assistant(
         return _persist_assistant_response(_fallback_reply(payload, user, snapshot, catalog))
 
     actions = _serialize_assistant_actions(parsed.get("suggested_actions", []))
-    reply = str(parsed.get("reply", "")).strip()
+    reply = _strip_leaked_json_from_reply(str(parsed.get("reply", "")).strip())
     if not reply:
         return _persist_assistant_response(_fallback_reply(payload, user, snapshot, catalog))
 

@@ -681,12 +681,6 @@ def update_support_thread_status(
     thread_id: str,
     payload: SupportChatStatusUpdate,
 ) -> ChatThreadRead:
-    if user.role != UserRole.ADMIN:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only admins can update support thread status.",
-        )
-
     thread = _load_thread(db, thread_id)
     if not thread or thread.thread_type != ChatThreadType.SUPPORT:
         raise HTTPException(
@@ -695,6 +689,30 @@ def update_support_thread_status(
         )
 
     _authorize_thread_participation(thread, user)
+
+    if user.role != UserRole.ADMIN:
+        if thread.customer_user_id != user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only admins or the customer can update support thread status.",
+            )
+        next_status = SupportChatStatus(payload.status)
+        if next_status != SupportChatStatus.RESOLVED:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Customers can only mark a support thread as resolved.",
+            )
+        thread.support_status = next_status
+        thread.resolved_at = datetime.now(UTC)
+        db.commit()
+        refreshed_thread = _load_thread(db, thread.id)
+        if not refreshed_thread or not refreshed_thread.vendor_user:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="We couldn't update the support thread right now.",
+            )
+        _publish_thread_updates(db, refreshed_thread)
+        return _serialize_thread(refreshed_thread, refreshed_thread.vendor_user, unread_count=0)
 
     next_status = SupportChatStatus(payload.status)
     thread.support_status = next_status

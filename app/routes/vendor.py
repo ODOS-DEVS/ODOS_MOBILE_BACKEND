@@ -26,6 +26,7 @@ from app.controllers.vendor_controller import (
     list_vendor_return_requests,
     list_vendor_vouchers,
     patch_vendor_product_stock,
+    patch_vendor_return_request,
     submit_vendor_application,
     update_vendor_order_status,
     update_vendor_product,
@@ -56,6 +57,7 @@ from app.schemas.vendor import (
     VendorProductUpdate,
     VendorProfileRead,
     VendorReturnRequestRead,
+    VendorReturnRequestUpdate,
     VendorStoreRead,
     VendorVoucherGiftPayload,
     VendorVoucherRead,
@@ -214,6 +216,16 @@ def get_vendor_return_detail(
     db: Session = Depends(get_db),
 ):
     return get_vendor_return_request(db, current_user, return_request_id)
+
+
+@router.patch("/returns/{return_request_id}", response_model=VendorReturnRequestRead)
+def patch_vendor_return(
+    return_request_id: str,
+    payload: VendorReturnRequestUpdate,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return patch_vendor_return_request(db, current_user, return_request_id, payload)
 
 
 @router.get("/wallet", response_model=VendorWalletRead)

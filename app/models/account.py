@@ -28,6 +28,7 @@ class SavedAddress(Base):
     full_name: Mapped[str] = mapped_column(String(120), nullable=False)
     phone: Mapped[str] = mapped_column(String(30), nullable=False)
     street: Mapped[str] = mapped_column(String(255), nullable=False)
+    gps_code: Mapped[str | None] = mapped_column(String(32), nullable=True)
     city: Mapped[str] = mapped_column(String(120), nullable=False)
     region: Mapped[str] = mapped_column(String(120), nullable=False)
     is_default: Mapped[bool] = mapped_column(

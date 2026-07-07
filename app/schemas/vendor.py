@@ -533,6 +533,19 @@ class VendorReturnRequestRead(BaseModel):
     updated_at: datetime
 
 
+class VendorReturnRequestUpdate(BaseModel):
+    status: str = Field(min_length=1, max_length=30)
+    vendor_note: str | None = Field(default=None, max_length=1000)
+
+    @field_validator("status", "vendor_note", mode="before")
+    @classmethod
+    def normalize_fields(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        cleaned = value.strip()
+        return cleaned or None
+
+
 class VendorTopProductRead(BaseModel):
     product_id: str
     product_title: str

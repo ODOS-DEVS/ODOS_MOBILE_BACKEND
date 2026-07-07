@@ -3199,6 +3199,9 @@ def update_admin_return_request(
     if payload.status == "refunded":
         changed_wallet_vendor_id = reverse_vendor_wallet_for_return_request(db, request)
         record_refund_adjustments(db, request)
+        from app.controllers.customer_wallet_controller import credit_customer_wallet_for_return
+
+        credit_customer_wallet_for_return(db, request)
 
     db.commit()
     db.refresh(request)
