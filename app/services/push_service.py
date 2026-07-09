@@ -9,7 +9,7 @@ from app.models import NotificationEvent, User
 logger = logging.getLogger(__name__)
 
 EXPO_PUSH_ENDPOINT = "https://exp.host/--/api/v2/push/send"
-VENDOR_ORDER_SOUND = "vendor-order.wav"
+VENDOR_ORDER_SOUND = "vendor_order.wav"
 
 
 def build_push_data(
