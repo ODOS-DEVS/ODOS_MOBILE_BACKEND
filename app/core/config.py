@@ -40,6 +40,10 @@ class Settings(BaseSettings):
     redis_url: str = ""
     rate_limit_enabled: bool = True
     cache_enabled: bool = True
+    db_pool_size: int = 3
+    db_max_overflow: int = 7
+    db_pool_timeout: int = 20
+    db_pool_recycle: int = 1800
 
     model_config = SettingsConfigDict(
         env_file=".env",

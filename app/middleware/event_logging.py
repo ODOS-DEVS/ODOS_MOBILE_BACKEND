@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
@@ -19,6 +20,28 @@ logger = logging.getLogger(__name__)
 
 AUDIT_PATH_PREFIXES = ("/api/admin/", "/api/auth/")
 SKIP_PATHS = {"/api/health", "/api/ws"}
+
+
+def _persist_middleware_event(
+    *,
+    event_type: str,
+    action: str,
+    metadata: dict,
+    ip_address: str | None,
+    user_agent: str | None,
+) -> None:
+    db = SessionLocal()
+    try:
+        record_system_event(
+            db,
+            event_type=event_type,
+            action=action,
+            metadata=metadata,
+            ip_address=ip_address,
+            user_agent=user_agent,
+        )
+    finally:
+        db.close()
 
 
 class EventLoggingMiddleware(BaseHTTPMiddleware):
@@ -51,36 +74,32 @@ class EventLoggingMiddleware(BaseHTTPMiddleware):
             return response
 
         try:
-            db = SessionLocal()
-            try:
-                metadata = {
-                    "method": request.method,
-                    "path": path,
-                    "status_code": status_code,
-                }
-                ip = request_ip(request)
-                agent = request_user_agent(request)
+            metadata = {
+                "method": request.method,
+                "path": path,
+                "status_code": status_code,
+            }
+            ip = request_ip(request)
+            agent = request_user_agent(request)
 
-                if status_code == 429:
-                    event_type = RATE_LIMIT_TRIGGERED
-                    action = "rate_limit.triggered"
-                elif status_code in {401, 403}:
-                    event_type = AUTH_FAILURE
-                    action = "auth.access_denied"
-                else:
-                    event_type = API_REQUEST_FAILED
-                    action = "api.request_failed"
+            if status_code == 429:
+                event_type = RATE_LIMIT_TRIGGERED
+                action = "rate_limit.triggered"
+            elif status_code in {401, 403}:
+                event_type = AUTH_FAILURE
+                action = "auth.access_denied"
+            else:
+                event_type = API_REQUEST_FAILED
+                action = "api.request_failed"
 
-                record_system_event(
-                    db,
-                    event_type=event_type,
-                    action=action,
-                    metadata=metadata,
-                    ip_address=ip,
-                    user_agent=agent,
-                )
-            finally:
-                db.close()
+            await asyncio.to_thread(
+                _persist_middleware_event,
+                event_type=event_type,
+                action=action,
+                metadata=metadata,
+                ip_address=ip,
+                user_agent=agent,
+            )
         except Exception:
             logger.exception("Failed to persist middleware event log")
 

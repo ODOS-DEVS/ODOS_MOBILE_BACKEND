@@ -4,15 +4,14 @@ import jwt
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
 
-from app.core.database import SessionLocal
 from app.core.security import decode_access_token
-from app.models import User
 from app.services.realtime_service import realtime_manager
 
 router = APIRouter(tags=["realtime"])
 
 
-def _resolve_websocket_user(token: str | None) -> User | None:
+def _resolve_websocket_user_id(token: str | None) -> uuid.UUID | None:
+    """Validate the JWT only — avoid a DB round-trip per websocket connect."""
     if not token:
         return None
 
@@ -22,39 +21,29 @@ def _resolve_websocket_user(token: str | None) -> User | None:
         if subject is None:
             return None
 
-        user_id = uuid.UUID(subject)
+        return uuid.UUID(subject)
     except (jwt.InvalidTokenError, ValueError):
         return None
-
-    db = SessionLocal()
-    try:
-        user = db.get(User, user_id)
-        if user is None or not user.is_active:
-            return None
-        db.expunge(user)
-        return user
-    finally:
-        db.close()
 
 
 @router.websocket("/ws")
 async def websocket_events(websocket: WebSocket) -> None:
     token = websocket.query_params.get("token")
-    user = _resolve_websocket_user(token) if token else None
-    if token and not user:
+    user_id = _resolve_websocket_user_id(token) if token else None
+    if token and not user_id:
         await websocket.accept()
         await websocket.close(code=4401, reason="Unauthorized")
         return
 
-    connection_id = str(user.id) if user else f"public:{uuid.uuid4()}"
+    connection_id = str(user_id) if user_id else f"public:{uuid.uuid4()}"
     await realtime_manager.connect(connection_id, websocket)
     try:
         await websocket.send_json(
             {
                 "type": "connection.ready",
                 "payload": {
-                    "scope": "authenticated" if user else "public",
-                    "user_id": str(user.id) if user else None,
+                    "scope": "authenticated" if user_id else "public",
+                    "user_id": str(user_id) if user_id else None,
                 },
             }
         )

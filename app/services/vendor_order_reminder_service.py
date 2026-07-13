@@ -125,6 +125,7 @@ def process_vendor_order_reminders() -> None:
                         image_key=preview["image_key"],
                         image_url=preview["image_url"],
                     )
+                    db.commit()
                     send_vendor_order_push(
                         user=vendor,
                         title=f"Order #{order.order_number} still pending",
@@ -144,7 +145,6 @@ def process_vendor_order_reminders() -> None:
                             },
                         ),
                     )
-                    db.commit()
                 except Exception:
                     db.rollback()
                     logger.exception(
