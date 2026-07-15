@@ -4,8 +4,8 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.controllers.notification_controller import (
-    list_notification_events,
-    list_notification_read_keys,
+    build_notification_read_state,
+    list_notification_events_page,
     mark_notification_keys_read,
     register_expo_push_token,
     unregister_expo_push_token,
@@ -15,6 +15,7 @@ from app.core.database import get_db
 from app.models import User
 from app.schemas.notification import (
     NotificationEventRead,
+    NotificationPageRead,
     NotificationReadState,
     NotificationReadUpdate,
     PushTokenUpdate,
@@ -29,17 +30,17 @@ def get_notification_read_state(
     current_user: Annotated[User, Depends(get_current_user)],
     db: Session = Depends(get_db),
 ):
-    return NotificationReadState(
-        read_keys=list_notification_read_keys(db, current_user)
-    )
+    return NotificationReadState(**build_notification_read_state(db, current_user))
 
 
-@router.get("", response_model=list[NotificationEventRead])
+@router.get("", response_model=NotificationPageRead)
 def get_notifications(
     current_user: Annotated[User, Depends(get_current_user)],
     db: Session = Depends(get_db),
+    limit: int = 25,
+    offset: int = 0,
 ):
-    return list_notification_events(db, current_user)
+    return list_notification_events_page(db, current_user, limit=limit, offset=offset)
 
 
 @router.post("/read-state", response_model=NotificationReadState)
@@ -48,9 +49,13 @@ def mark_notification_read_state(
     current_user: Annotated[User, Depends(get_current_user)],
     db: Session = Depends(get_db),
 ):
-    return NotificationReadState(
-        read_keys=mark_notification_keys_read(db, current_user, payload.keys)
+    mark_notification_keys_read(
+        db,
+        current_user,
+        payload.keys,
+        mark_all=payload.mark_all,
     )
+    return NotificationReadState(**build_notification_read_state(db, current_user))
 
 
 @router.post("/push-token", response_model=UserRead)

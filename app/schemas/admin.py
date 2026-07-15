@@ -858,6 +858,7 @@ class AdminVendorWithdrawalRequestRead(BaseModel):
 class AdminVendorWithdrawalUpdate(BaseModel):
     status: str = Field(min_length=2, max_length=30)
     admin_note: str | None = Field(default=None, max_length=255)
+    confirm_manual_payout: bool = False
 
     @field_validator("status", mode="before")
     @classmethod

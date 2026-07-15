@@ -369,6 +369,8 @@ def record_refund_adjustments(
 def record_vendor_payout_paid(
     db: Session,
     withdrawal_request: VendorWithdrawalRequest,
+    *,
+    payout_channel: str = "paystack",
 ) -> PlatformTreasuryAccount:
     existing_entry = db.scalar(
         select(PlatformLedgerEntry.id).where(
@@ -415,6 +417,7 @@ def record_vendor_payout_paid(
             "vendor_user_id": str(withdrawal_request.vendor_user_id),
             "payout_method_type": withdrawal_request.payout_method_type,
             "payout_provider": withdrawal_request.payout_provider,
+            "payout_channel": payout_channel,
         },
     )
     return account

@@ -92,6 +92,10 @@ def send_expo_push_notification(
         )
 
 
+def can_receive_customer_chat_alerts(user: User) -> bool:
+    return bool(user.expo_push_token and user.allow_notifications)
+
+
 def send_vendor_order_push(
     *,
     user: User,
@@ -128,5 +132,25 @@ def send_vendor_chat_push(
         body=body,
         data=data,
         channel_id="vendor-chats",
+        sound="default",
+    )
+
+
+def send_customer_chat_push(
+    *,
+    user: User,
+    title: str,
+    body: str,
+    data: dict | None = None,
+) -> None:
+    if not can_receive_customer_chat_alerts(user):
+        return
+
+    send_expo_push_notification(
+        user=user,
+        title=title,
+        body=body,
+        data=data,
+        channel_id="customer-chats",
         sound="default",
     )

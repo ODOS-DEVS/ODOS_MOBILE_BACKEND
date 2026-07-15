@@ -175,7 +175,7 @@ def limit_send_phone_code(user: User, phone_number: str) -> None:
     phone_key = phone_number.strip()
     enforce_rate_limits(
         [
-            RateLimitRule("auth:phone-send:user:minute", user_id, 1, 60),
+            RateLimitRule("auth:phone-send:user:minute", user_id, 3, 60),
             RateLimitRule("auth:phone-send:user:day", user_id, 5, 86400),
             RateLimitRule("auth:phone-send:phone:day", phone_key, 5, 86400),
         ]

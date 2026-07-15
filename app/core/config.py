@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     paystack_public_key: str = ""
     paystack_webhook_secret: str = ""
     paystack_currency: str = "GHS"
+    paystack_payouts_enabled: bool = True
     redis_url: str = ""
     rate_limit_enabled: bool = True
     cache_enabled: bool = True

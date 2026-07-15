@@ -23,10 +23,19 @@ class NotificationEventRead(BaseModel):
 
 class NotificationReadState(BaseModel):
     read_keys: list[str]
+    unread_count: int = 0
 
 
 class NotificationReadUpdate(BaseModel):
-    keys: list[str] = Field(default_factory=list, min_length=1)
+    keys: list[str] = Field(default_factory=list)
+    mark_all: bool = False
+
+
+class NotificationPageRead(BaseModel):
+    items: list[NotificationEventRead]
+    has_more: bool
+    total_count: int
+    unread_count: int
 
 
 class PushTokenUpdate(BaseModel):

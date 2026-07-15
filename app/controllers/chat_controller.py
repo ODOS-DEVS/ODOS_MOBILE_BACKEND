@@ -29,7 +29,11 @@ from app.schemas.chat import (
     ChatThreadRead,
 )
 from app.controllers.notification_controller import create_notification_event
-from app.services.push_service import build_push_data, send_vendor_chat_push
+from app.services.push_service import (
+    build_push_data,
+    send_customer_chat_push,
+    send_vendor_chat_push,
+)
 from app.services.realtime_service import realtime_manager
 
 
@@ -542,6 +546,10 @@ def list_chat_messages(db: Session, user: User, thread_id: str) -> list[ChatMess
     return [_serialize_message(message, thread) for message in messages]
 
 
+def _chat_route_target_id(thread: ChatThread) -> str:
+    return f"{thread.store_id}:{thread.id}"
+
+
 def _notify_vendor_shopper_message(
     db: Session,
     *,
@@ -569,7 +577,7 @@ def _notify_vendor_shopper_message(
         accent="info",
         action_label="Reply",
         route_type="vendor_chat",
-        route_target_id=str(thread.id),
+        route_target_id=_chat_route_target_id(thread),
     )
     send_vendor_chat_push(
         user=vendor,
@@ -585,6 +593,55 @@ def _notify_vendor_shopper_message(
                 "storeId": str(thread.store_id),
                 "storeName": store_title,
                 "customerName": customer_name,
+            },
+        ),
+    )
+    db.commit()
+
+
+def _notify_customer_store_reply(
+    db: Session,
+    *,
+    thread: ChatThread,
+    message: ChatMessage,
+    vendor: User,
+) -> None:
+    customer = thread.customer_user or db.get(User, thread.customer_user_id)
+    if not customer or thread.thread_type != ChatThreadType.STORE:
+        return
+
+    vendor_name = (vendor.full_name or vendor.email or "The store").strip()
+    preview = (message.body or "").strip()
+    if len(preview) > 140:
+        preview = f"{preview[:137]}..."
+
+    store_title = thread.store.title if thread.store else "Store"
+    notification_event = create_notification_event(
+        db,
+        customer,
+        kind="customer_chat_message",
+        title=f"Reply from {store_title}",
+        body=preview or f"{vendor_name} replied to your message.",
+        icon="chatbubble-ellipses-outline",
+        accent="info",
+        action_label="Open chat",
+        route_type="customer_chat",
+        route_target_id=_chat_route_target_id(thread),
+    )
+    send_customer_chat_push(
+        user=customer,
+        title=f"{store_title} replied",
+        body=preview or f"{vendor_name} sent you a message.",
+        data=build_push_data(
+            push_type="customer_chat_message",
+            route_type="customer_chat",
+            route_target_id=_chat_route_target_id(thread),
+            notification_event=notification_event,
+            extra={
+                "threadId": str(thread.id),
+                "storeId": str(thread.store_id),
+                "storeName": store_title,
+                "vendorName": vendor_name,
             },
         ),
     )
@@ -668,6 +725,23 @@ def post_chat_message(
                     thread=thread,
                     message=created_message,
                     customer=customer,
+                )
+            except Exception:
+                db.rollback()
+
+    if (
+        thread.thread_type == ChatThreadType.STORE
+        and user.id == thread.vendor_user_id
+        and thread.customer_user_id
+    ):
+        vendor = thread.vendor_user or db.get(User, thread.vendor_user_id)
+        if vendor:
+            try:
+                _notify_customer_store_reply(
+                    db,
+                    thread=thread,
+                    message=created_message,
+                    vendor=vendor,
                 )
             except Exception:
                 db.rollback()

@@ -41,6 +41,8 @@ PERMISSION_FEATURES: dict[AdminPermissionLevel, frozenset[str]] = {
             "notifications",
             "support",
             "delivery",
+            "finance",
+            "payouts",
         }
     ),
     AdminPermissionLevel.SUPPORT: frozenset(

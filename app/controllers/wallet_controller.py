@@ -706,11 +706,13 @@ def _release_withdrawal_back_to_available_balance(
 def _mark_withdrawal_paid(
     db: Session,
     request: VendorWithdrawalRequest,
+    *,
+    payout_channel: str = "paystack",
 ) -> None:
     wallet = request.wallet
     if request.status == "paid":
         return
-    record_vendor_payout_paid(db, request)
+    record_vendor_payout_paid(db, request, payout_channel=payout_channel)
     wallet.pending_withdrawal_balance = _round_money(
         wallet.pending_withdrawal_balance - request.amount
     )
@@ -761,6 +763,29 @@ def _initiate_vendor_withdrawal_transfer(
     request.transfer_initiated_at = datetime.now(UTC)
     request.transfer_failure_reason = None
     return provider_status or "pending"
+
+
+def _should_use_paystack_transfer(payload: AdminVendorWithdrawalUpdate) -> bool:
+    return (
+        settings.paystack_is_configured
+        and settings.paystack_payouts_enabled
+        and not payload.confirm_manual_payout
+    )
+
+
+def _raise_paystack_payout_error(exc: HTTPException) -> None:
+    detail = str(exc.detail or "").strip()
+    lowered = detail.lower()
+    if "starter" in lowered:
+        raise HTTPException(
+            status_code=exc.status_code,
+            detail=(
+                f"{detail} Paystack Starter businesses cannot send automatic transfers. "
+                "Upgrade to a Registered business on Paystack, or confirm the payout "
+                "manually after you send the money to the vendor yourself."
+            ),
+        ) from exc
+    raise exc
 
 
 def reconcile_paystack_transfer_event(
@@ -994,17 +1019,24 @@ def update_admin_vendor_withdrawal_request(
         request.transfer_failure_reason = None
         request.paid_at = None
     elif previous_status != "paid" and next_status == "paid":
-        if settings.paystack_is_configured:
-            provider_status = _initiate_vendor_withdrawal_transfer(request)
+        if _should_use_paystack_transfer(payload):
+            try:
+                provider_status = _initiate_vendor_withdrawal_transfer(request)
+            except HTTPException as exc:
+                _raise_paystack_payout_error(exc)
             request.status = "processing"
             request.paid_at = None
             request.transfer_failure_reason = None
             next_status = "processing"
             if provider_status == "success":
-                _mark_withdrawal_paid(db, request)
+                _mark_withdrawal_paid(db, request, payout_channel="paystack")
                 next_status = "paid"
         else:
-            _mark_withdrawal_paid(db, request)
+            _mark_withdrawal_paid(
+                db,
+                request,
+                payout_channel="manual" if payload.confirm_manual_payout else "offline",
+            )
     elif next_status == "approved":
         request.paid_at = None
         request.transfer_failure_reason = None
