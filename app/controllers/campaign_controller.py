@@ -21,8 +21,8 @@ from app.schemas.admin import (
     AdminMerchandisingCampaignOptInRead,
     AdminMerchandisingCampaignRead,
     AdminMerchandisingCampaignUpsert,
-    AdminPageRead,
 )
+from app.schemas.pagination import AdminPageRead
 from app.schemas.catalog import MerchandisingCampaignDetailRead, MerchandisingCampaignRead
 from app.services.campaign_service import (
     CAMPAIGN_STATUSES,
