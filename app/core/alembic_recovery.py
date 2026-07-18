@@ -1,4 +1,4 @@
-"""Repair alembic_version when production DB is ahead of deployed migration files."""
+"""Repair alembic_version when production DB is ahead of / out of sync with migration files."""
 
 from __future__ import annotations
 
@@ -13,7 +13,8 @@ def _schema_has_column(connection, table_name: str, column_name: str) -> bool:
     row = connection.execute(
         text(
             "SELECT 1 FROM information_schema.columns "
-            "WHERE table_name = :table_name AND column_name = :column_name "
+            "WHERE table_schema = 'public' "
+            "AND table_name = :table_name AND column_name = :column_name "
             "LIMIT 1"
         ),
         {"table_name": table_name, "column_name": column_name},
@@ -23,14 +24,10 @@ def _schema_has_column(connection, table_name: str, column_name: str) -> bool:
 
 def _schema_has_table(connection, table_name: str) -> bool:
     row = connection.execute(
-        text(
-            "SELECT 1 FROM information_schema.tables "
-            "WHERE table_schema = 'public' AND table_name = :table_name "
-            "LIMIT 1"
-        ),
-        {"table_name": table_name},
-    ).fetchone()
-    return row is not None
+        text("SELECT to_regclass(:reg) IS NOT NULL"),
+        {"reg": f"public.{table_name}"},
+    ).scalar()
+    return bool(row)
 
 
 def _schema_has_promotion_engine(connection) -> bool:
@@ -39,17 +36,38 @@ def _schema_has_promotion_engine(connection) -> bool:
 
 def _best_stamp_for_schema(connection, available: set[str], codebase_head: str) -> str:
     """Pick the newest known revision that matches what already exists in the DB."""
-    # Newest first — stamp as far forward as the live schema already reflects.
     candidates: list[tuple[str, bool]] = [
         ("r8s9t0u1v2w3", _schema_has_table(connection, "merchandising_campaigns")),
         ("o5p6q7r8s9t0", _schema_has_column(connection, "assistant_conversations", "context_json")),
+        ("m3n4o5p6q7r8", _schema_has_column(connection, "saved_addresses", "gps_code")),
         ("l2m3n4o5p6q7", _schema_has_table(connection, "assistant_conversations")),
         ("k1l2m3n4o5p6", _schema_has_promotion_engine(connection)),
     ]
     for revision, present in candidates:
         if present and revision in available:
             return revision
-    return codebase_head if codebase_head in available else codebase_head
+    return codebase_head
+
+
+def _revision_is_ancestor_or_equal(script: ScriptDirectory, current: str, target: str) -> bool:
+    """True if current is target, or current appears when walking target → base."""
+    if current == target:
+        return True
+    rev = script.get_revision(target)
+    seen: set[str] = set()
+    while rev is not None:
+        if rev.revision == current:
+            return True
+        if rev.revision in seen:
+            break
+        seen.add(rev.revision)
+        down = rev.down_revision
+        if down is None:
+            break
+        if isinstance(down, tuple):
+            down = down[0]
+        rev = script.get_revision(down) if down else None
+    return False
 
 
 def recover_alembic_version() -> None:
@@ -83,25 +101,26 @@ def recover_alembic_version() -> None:
             connection.commit()
             return
 
-        # If assistant tables already exist but version is still before that migration,
-        # stamp forward so upgrade does not try to recreate them.
+        # Tables already exist but alembic_version is still before l2
+        # (common after a prior recovery stamped back to k1*). Stamp to l2 only
+        # so later migrations (m3/n4/o5/…) still run.
         if (
             current in available
-            and current in {"k1l2m3n4o5p6", "j0k1l2m3n4o5"}
-            and _schema_has_table(connection, "assistant_conversations")
             and "l2m3n4o5p6q7" in available
+            and _schema_has_table(connection, "assistant_conversations")
+            and current != "l2m3n4o5p6q7"
+            and _revision_is_ancestor_or_equal(script, current, "l2m3n4o5p6q7")
+            and not _revision_is_ancestor_or_equal(script, "l2m3n4o5p6q7", current)
         ):
-            target = _best_stamp_for_schema(connection, available, codebase_head)
-            if target != current:
-                print(
-                    "Alembic recovery: assistant schema already present; "
-                    f"advancing stamp from {current!r} to {target!r}"
-                )
-                connection.execute(
-                    text("UPDATE alembic_version SET version_num = :target"),
-                    {"target": target},
-                )
-                connection.commit()
+            print(
+                "Alembic recovery: assistant schema already present; "
+                f"advancing stamp from {current!r} to 'l2m3n4o5p6q7'"
+            )
+            connection.execute(
+                text("UPDATE alembic_version SET version_num = :target"),
+                {"target": "l2m3n4o5p6q7"},
+            )
+            connection.commit()
             return
 
         if current in available:
