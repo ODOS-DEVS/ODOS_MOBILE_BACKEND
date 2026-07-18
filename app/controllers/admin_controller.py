@@ -34,8 +34,13 @@ from app.controllers.finance_controller import (
     list_admin_platform_ledger_entries,
     record_refund_adjustments,
 )
-from app.controllers.notification_controller import create_notification_event
+from app.controllers.notification_controller import create_notification_event, order_notification_image
 from app.core.security import hash_password
+from app.services.push_service import (
+    customer_order_status_push_copy,
+    dispatch_customer_order_push,
+    dispatch_customer_return_push,
+)
 from app.core.catalog_taxonomy import ODOS_CATEGORY_TAXONOMY
 from app.controllers.vendor_controller import (
     approve_vendor_application,
@@ -245,9 +250,11 @@ def _serialize_voucher(
         description=voucher.description,
         issuer_name=voucher.issuer_name,
         scope=voucher.scope,
+        owner_type=getattr(voucher, "owner_type", "platform") or "platform",
         availability=voucher.availability,
         store_id=voucher.store_id,
         store_name=store_name,
+        eligible_store_ids=getattr(voucher, "eligible_store_ids", None),
         reward_text=voucher.reward_text,
         discount_type=voucher.discount_type,
         discount_value=round(voucher.discount_value, 2),
@@ -278,6 +285,7 @@ def _serialize_voucher(
         first_order_only=bool(getattr(voucher, "first_order_only", False)),
         new_user_only=bool(getattr(voucher, "new_user_only", False)),
         category_slugs=getattr(voucher, "category_slugs", None),
+        excluded_category_slugs=getattr(voucher, "excluded_category_slugs", None),
         product_ids=getattr(voucher, "product_ids", None),
         excluded_product_ids=getattr(voucher, "excluded_product_ids", None),
     )
@@ -302,8 +310,12 @@ def _apply_voucher_upsert(voucher: Voucher, payload: AdminVoucherUpsert, *, targ
     voucher.description = payload.description
     voucher.issuer_name = payload.issuer_name or (target_store.title if target_store else None)
     voucher.scope = payload.scope
+    voucher.owner_type = payload.owner_type or "platform"
     voucher.availability = payload.availability
     voucher.store_id = target_store.id if target_store else None
+    voucher.eligible_store_ids = (
+        None if payload.scope == "store" else payload.eligible_store_ids
+    )
     voucher.reward_text = build_voucher_reward_text(payload.discount_type, discount_value or payload.discount_value)
     voucher.discount_type = payload.discount_type
     voucher.discount_value = discount_value
@@ -326,6 +338,7 @@ def _apply_voucher_upsert(voucher: Voucher, payload: AdminVoucherUpsert, *, targ
     voucher.first_order_only = payload.first_order_only
     voucher.new_user_only = payload.new_user_only
     voucher.category_slugs = payload.category_slugs
+    voucher.excluded_category_slugs = payload.excluded_category_slugs
     voucher.product_ids = payload.product_ids
     voucher.excluded_product_ids = payload.excluded_product_ids
 
@@ -342,10 +355,13 @@ def _validate_voucher_payload(payload: AdminVoucherUpsert) -> None:
         per_user_limit=payload.per_user_limit,
         store_id=payload.store_id,
         promotion_type=payload.promotion_type,
+        owner_type=payload.owner_type or "platform",
         bogo_buy_quantity=payload.bogo_buy_quantity,
         bogo_get_quantity=payload.bogo_get_quantity,
         category_slugs=payload.category_slugs,
         product_ids=payload.product_ids,
+        eligible_store_ids=payload.eligible_store_ids,
+        excluded_category_slugs=payload.excluded_category_slugs,
     )
 
 
@@ -2628,9 +2644,36 @@ def list_admin_vouchers(
     *,
     limit: int = 30,
     offset: int = 0,
+    q: str | None = None,
+    status_filter: str | None = None,
+    owner_type: str | None = None,
+    scope: str | None = None,
 ) -> AdminPageRead[AdminVoucherRead]:
     require_admin(current_user)
     statement = select(Voucher).order_by(Voucher.created_at.desc(), Voucher.title.asc())
+    if q:
+        needle = f"%{q.strip().upper()}%"
+        statement = statement.where(
+            func.upper(Voucher.code).like(needle)
+            | func.upper(Voucher.title).like(needle)
+            | func.upper(func.coalesce(Voucher.campaign_tag, "")).like(needle)
+        )
+    if owner_type in {"platform", "vendor"}:
+        statement = statement.where(Voucher.owner_type == owner_type)
+    if scope in {"odos", "store", "category", "product"}:
+        statement = statement.where(Voucher.scope == scope)
+
+    # Status is derived; when filtering by status we page after computing it.
+    if status_filter and status_filter != "all":
+        vouchers = list(db.scalars(statement).all())
+        serialized = _serialize_admin_vouchers(db, vouchers)
+        filtered = [item for item in serialized if item.status == status_filter]
+        page_items = filtered[offset : offset + limit]
+        return AdminPageRead(
+            items=page_items,
+            has_more=offset + limit < len(filtered),
+        )
+
     vouchers, has_more = paginate_scalars(db, statement, limit=limit, offset=offset)
     return AdminPageRead(
         items=_serialize_admin_vouchers(db, vouchers),
@@ -2677,7 +2720,9 @@ def create_admin_voucher(
         reward_text=build_voucher_reward_text(payload.discount_type, discount_value or payload.discount_value),
         discount_type=payload.discount_type,
         discount_value=discount_value,
+        owner_type=payload.owner_type or "platform",
         approval_status="approved",
+        created_by_user_id=current_user.id,
         reviewed_by_user_id=current_user.id,
     )
     _apply_voucher_upsert(voucher, payload, target_store=target_store)
@@ -2773,6 +2818,130 @@ def archive_admin_voucher(
         before_state=before_state,
         after_state=_voucher_audit_snapshot(voucher),
     )
+
+
+def pause_admin_voucher(
+    db: Session,
+    current_user: User,
+    voucher_id: str,
+) -> AdminVoucherRead:
+    require_admin(current_user)
+    voucher = _get_admin_voucher(db, voucher_id)
+    before_state = _voucher_audit_snapshot(voucher)
+    voucher.is_active = False
+    db.commit()
+    db.refresh(voucher)
+    log_admin_promo_mutation(
+        db,
+        admin_user=current_user,
+        event_type=PROMO_UPDATED,
+        action="promo.paused",
+        voucher=voucher,
+        before_state=before_state,
+        after_state=_voucher_audit_snapshot(voucher),
+    )
+    return _serialize_admin_vouchers(db, [voucher])[0]
+
+
+def resume_admin_voucher(
+    db: Session,
+    current_user: User,
+    voucher_id: str,
+) -> AdminVoucherRead:
+    require_admin(current_user)
+    voucher = _get_admin_voucher(db, voucher_id)
+    before_state = _voucher_audit_snapshot(voucher)
+    if getattr(voucher, "approval_status", "approved") not in {"approved"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only approved vouchers can be resumed.",
+        )
+    voucher.is_active = True
+    db.commit()
+    db.refresh(voucher)
+    log_admin_promo_mutation(
+        db,
+        admin_user=current_user,
+        event_type=PROMO_UPDATED,
+        action="promo.resumed",
+        voucher=voucher,
+        before_state=before_state,
+        after_state=_voucher_audit_snapshot(voucher),
+    )
+    return _serialize_admin_vouchers(db, [voucher])[0]
+
+
+def duplicate_admin_voucher(
+    db: Session,
+    current_user: User,
+    voucher_id: str,
+) -> AdminVoucherRead:
+    require_admin(current_user)
+    source = _get_admin_voucher(db, voucher_id)
+    suffix = datetime.now(UTC).strftime("%H%M%S")
+    base_code = (source.code or "COPY")[:32]
+    new_code = f"{base_code}-C{suffix}"[:40]
+
+    clone = Voucher(
+        code=new_code,
+        title=f"{source.title} (Copy)",
+        description=source.description,
+        issuer_name=source.issuer_name,
+        scope=source.scope,
+        owner_type=getattr(source, "owner_type", "platform") or "platform",
+        availability=source.availability,
+        store_id=source.store_id,
+        eligible_store_ids=getattr(source, "eligible_store_ids", None),
+        reward_text=source.reward_text,
+        discount_type=source.discount_type,
+        discount_value=source.discount_value,
+        min_subtotal=source.min_subtotal,
+        max_discount=source.max_discount,
+        usage_limit=source.usage_limit,
+        per_user_limit=source.per_user_limit,
+        is_active=False,
+        starts_at=source.starts_at,
+        ends_at=source.ends_at,
+        campaign_tag=source.campaign_tag,
+        visibility=getattr(source, "visibility", "public"),
+        approval_status="approved",
+        created_by_user_id=current_user.id,
+        reviewed_by_user_id=current_user.id,
+        first_order_only=bool(getattr(source, "first_order_only", False)),
+        new_user_only=bool(getattr(source, "new_user_only", False)),
+        category_slugs=getattr(source, "category_slugs", None),
+        excluded_category_slugs=getattr(source, "excluded_category_slugs", None),
+        product_ids=getattr(source, "product_ids", None),
+        excluded_product_ids=getattr(source, "excluded_product_ids", None),
+        promotion_type=getattr(source, "promotion_type", "coupon") or "coupon",
+        priority=int(getattr(source, "priority", 0) or 0),
+        stackable=bool(getattr(source, "stackable", False)),
+        exclusive_group=getattr(source, "exclusive_group", None),
+        auto_apply=False,
+        bogo_buy_quantity=getattr(source, "bogo_buy_quantity", None),
+        bogo_get_quantity=getattr(source, "bogo_get_quantity", None),
+        bogo_get_discount_percent=getattr(source, "bogo_get_discount_percent", None),
+        rules_json=getattr(source, "rules_json", None),
+    )
+    db.add(clone)
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Could not duplicate that voucher code. Try again.",
+        ) from exc
+    db.refresh(clone)
+    log_admin_promo_mutation(
+        db,
+        admin_user=current_user,
+        event_type=PROMO_CREATED,
+        action="promo.duplicated",
+        voucher=clone,
+        after_state=_voucher_audit_snapshot(clone),
+    )
+    return _serialize_admin_vouchers(db, [clone])[0]
 
 
 def bulk_generate_admin_vouchers(
@@ -3214,18 +3383,27 @@ def update_admin_return_request(
         "refunded": "Refund completed",
         "exchanged": "Exchange completed",
     }
-    create_notification_event(
+    title = status_copy.get(payload.status, "Return request updated")
+    body = f"{request.order_item.title}: {payload.status.replace('_', ' ')}."
+    return_event = create_notification_event(
         db,
         request.order.user,
         kind="return_updated",
-        title=status_copy.get(payload.status, "Return request updated"),
-        body=f"{request.order_item.title}: {payload.status.replace('_', ' ')}.",
+        title=title,
+        body=body,
         icon="swap-horizontal-outline",
         accent="warning" if payload.status in {"requested", "under_review"} else "success" if payload.status in {"approved", "refunded", "exchanged"} else "warning",
         action_label="View order",
         route_type="order",
         route_target_id=str(request.order_id),
         image_key=request.order_item.image_key,
+    )
+    dispatch_customer_return_push(
+        user=request.order.user,
+        title=title,
+        body=body,
+        order_id=request.order_id,
+        notification_event=return_event,
     )
     db.commit()
     db.refresh(request)
@@ -3249,7 +3427,9 @@ def update_admin_order_status(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported order status.")
 
     order = db.scalar(
-        select(Order).options(selectinload(Order.items)).where(Order.id == order_id)
+        select(Order)
+        .options(selectinload(Order.items), selectinload(Order.user))
+        .where(Order.id == order_id)
     )
     if not order:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found.")
@@ -3291,10 +3471,41 @@ def update_admin_order_status(
         order.progress = progress_map.get(payload.status, order.progress)
         order.tracking_eta = payload.status.replace("_", " ").title()
 
+    push_title, push_body = customer_order_status_push_copy(
+        order_number=order.order_number,
+        vendor_status=payload.status,
+        tracking_eta=order.tracking_eta,
+    )
+    preview = order_notification_image(order)
+    status_event = create_notification_event(
+        db,
+        order.user,
+        kind="vendor_order_update",
+        title=push_title,
+        body=push_body,
+        icon="bag-handle-outline",
+        accent="warning" if payload.status == "cancelled" else "neutral",
+        action_label="Track order",
+        route_type="order",
+        route_target_id=str(order.id),
+        image_key=preview["image_key"],
+        image_url=preview["image_url"],
+    )
+    dispatch_customer_order_push(
+        user=order.user,
+        title=push_title,
+        body=push_body,
+        order=order,
+        notification_event=status_event,
+    )
     db.commit()
     db.refresh(order)
     for vendor_user_id in changed_wallet_vendor_ids:
         publish_vendor_wallet_updates(vendor_user_id)
+
+    from app.controllers.order_controller import _broadcast_order_realtime
+
+    _broadcast_order_realtime(db, order)
     log_admin_order_status_change(
         db,
         admin_user=current_user,

@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -9,11 +10,23 @@ class AssistantMessageInput(BaseModel):
     content: str = Field(min_length=1, max_length=4000)
 
 
+class AssistantReferenceContext(BaseModel):
+    """Entity the shopper opened the assistant from (e.g. a storefront)."""
+
+    type: Literal["store"] = "store"
+    store_id: str | None = Field(default=None, max_length=64)
+    store_name: str | None = Field(default=None, max_length=160)
+    market_title: str | None = Field(default=None, max_length=120)
+    vendor_user_id: str | None = Field(default=None, max_length=64)
+    category: str | None = Field(default=None, max_length=120)
+
+
 class AssistantChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=2000)
     history: list[AssistantMessageInput] = Field(default_factory=list, max_length=12)
     screen: str | None = Field(default=None, max_length=80)
     conversation_id: uuid.UUID | None = None
+    context: AssistantReferenceContext | None = None
 
 
 class AssistantActionRead(BaseModel):
@@ -68,6 +81,7 @@ class AssistantSessionResponse(BaseModel):
     conversation_id: str | None = None
     messages: list[AssistantMessageRead] = Field(default_factory=list)
     nudge: AssistantNudgeRead | None = None
+    context: AssistantReferenceContext | None = None
 
 
 class AssistantChatResponse(BaseModel):

@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 import logging
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.controllers.notification_controller import create_notification_event, order_notification_image
@@ -23,7 +23,12 @@ from app.services.delivery_service import (
 )
 from app.services.finance_math import round_money
 from app.services.realtime_service import realtime_manager
-from app.services.push_service import build_push_data, send_expo_push_notification, send_vendor_order_push
+from app.services.push_service import (
+    dispatch_customer_order_push,
+    dispatch_customer_return_push,
+    build_push_data,
+    send_vendor_order_push,
+)
 from app.services.sms_service import send_order_payment_confirmation_sms
 
 logger = logging.getLogger(__name__)
@@ -197,24 +202,13 @@ def _dispatch_order_push(
     order: Order,
     notification_event: NotificationEvent | None = None,
 ) -> None:
-    try:
-        send_expo_push_notification(
-            user=user,
-            title=title,
-            body=body,
-            data=build_push_data(
-                push_type="order_update",
-                route_type="order",
-                route_target_id=str(order.id),
-                notification_event=notification_event,
-                extra={
-                    "orderId": str(order.id),
-                    "status": order.status,
-                },
-            ),
-        )
-    except Exception:
-        logger.exception("Failed to send order push for %s", order.id)
+    dispatch_customer_order_push(
+        user=user,
+        title=title,
+        body=body,
+        order=order,
+        notification_event=notification_event,
+    )
 
 
 def _validate_checkout_items(db: Session, items: list[OrderItemCreate]) -> None:
@@ -256,6 +250,9 @@ def _validate_checkout_items(db: Session, items: list[OrderItemCreate]) -> None:
 
 
 def _decrement_order_inventory(db: Session, order: Order) -> None:
+    from app.controllers.vendor_controller import broadcast_catalog_product_change
+    from app.services.inventory_service import apply_inventory_side_effects
+
     product_ids = [item.product_id for item in order.items if item.product_id]
     if not product_ids:
         return
@@ -281,7 +278,15 @@ def _decrement_order_inventory(db: Session, order: Order) -> None:
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Not enough stock left for {item.title}.",
             )
+        previous_stock = int(product.stock)
         product.stock -= item.quantity
+        visibility_changed = apply_inventory_side_effects(
+            db,
+            product,
+            previous_stock=previous_stock,
+        )
+        if visibility_changed:
+            broadcast_catalog_product_change(product)
 
 
 def _load_product_snapshot_map(db: Session, payload: OrderCreate) -> dict[str, dict[str, object | None]]:
@@ -379,6 +384,7 @@ def prepare_order_for_checkout(
         delivery_method, validated_shipping = validate_delivery_checkout(
             subtotal=server_subtotal,
             region=payload.address_region,
+            city=payload.address_city,
             delivery_method=payload.delivery_method,
             shipping_amount=payload.shipping_amount,
             config=delivery_config,
@@ -525,6 +531,51 @@ def activate_order_after_payment(
         select(VoucherRedemption.id).where(VoucherRedemption.order_id == order.id)
     )
     if order.voucher_id and not existing_redemption:
+        from app.models import Voucher
+        from app.services.promotion_service import voucher_status as compute_voucher_status
+
+        # Lock the voucher row to prevent concurrent over-redemption races.
+        locked_voucher = db.scalar(
+            select(Voucher).where(Voucher.id == order.voucher_id).with_for_update()
+        )
+        if locked_voucher is not None:
+            overall_count = int(
+                db.scalar(
+                    select(func.count(VoucherRedemption.id)).where(
+                        VoucherRedemption.voucher_id == locked_voucher.id
+                    )
+                )
+                or 0
+            )
+            user_count = int(
+                db.scalar(
+                    select(func.count(VoucherRedemption.id)).where(
+                        VoucherRedemption.voucher_id == locked_voucher.id,
+                        VoucherRedemption.user_id == user.id,
+                    )
+                )
+                or 0
+            )
+            now = datetime.now(timezone.utc)
+            current_status = compute_voucher_status(
+                locked_voucher,
+                now=now,
+                overall_count=overall_count,
+            )
+            if current_status in {"expired", "limit_reached", "disabled", "pending_review"}:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="This voucher is no longer available for redemption.",
+                )
+            if (
+                locked_voucher.per_user_limit is not None
+                and user_count >= locked_voucher.per_user_limit
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="This voucher has already been used.",
+                )
+
         db.add(
             VoucherRedemption(
                 voucher_id=order.voucher_id,
@@ -730,7 +781,7 @@ def create_return_request(
             detail="Your return request was created, but we couldn't reload it.",
         )
 
-    create_notification_event(
+    return_event = create_notification_event(
         db,
         user,
         kind="return_requested",
@@ -743,6 +794,13 @@ def create_return_request(
         route_target_id=str(order.id),
         image_key=order_item.image_key,
         image_url=order_item.image_url,
+    )
+    dispatch_customer_return_push(
+        user=user,
+        title="Return request submitted",
+        body=f"We've received your {payload.request_type} request for {order_item.title}.",
+        order_id=order.id,
+        notification_event=return_event,
     )
     db.commit()
     db.refresh(refreshed_request)

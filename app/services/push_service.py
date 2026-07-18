@@ -4,12 +4,114 @@ import logging
 
 import requests
 
-from app.models import NotificationEvent, User
+from app.models import NotificationEvent, Order, User
 
 logger = logging.getLogger(__name__)
 
 EXPO_PUSH_ENDPOINT = "https://exp.host/--/api/v2/push/send"
 VENDOR_ORDER_SOUND = "vendor_order.wav"
+
+
+def customer_order_status_push_copy(
+    *,
+    order_number: str,
+    vendor_status: str,
+    tracking_eta: str | None = None,
+) -> tuple[str, str]:
+    copies = {
+        "pending": (
+            "Order received",
+            f"Order #{order_number} is waiting for the store to confirm.",
+        ),
+        "confirmed": (
+            "Order confirmed",
+            f"Order #{order_number} was confirmed by the store.",
+        ),
+        "processing": (
+            "Order being prepared",
+            f"Order #{order_number} is being prepared.",
+        ),
+        "ready": (
+            "Order ready",
+            f"Order #{order_number} is ready.",
+        ),
+        "out_for_delivery": (
+            "Out for delivery",
+            f"Order #{order_number} is on the way to you.",
+        ),
+        "delivered": (
+            "Order delivered",
+            f"Order #{order_number} has been delivered.",
+        ),
+        "cancelled": (
+            "Order cancelled",
+            f"Order #{order_number} was cancelled.",
+        ),
+    }
+    title, body = copies.get(
+        vendor_status,
+        (
+            "Order update",
+            f"Order #{order_number} is now {vendor_status.replace('_', ' ')}.",
+        ),
+    )
+    if tracking_eta and vendor_status not in {"delivered", "cancelled"}:
+        body = f"{body.rstrip('.')} · {tracking_eta}"
+    return title, body
+
+
+def dispatch_customer_order_push(
+    *,
+    user: User,
+    title: str,
+    body: str,
+    order: Order,
+    notification_event: NotificationEvent | None = None,
+) -> None:
+    try:
+        send_expo_push_notification(
+            user=user,
+            title=title,
+            body=body,
+            data=build_push_data(
+                push_type="order_update",
+                route_type="order",
+                route_target_id=str(order.id),
+                notification_event=notification_event,
+                extra={
+                    "orderId": str(order.id),
+                    "status": order.status,
+                    "vendorStatus": order.vendor_status,
+                },
+            ),
+        )
+    except Exception:
+        logger.exception("Failed to send order push for %s", order.id)
+
+
+def dispatch_customer_return_push(
+    *,
+    user: User,
+    title: str,
+    body: str,
+    order_id,
+    notification_event: NotificationEvent | None = None,
+) -> None:
+    try:
+        send_expo_push_notification(
+            user=user,
+            title=title,
+            body=body,
+            data=build_push_data(
+                push_type="return_update",
+                route_type="order",
+                route_target_id=str(order_id),
+                notification_event=notification_event,
+                extra={"orderId": str(order_id)},
+            ),
+        )
+    except Exception:
+        logger.exception("Failed to send return push for order %s", order_id)
 
 
 def build_push_data(
@@ -93,7 +195,11 @@ def send_expo_push_notification(
 
 
 def can_receive_customer_chat_alerts(user: User) -> bool:
-    return bool(user.expo_push_token and user.allow_notifications)
+    return bool(
+        user.expo_push_token
+        and user.allow_notifications
+        and user.store_notifications
+    )
 
 
 def send_vendor_order_push(

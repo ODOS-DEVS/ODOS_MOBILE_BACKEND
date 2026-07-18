@@ -94,6 +94,31 @@ class PromoBannerRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class MerchandisingCampaignRead(BaseModel):
+    id: uuid.UUID
+    slug: str
+    title: str
+    subtitle: str | None = None
+    description: str | None = None
+    banner_image_url: str | None = None
+    thumbnail_image_url: str | None = None
+    icon_key: str | None = None
+    theme_color: str | None = None
+    is_featured: bool = False
+    starts_at: datetime | None = None
+    ends_at: datetime | None = None
+    display_priority: int = 0
+    product_count: int = 0
+    seconds_remaining: int = 0
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class MerchandisingCampaignDetailRead(MerchandisingCampaignRead):
+    products: list[ProductRead] = []
+    has_more: bool = False
+
+
 class DealsHubSectionRead(BaseModel):
     key: str
     title: str
@@ -101,6 +126,7 @@ class DealsHubSectionRead(BaseModel):
     kind: str
     count: int | None = None
     badge: str | None = None
+    slug: str | None = None
 
 
 class DealsHubRead(BaseModel):
@@ -108,6 +134,7 @@ class DealsHubRead(BaseModel):
     flash_events: list[FlashSaleEventRead]
     promotions: list["StoreVoucherRead"]
     deal_products: list[ProductRead]
+    campaigns: list[MerchandisingCampaignRead] = []
     sections: list[DealsHubSectionRead]
     campaign_tags: list[dict[str, str]]
 

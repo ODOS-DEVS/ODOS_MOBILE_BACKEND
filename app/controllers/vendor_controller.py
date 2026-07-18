@@ -10,6 +10,10 @@ from sqlalchemy.orm import Session, selectinload
 from app.core.admin_pagination import paginate_scalars
 from app.schemas.pagination import AdminPageRead
 from app.controllers.notification_controller import create_notification_event
+from app.services.push_service import (
+    customer_order_status_push_copy,
+    dispatch_customer_order_push,
+)
 from app.core.product_taxonomy import resolve_product_taxonomy
 from app.controllers.voucher_controller import (
     build_voucher_reward_text,
@@ -56,6 +60,7 @@ from app.schemas.vendor import (
     VendorStoreRead,
     VendorVoucherGiftPayload,
     VendorVoucherRead,
+    VendorVoucherRedemptionRead,
     VendorVoucherUpsert,
 )
 from app.schemas.order import OrderRead
@@ -954,6 +959,7 @@ def delete_vendor_product(db: Session, user: User, product_id: str) -> None:
 
 
 VENDOR_SELF_SERVICE_PRODUCT_STATUSES = {"active", "hidden"}
+VENDOR_RELISTABLE_STATUSES = {"hidden", "out_of_stock"}
 
 
 def _publish_vendor_product_change(db: Session, user: User, product: Product) -> VendorProductRead:
@@ -1006,18 +1012,23 @@ def update_vendor_product_status(
         )
 
     if normalized_status == "hidden":
-        if product.status not in {"active", "hidden"}:
+        if product.status not in {"active", "hidden", "out_of_stock"}:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Only live products can be hidden.",
+                detail="Only live or out-of-stock products can be hidden.",
             )
         product.status = "hidden"
         product.is_active = False
     else:
-        if product.status != "hidden":
+        if product.status not in VENDOR_RELISTABLE_STATUSES:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Only hidden products can be relisted.",
+                detail="Only hidden or out-of-stock products can be republished.",
+            )
+        if product.stock <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Increase stock before republishing this product.",
             )
         product.status = "active"
         product.is_active = True
@@ -1033,6 +1044,8 @@ def patch_vendor_product_stock(
     product_id: str,
     stock: int,
 ) -> VendorProductRead:
+    from app.services.inventory_service import apply_inventory_side_effects
+
     require_vendor_access(user)
     product = db.scalar(
         select(Product).where(
@@ -1052,7 +1065,10 @@ def patch_vendor_product_stock(
             detail="Suspended products can't be updated from the app.",
         )
 
+    previous_stock = int(product.stock or 0)
     product.stock = stock
+    apply_inventory_side_effects(db, product, previous_stock=previous_stock)
+    # Restock alone does not republish — vendor must explicitly set status active.
     db.commit()
     db.refresh(product)
     return _publish_vendor_product_change(db, user, product)
@@ -1250,6 +1266,7 @@ def _serialize_vendor_voucher(
         title=voucher.title,
         description=voucher.description,
         issuer_name=voucher.issuer_name,
+        owner_type=getattr(voucher, "owner_type", "vendor") or "vendor",
         availability=voucher.availability,
         reward_text=voucher.reward_text,
         discount_type=voucher.discount_type,
@@ -1272,6 +1289,8 @@ def _serialize_vendor_voucher(
         approval_status=getattr(voucher, "approval_status", "approved"),
         campaign_tag=getattr(voucher, "campaign_tag", None),
         review_notes=getattr(voucher, "review_notes", None),
+        product_ids=getattr(voucher, "product_ids", None),
+        excluded_product_ids=getattr(voucher, "excluded_product_ids", None),
         created_at=voucher.created_at,
     )
 
@@ -1297,6 +1316,7 @@ def _get_vendor_voucher(db: Session, user: User, voucher_id: str) -> Voucher:
             Voucher.id == normalized_id,
             Voucher.scope == "store",
             Voucher.store_id == store.id,
+            Voucher.owner_type == "vendor",
         )
     )
     if not voucher:
@@ -1394,19 +1414,30 @@ def update_vendor_order_status(
         order.cancelled_at = None
         order.cancellation_reason = None
 
-    create_notification_event(
+    push_title, push_body = customer_order_status_push_copy(
+        order_number=order.order_number,
+        vendor_status=next_status,
+        tracking_eta=order.tracking_eta,
+    )
+    status_event = create_notification_event(
         db,
         order.user,
         kind="vendor_order_update",
-        title="Order update from your store",
-        body=f"Order #{order.order_number} is now {next_status.replace('_', ' ')}."
-        + (f" {order.tracking_eta}" if order.tracking_eta else "."),
+        title=push_title,
+        body=push_body,
         icon="bag-handle-outline",
         accent="neutral" if next_status != "cancelled" else "warning",
         action_label="Track order",
         route_type="order",
         route_target_id=str(order.id),
         image_key=matching_items[0].image_key if matching_items else None,
+    )
+    dispatch_customer_order_push(
+        user=order.user,
+        title=push_title,
+        body=push_body,
+        order=order,
+        notification_event=status_event,
     )
     db.commit()
     db.refresh(order)
@@ -1454,6 +1485,7 @@ def list_vendor_vouchers(db: Session, user: User) -> list[VendorVoucherRead]:
             .where(
                 Voucher.scope == "store",
                 Voucher.store_id == store.id,
+                Voucher.owner_type == "vendor",
             )
             .order_by(Voucher.created_at.desc(), Voucher.title.asc())
         ).all()
@@ -1495,7 +1527,21 @@ def create_vendor_voucher(
         usage_limit=payload.usage_limit,
         per_user_limit=payload.per_user_limit,
         store_id=store.id,
+        owner_type="vendor",
+        product_ids=payload.product_ids,
     )
+    if payload.product_ids:
+        owned_count = db.scalar(
+            select(func.count(Product.id)).where(
+                Product.id.in_(payload.product_ids),
+                Product.store_id == store.id,
+            )
+        )
+        if int(owned_count or 0) != len(payload.product_ids):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Product targeting can only include products from your store.",
+            )
     discount_value = 0 if payload.discount_type == "free_shipping" else round(payload.discount_value, 2)
     voucher = Voucher(
         code=payload.code,
@@ -1503,6 +1549,7 @@ def create_vendor_voucher(
         description=payload.description,
         issuer_name=payload.issuer_name or store.title,
         scope="store",
+        owner_type="vendor",
         availability=payload.availability,
         store_id=store.id,
         reward_text=build_voucher_reward_text(payload.discount_type, discount_value),
@@ -1517,6 +1564,8 @@ def create_vendor_voucher(
         created_by_user_id=user.id,
         starts_at=payload.starts_at,
         ends_at=payload.ends_at,
+        product_ids=payload.product_ids,
+        excluded_product_ids=payload.excluded_product_ids,
     )
     db.add(voucher)
     try:
@@ -1555,13 +1604,46 @@ def update_vendor_voucher(
         usage_limit=payload.usage_limit,
         per_user_limit=payload.per_user_limit,
         store_id=store.id,
+        owner_type="vendor",
+        product_ids=payload.product_ids,
     )
+    if payload.product_ids:
+        owned_count = db.scalar(
+            select(func.count(Product.id)).where(
+                Product.id.in_(payload.product_ids),
+                Product.store_id == store.id,
+            )
+        )
+        if int(owned_count or 0) != len(payload.product_ids):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Product targeting can only include products from your store.",
+            )
     voucher = _get_vendor_voucher(db, user, voucher_id)
     discount_value = 0 if payload.discount_type == "free_shipping" else round(payload.discount_value, 2)
+    was_approved = getattr(voucher, "approval_status", "approved") == "approved"
+    material_fields_changed = (
+        voucher.discount_type != payload.discount_type
+        or float(voucher.discount_value) != float(discount_value)
+        or round(float(voucher.min_subtotal), 2) != round(payload.min_subtotal, 2)
+        or (
+            (None if voucher.max_discount is None else round(float(voucher.max_discount), 2))
+            != (None if payload.max_discount is None else round(payload.max_discount, 2))
+        )
+        or voucher.usage_limit != payload.usage_limit
+        or voucher.per_user_limit != payload.per_user_limit
+        or voucher.starts_at != payload.starts_at
+        or voucher.ends_at != payload.ends_at
+        or list(getattr(voucher, "product_ids", None) or []) != list(payload.product_ids or [])
+        or list(getattr(voucher, "excluded_product_ids", None) or [])
+        != list(payload.excluded_product_ids or [])
+    )
+
     voucher.code = payload.code
     voucher.title = payload.title
     voucher.description = payload.description
     voucher.issuer_name = payload.issuer_name or store.title
+    voucher.owner_type = "vendor"
     voucher.availability = payload.availability
     voucher.reward_text = build_voucher_reward_text(payload.discount_type, discount_value)
     voucher.discount_type = payload.discount_type
@@ -1573,6 +1655,15 @@ def update_vendor_voucher(
     voucher.is_active = payload.is_active
     voucher.starts_at = payload.starts_at
     voucher.ends_at = payload.ends_at
+    voucher.product_ids = payload.product_ids
+    voucher.excluded_product_ids = payload.excluded_product_ids
+
+    # Material economic/eligibility changes require admin re-approval.
+    if was_approved and material_fields_changed:
+        voucher.approval_status = "pending"
+        voucher.is_active = False
+        voucher.review_notes = "Updated by vendor — awaiting re-approval."
+        voucher.reviewed_by_user_id = None
 
     try:
         db.commit()
@@ -1599,6 +1690,36 @@ def archive_vendor_voucher(db: Session, user: User, voucher_id: str) -> None:
     voucher = _get_vendor_voucher(db, user, voucher_id)
     voucher.is_active = False
     db.commit()
+
+
+def list_vendor_voucher_redemptions(
+    db: Session,
+    user: User,
+    voucher_id: str,
+    *,
+    limit: int = 50,
+) -> list[VendorVoucherRedemptionRead]:
+    require_vendor_access(user)
+    voucher = _get_vendor_voucher(db, user, voucher_id)
+    rows = list(
+        db.scalars(
+            select(VoucherRedemption)
+            .where(VoucherRedemption.voucher_id == voucher.id)
+            .order_by(VoucherRedemption.created_at.desc())
+            .limit(max(1, min(limit, 200)))
+        ).all()
+    )
+    return [
+        VendorVoucherRedemptionRead(
+            id=row.id,
+            order_id=row.order_id,
+            voucher_code=row.voucher_code,
+            discount_amount=round(float(row.discount_amount), 2),
+            user_id=row.user_id,
+            created_at=row.created_at,
+        )
+        for row in rows
+    ]
 
 
 def gift_vendor_voucher(

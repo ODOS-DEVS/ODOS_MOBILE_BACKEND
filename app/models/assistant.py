@@ -29,6 +29,7 @@ class AssistantConversation(Base):
         index=True,
     )
     screen: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    context_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

@@ -20,7 +20,13 @@ from app.schemas.assistant import (
     AssistantProductRead,
     AssistantStoreRead,
 )
-from app.services.assistant_catalog_search import CatalogSearchResult, build_catalog_search_context
+from app.services.assistant_catalog_search import (
+    CatalogSearchResult,
+    build_catalog_search_context,
+    is_flash_sale_intent,
+    is_product_recommendation_intent,
+    is_store_fact_intent,
+)
 from app.services.assistant_tools import (
     MAX_TOOL_LOOP,
     execute_assistant_tool,
@@ -31,6 +37,10 @@ from app.services.assistant_memory import (
     get_or_create_conversation,
     history_from_conversation,
 )
+from app.services.assistant_reference import (
+    format_reference_context_block,
+    resolve_store_reference,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -39,9 +49,11 @@ You are ODOS Assistant — a warm, clear, trusted in-app guide for ODOS, a Ghana
 
 Personality:
 - Professional, warm, and clear — like a knowledgeable ODOS support specialist in Accra.
-- Lead with the direct answer in the first sentence, then one helpful next step if needed.
-- Use GH₵ for money (e.g. GH₵120.00). Keep most replies to 2–4 short sentences unless the user asks for detail.
-- Never invent order numbers, voucher codes, balances, store names, ETAs, or policies. Use ONLY the user context below.
+- Answer ONLY what was asked. Lead with the precise answer in the first sentence.
+- Keep replies short: usually 1–3 sentences. Do not pad with unrelated product picks, store lists, or upsells.
+- If the user asks for a count, fact, or how-to, give that answer first. Do not recommend products unless they asked to shop or find items.
+- Use GH₵ for money (e.g. GH₵120.00).
+- Never invent order numbers, voucher codes, balances, store counts, store names, ETAs, or policies. Use ONLY live context/tools below.
 - Use the exact vendor store name from "Vendor dashboard (live)" context — never invent names like "Avantex" or generic placeholders.
 - If the user is a guest, guide them to sign in before personal order or voucher help.
 
@@ -66,9 +78,17 @@ You have live tools — call them when you need fresh data instead of guessing:
 
 After using tools, respond in the required JSON format below.
 
-When the user asks to find products, stores, deals, or flash sales, use tools or catalog search results below.
-Recommend 1–3 specific items by name and price. Do not invent products not listed in catalog search results.
-Product cards may appear below your message in the app — keep the reply concise; do not repeat long product lists.
+When the user asks to find products, deals, or flash sales, use tools or catalog search results below.
+Recommend 1–3 specific items by name and price ONLY when they asked for recommendations or product discovery.
+Do not invent products, store counts, or store names not present in live context/tools.
+For questions like "how many stores are on ODOS", use marketplace stats / tools and answer with the number — do not attach product suggestions.
+Product cards may appear below your message only for shopping replies — keep the reply concise; do not repeat long product lists.
+
+Focused store reference (critical when provided):
+- If a FOCUSED SCREEN REFERENCE names a store, treat "this store", "here", and general product/deal questions as about that store.
+- Recommend products ONLY from that store unless the user clearly asks to compare or browse other stores.
+- Mention the store by its real name from the reference. Offer store chat / store deep links when helpful.
+- Store page deep link: route "/screens/stores/[id]", params {"id": "<store_id>", "title": "<store_name>"}
 
 Deep links — use suggested_actions with optional params for one-tap navigation:
 - Product detail: route "/screens/[id]", params {"id": "<product_id>"}
@@ -80,6 +100,7 @@ Deep links — use suggested_actions with optional params for one-tap navigation
 - Returns: route "/screens/profileScreens/Account/Returns"
 - Deals: route "/screens/deals"
 - Search: route "/screens/search"
+- Store page: route "/screens/stores/[id]", params {"id": "<store_id>", "title": "<store_name>"}
 - Store chat: route "/screens/productDetails/chat/[vendorId]", params {"vendorId": "<uuid>", "vendorName": "Store name"}
 - Human support: route "/screens/support/chat", params {"subject": "short summary"}
 - Vendor dashboard: route "/vendor/dashboard"
@@ -285,6 +306,17 @@ def _fallback_reply(
     catalog: CatalogSearchResult | None = None,
 ) -> AssistantChatResponse:
     text = payload.message.strip().lower()
+
+    if is_store_fact_intent(payload.message) and catalog and catalog.context_text:
+        match = re.search(r"Active stores on ODOS:\s*(\d+)", catalog.context_text)
+        if match:
+            count = match.group(1)
+            return _build_chat_response(
+                reply=f"There are currently {count} active stores on ODOS.",
+                actions=[
+                    AssistantActionRead(label="Browse stores", route="/screens/search"),
+                ],
+            )
 
     if catalog and (catalog.products or catalog.stores):
         if catalog.products:
@@ -622,6 +654,8 @@ async def _call_gemini_with_tools(
     model: str,
     messages: list[dict[str, str]],
     is_vendor: bool,
+    store_id: str | None = None,
+    store_name: str | None = None,
 ) -> dict[str, Any]:
     api_key = settings.gemini_api_key.strip()
     if not api_key:
@@ -672,7 +706,14 @@ async def _call_gemini_with_tools(
                     for call in function_calls:
                         name = str(call.get("name", "")).strip()
                         args = call.get("args") if isinstance(call.get("args"), dict) else {}
-                        result = execute_assistant_tool(db, user, name=name, args=args)
+                        result = execute_assistant_tool(
+                            db,
+                            user,
+                            name=name,
+                            args=args,
+                            store_id=store_id,
+                            store_name=store_name,
+                        )
                         response_parts.append(
                             {
                                 "functionResponse": {
@@ -875,9 +916,13 @@ async def _call_llm(
     history: list[AssistantMessageInput],
     message: str,
     is_vendor: bool = False,
+    reference_context: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     provider = settings.assistant_provider_normalized
     model = settings.assistant_model_name
+    reference_block = format_reference_context_block(reference_context)
+    store_id = reference_context.get("store_id") if reference_context else None
+    store_name = reference_context.get("store_name") if reference_context else None
 
     messages: list[dict[str, str]] = [
         {"role": "system", "content": ODOS_APP_GUIDE},
@@ -889,6 +934,8 @@ async def _call_llm(
             ),
         },
     ]
+    if reference_block:
+        messages.append({"role": "system", "content": reference_block})
     if catalog_context.strip():
         messages.append(
             {
@@ -910,6 +957,8 @@ async def _call_llm(
                 model=model,
                 messages=messages,
                 is_vendor=is_vendor,
+                store_id=store_id,
+                store_name=store_name,
             )
         except httpx.HTTPStatusError as exc:
             status_code = exc.response.status_code if exc.response is not None else 0
@@ -1037,7 +1086,13 @@ async def chat_with_assistant(
     payload: AssistantChatRequest,
 ) -> AssistantChatResponse:
     user_context, snapshot = build_assistant_user_context(db, user)
-    catalog = build_catalog_search_context(db, payload.message)
+    reference_context = resolve_store_reference(db, payload.context)
+    catalog = build_catalog_search_context(
+        db,
+        payload.message,
+        store_id=reference_context.get("store_id") if reference_context else None,
+        store_name=reference_context.get("store_name") if reference_context else None,
+    )
 
     conversation = None
     conversation_id: str | None = None
@@ -1047,8 +1102,18 @@ async def chat_with_assistant(
             user,
             conversation_id=payload.conversation_id,
             screen=payload.screen,
+            context=reference_context or payload.context,
         )
         conversation_id = str(conversation.id)
+        if conversation.context_json and not reference_context:
+            reference_context = resolve_store_reference(db, conversation.context_json)
+            if reference_context:
+                catalog = build_catalog_search_context(
+                    db,
+                    payload.message,
+                    store_id=reference_context.get("store_id"),
+                    store_name=reference_context.get("store_name"),
+                )
 
     if conversation is not None:
         history_payload = history_from_conversation(db, conversation.id, limit=10)
@@ -1095,6 +1160,7 @@ async def chat_with_assistant(
             history=history,
             message=payload.message,
             is_vendor=bool(snapshot and snapshot.is_vendor),
+            reference_context=reference_context,
         )
     except httpx.HTTPStatusError as exc:
         detail = ""
@@ -1128,13 +1194,24 @@ async def chat_with_assistant(
     if not reply:
         return _persist_assistant_response(_fallback_reply(payload, user, snapshot, catalog))
 
+    attach_products = (
+        not is_store_fact_intent(payload.message)
+        and (
+            is_product_recommendation_intent(
+                payload.message,
+                store_scoped=bool(reference_context and reference_context.get("store_id")),
+            )
+            or is_flash_sale_intent(payload.message)
+        )
+    )
+
     return _persist_assistant_response(
         _build_chat_response(
             reply=reply,
             actions=actions,
             escalated=bool(parsed.get("escalated_to_support")),
-            products=catalog.products,
-            stores=catalog.stores,
+            products=catalog.products if attach_products else [],
+            stores=[] if is_store_fact_intent(payload.message) else catalog.stores,
             conversation_id=conversation_id,
         )
     )

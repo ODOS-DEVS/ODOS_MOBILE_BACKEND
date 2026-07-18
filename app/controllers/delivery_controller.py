@@ -7,6 +7,7 @@ def get_delivery_quote(payload: DeliveryQuoteRequest, db) -> DeliveryQuoteRead:
     quote = quote_delivery(
         subtotal=payload.subtotal,
         region=payload.region,
+        city=payload.city,
         selected_method=payload.selected_method,
         config=config,
     )

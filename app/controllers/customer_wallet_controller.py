@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.controllers.notification_controller import create_notification_event
 from app.controllers.order_controller import (
     _broadcast_order_realtime,
+    _dispatch_order_push,
     _dispatch_vendor_new_order_alerts,
     activate_order_after_payment,
     prepare_order_for_checkout,
@@ -212,7 +213,7 @@ def credit_customer_wallet_for_return(
         )
     )
 
-    create_notification_event(
+    refund_event = create_notification_event(
         db,
         user,
         kind="wallet_refund",
@@ -224,6 +225,25 @@ def credit_customer_wallet_for_return(
         route_type="customer_wallet",
         route_target_id=str(wallet.id),
     )
+    try:
+        send_expo_push_notification(
+            user=user,
+            title="Refund added to your wallet",
+            body=f"GHS {refund_amount:.2f} is now in your ODOS wallet.",
+            data=build_push_data(
+                push_type="wallet_refund",
+                route_type="customer_wallet",
+                route_target_id=str(wallet.id),
+                notification_event=refund_event,
+                extra={
+                    "amount": refund_amount,
+                    "currency": wallet.currency,
+                    "orderId": str(order.id),
+                },
+            ),
+        )
+    except Exception:
+        logger.exception("Failed to send wallet refund push for user %s", user.id)
     return wallet
 
 
@@ -529,7 +549,7 @@ def create_wallet_checkout(
     wallet.available_balance = round_money(wallet.available_balance - order_total)
     wallet.lifetime_spend = round_money(wallet.lifetime_spend + order_total)
     wallet_balance_after = round_money(wallet.available_balance)
-    activate_order_after_payment(
+    placed_event = activate_order_after_payment(
         db,
         current_user,
         order,
@@ -548,6 +568,15 @@ def create_wallet_checkout(
             amount=-order_total,
             balance_after=wallet.available_balance,
         )
+    )
+    db.commit()
+    db.refresh(order)
+    _dispatch_order_push(
+        user=current_user,
+        title="Order placed successfully",
+        body=f"Order #{order.order_number} is now being prepared.",
+        order=order,
+        notification_event=placed_event,
     )
     db.commit()
     db.refresh(order)

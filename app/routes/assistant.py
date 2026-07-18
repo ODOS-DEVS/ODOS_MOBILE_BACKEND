@@ -21,6 +21,7 @@ from app.schemas.assistant import (
     AssistantChatResponse,
     AssistantFeedbackRequest,
     AssistantFeedbackResponse,
+    AssistantReferenceContext,
     AssistantSessionResponse,
     AssistantStatusResponse,
 )
@@ -39,12 +40,26 @@ def assistant_session(
     current_user: Annotated[User | None, Depends(get_optional_current_user)] = None,
     conversation_id: uuid.UUID | None = None,
     screen: str | None = None,
+    store_id: str | None = None,
+    store_name: str | None = None,
+    market_title: str | None = None,
+    vendor_user_id: str | None = None,
 ):
+    context = None
+    if store_id:
+        context = AssistantReferenceContext(
+            type="store",
+            store_id=store_id,
+            store_name=store_name,
+            market_title=market_title,
+            vendor_user_id=vendor_user_id,
+        )
     return get_assistant_session(
         db,
         current_user,
         conversation_id=conversation_id,
         screen=screen,
+        context=context,
     )
 
 

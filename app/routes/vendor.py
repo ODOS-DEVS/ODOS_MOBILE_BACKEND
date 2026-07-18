@@ -1,12 +1,20 @@
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, UploadFile, status
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.controllers.campaign_controller import (
+    create_vendor_campaign_opt_in,
+    list_vendor_open_campaigns,
+)
 from app.controllers.flash_sale_nominations_controller import (
     create_vendor_flash_sale_nomination,
     list_vendor_flash_sale_nominations,
 )
+from app.schemas.admin import AdminMerchandisingCampaignOptInRead
+from app.schemas.catalog import MerchandisingCampaignRead
 from app.controllers.vendor_controller import (
     archive_vendor_voucher,
     create_vendor_voucher,
@@ -24,6 +32,7 @@ from app.controllers.vendor_controller import (
     list_vendor_orders,
     list_vendor_products,
     list_vendor_return_requests,
+    list_vendor_voucher_redemptions,
     list_vendor_vouchers,
     patch_vendor_product_stock,
     patch_vendor_return_request,
@@ -61,6 +70,7 @@ from app.schemas.vendor import (
     VendorStoreRead,
     VendorVoucherGiftPayload,
     VendorVoucherRead,
+    VendorVoucherRedemptionRead,
     VendorVoucherUpsert,
     VendorFlashSaleNominationCreate,
     VendorFlashSaleNominationRead,
@@ -464,6 +474,18 @@ def delete_vendor_voucher(
     return MessageResponse(message="Store promotion archived successfully.")
 
 
+@router.get(
+    "/vouchers/{voucher_id}/redemptions",
+    response_model=list[VendorVoucherRedemptionRead],
+)
+def get_vendor_voucher_redemptions(
+    voucher_id: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return list_vendor_voucher_redemptions(db, current_user, voucher_id)
+
+
 @router.get("/flash-sale-nominations", response_model=list[VendorFlashSaleNominationRead])
 def get_vendor_flash_sale_nominations(
     current_user: Annotated[User, Depends(get_current_user)],
@@ -483,6 +505,37 @@ def post_vendor_flash_sale_nomination(
     db: Session = Depends(get_db),
 ):
     return create_vendor_flash_sale_nomination(db, current_user, payload)
+
+
+class VendorCampaignOptInCreate(BaseModel):
+    campaign_id: UUID
+    product_id: str = Field(min_length=1, max_length=100)
+
+
+@router.get("/merchandising-campaigns/open", response_model=list[MerchandisingCampaignRead])
+def get_vendor_open_merchandising_campaigns(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return list_vendor_open_campaigns(db, current_user)
+
+
+@router.post(
+    "/merchandising-campaign-opt-ins",
+    response_model=AdminMerchandisingCampaignOptInRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def post_vendor_merchandising_campaign_opt_in(
+    payload: VendorCampaignOptInCreate,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return create_vendor_campaign_opt_in(
+        db,
+        current_user,
+        campaign_id=payload.campaign_id,
+        product_id=payload.product_id,
+    )
 
 
 @router.patch("/orders/{order_id}/status", response_model=VendorOrderRead)

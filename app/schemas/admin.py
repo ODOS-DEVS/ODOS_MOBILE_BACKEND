@@ -521,9 +521,11 @@ class AdminVoucherRead(BaseModel):
     description: str | None = None
     issuer_name: str | None = None
     scope: str
+    owner_type: str = "platform"
     availability: str
     store_id: str | None = None
     store_name: str | None = None
+    eligible_store_ids: list[str] | None = None
     reward_text: str
     discount_type: str
     discount_value: float
@@ -554,6 +556,7 @@ class AdminVoucherRead(BaseModel):
     first_order_only: bool = False
     new_user_only: bool = False
     category_slugs: list[str] | None = None
+    excluded_category_slugs: list[str] | None = None
     product_ids: list[str] | None = None
     excluded_product_ids: list[str] | None = None
 
@@ -575,8 +578,10 @@ class AdminVoucherUpsert(BaseModel):
     description: str | None = Field(default=None, max_length=255)
     issuer_name: str | None = Field(default=None, max_length=120)
     scope: str = Field(default="odos", min_length=1, max_length=20)
+    owner_type: str = Field(default="platform", min_length=1, max_length=20)
     availability: str = Field(default="auto", min_length=1, max_length=20)
     store_id: str | None = Field(default=None, max_length=50)
+    eligible_store_ids: list[str] | None = None
     discount_type: str = Field(min_length=1, max_length=20)
     discount_value: float = Field(ge=0)
     min_subtotal: float = Field(default=0, ge=0)
@@ -598,6 +603,7 @@ class AdminVoucherUpsert(BaseModel):
     first_order_only: bool = False
     new_user_only: bool = False
     category_slugs: list[str] | None = None
+    excluded_category_slugs: list[str] | None = None
     product_ids: list[str] | None = None
     excluded_product_ids: list[str] | None = None
 
@@ -614,7 +620,7 @@ class AdminVoucherUpsert(BaseModel):
         cleaned = value.strip()
         return cleaned or None
 
-    @field_validator("discount_type", "scope", "availability", mode="before")
+    @field_validator("discount_type", "scope", "availability", "owner_type", mode="before")
     @classmethod
     def normalize_discount_type(cls, value: str) -> str:
         return value.strip().lower()
@@ -623,6 +629,21 @@ class AdminVoucherUpsert(BaseModel):
     @classmethod
     def normalize_promotion_type(cls, value: str) -> str:
         return value.strip().lower()
+
+    @field_validator(
+        "eligible_store_ids",
+        "category_slugs",
+        "excluded_category_slugs",
+        "product_ids",
+        "excluded_product_ids",
+        mode="before",
+    )
+    @classmethod
+    def normalize_string_lists(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        cleaned = [str(item).strip() for item in value if str(item).strip()]
+        return cleaned or None
 
 
 class AdminVoucherBulkGenerate(BaseModel):
@@ -994,3 +1015,111 @@ class AdminFlashSaleEventUpsert(BaseModel):
         if isinstance(value, str):
             return [item.strip() for item in value.split(",") if item.strip()]
         return [str(item).strip() for item in value if str(item).strip()]
+
+
+class AdminMerchandisingCampaignRead(BaseModel):
+    id: uuid.UUID
+    slug: str
+    title: str
+    subtitle: str | None = None
+    description: str | None = None
+    banner_image_url: str | None = None
+    thumbnail_image_url: str | None = None
+    icon_key: str | None = None
+    theme_color: str | None = None
+    status: str
+    is_active: bool
+    is_featured: bool
+    visibility: str
+    starts_at: datetime | None = None
+    ends_at: datetime | None = None
+    display_priority: int
+    max_products: int | None = None
+    product_sort: str
+    hide_out_of_stock: bool
+    include_entire_marketplace: bool
+    allow_vendor_opt_in: bool
+    product_ids: list[str] = Field(default_factory=list)
+    pinned_product_ids: list[str] = Field(default_factory=list)
+    category_slugs: list[str] = Field(default_factory=list)
+    store_ids: list[str] = Field(default_factory=list)
+    product_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+
+class AdminMerchandisingCampaignUpsert(BaseModel):
+    slug: str = Field(min_length=2, max_length=80)
+    title: str = Field(min_length=2, max_length=120)
+    subtitle: str | None = Field(default=None, max_length=255)
+    description: str | None = Field(default=None, max_length=2000)
+    banner_image_url: str | None = Field(default=None, max_length=500)
+    thumbnail_image_url: str | None = Field(default=None, max_length=500)
+    icon_key: str | None = Field(default=None, max_length=80)
+    theme_color: str | None = Field(default=None, max_length=20)
+    status: str = Field(default="draft", min_length=1, max_length=30)
+    is_active: bool = True
+    is_featured: bool = False
+    visibility: str = Field(default="public", min_length=1, max_length=20)
+    starts_at: datetime | None = None
+    ends_at: datetime | None = None
+    display_priority: int | None = Field(default=0, ge=0, le=9999)
+    max_products: int | None = Field(default=None, ge=1, le=5000)
+    product_sort: str = Field(default="manual", min_length=1, max_length=30)
+    hide_out_of_stock: bool = True
+    include_entire_marketplace: bool = False
+    allow_vendor_opt_in: bool = False
+    product_ids: list[str] = Field(default_factory=list)
+    pinned_product_ids: list[str] = Field(default_factory=list)
+    category_slugs: list[str] = Field(default_factory=list)
+    store_ids: list[str] = Field(default_factory=list)
+
+    @field_validator(
+        "slug",
+        "title",
+        "subtitle",
+        "description",
+        "banner_image_url",
+        "thumbnail_image_url",
+        "icon_key",
+        "theme_color",
+        "status",
+        "visibility",
+        "product_sort",
+        mode="before",
+    )
+    @classmethod
+    def strip_campaign_fields(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        cleaned = value.strip()
+        return cleaned or None
+
+    @field_validator(
+        "product_ids",
+        "pinned_product_ids",
+        "category_slugs",
+        "store_ids",
+        mode="before",
+    )
+    @classmethod
+    def normalize_string_lists(cls, value: list[str] | str | None) -> list[str]:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            return [item.strip() for item in value.split(",") if item.strip()]
+        return [str(item).strip() for item in value if str(item).strip()]
+
+
+class AdminMerchandisingCampaignOptInRead(BaseModel):
+    id: uuid.UUID
+    campaign_id: uuid.UUID
+    campaign_slug: str
+    campaign_title: str
+    product_id: str
+    product_title: str
+    vendor_user_id: uuid.UUID
+    status: str
+    review_notes: str | None = None
+    created_at: datetime
+    updated_at: datetime

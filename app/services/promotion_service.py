@@ -20,9 +20,16 @@ PROMOTION_TYPES = frozenset(
 )
 SUPPORTED_VOUCHER_DISCOUNT_TYPES = {"percent", "fixed", "free_shipping", "bogo"}
 SUPPORTED_VOUCHER_SCOPES = {"odos", "store", "category", "product"}
+SUPPORTED_VOUCHER_OWNER_TYPES = {"platform", "vendor"}
 SUPPORTED_VOUCHER_AVAILABILITY = {"auto", "claim", "assigned", "private"}
 PUBLIC_VOUCHER_AVAILABILITY = {"auto", "claim"}
 APPROVED_VOUCHER_STATUS = "approved"
+# Lifecycle mapped onto existing fields:
+# draft -> pending approval / inactive
+# active -> computed active
+# paused -> is_active=false while still approved
+# expired -> ends_at passed
+# archived -> soft-disabled via archive endpoints
 
 
 @dataclass(slots=True)
@@ -119,6 +126,18 @@ def _product_metadata_map(db: Session, items: list[OrderItemCreate]) -> dict[str
     }
 
 
+def _product_category_slugs(product_meta: dict[str, object]) -> set[str]:
+    product_slugs = {
+        str(slug).strip().lower()
+        for slug in (product_meta.get("category_slugs") or [])
+        if str(slug).strip()
+    }
+    normalized_category = str(product_meta.get("category") or "").strip().lower()
+    if normalized_category:
+        product_slugs.add(normalized_category.replace(" ", "-"))
+    return product_slugs
+
+
 def _line_is_eligible(
     voucher: Voucher,
     item: OrderItemCreate,
@@ -131,25 +150,46 @@ def _line_is_eligible(
     if product_id in excluded:
         return False
 
+    product_slugs = _product_category_slugs(product_meta)
+    excluded_categories = {
+        str(slug).strip().lower()
+        for slug in (getattr(voucher, "excluded_category_slugs", None) or [])
+        if str(slug).strip()
+    }
+    if excluded_categories and product_slugs.intersection(excluded_categories):
+        return False
+
     allowed_products = set(getattr(voucher, "product_ids", None) or [])
     if allowed_products and product_id not in allowed_products:
         return False
 
     store_id = product_meta.get("store_id")
+    eligible_stores = set(getattr(voucher, "eligible_store_ids", None) or [])
+    if eligible_stores and store_id not in eligible_stores:
+        return False
+
+    owner_type = getattr(voucher, "owner_type", None) or (
+        "vendor" if voucher.scope == "store" and voucher.store_id else "platform"
+    )
+    if owner_type == "vendor":
+        # Vendor vouchers may never discount another store's products.
+        if not voucher.store_id or store_id != voucher.store_id:
+            return False
+
     if voucher.scope == "store":
         return store_id == voucher.store_id
 
     if voucher.scope == "product":
-        return product_id in allowed_products
+        return bool(allowed_products) and product_id in allowed_products
 
     if voucher.scope == "category":
-        category_slugs = set(getattr(voucher, "category_slugs", None) or [])
+        category_slugs = {
+            str(slug).strip().lower()
+            for slug in (getattr(voucher, "category_slugs", None) or [])
+            if str(slug).strip()
+        }
         if not category_slugs:
             return True
-        product_slugs = set(product_meta.get("category_slugs") or [])
-        normalized_category = str(product_meta.get("category") or "").strip().lower()
-        if normalized_category:
-            product_slugs.add(normalized_category.replace(" ", "-"))
         return bool(product_slugs.intersection(category_slugs))
 
     return True
@@ -373,6 +413,16 @@ def is_voucher_publicly_listable(voucher: Voucher) -> bool:
     return True
 
 
+def resolve_voucher_owner_type(
+    *,
+    owner_type: str | None = None,
+    created_by_is_vendor: bool = False,
+) -> str:
+    if owner_type in SUPPORTED_VOUCHER_OWNER_TYPES:
+        return owner_type
+    return "vendor" if created_by_is_vendor else "platform"
+
+
 def validate_voucher_configuration(
     *,
     scope: str,
@@ -385,15 +435,23 @@ def validate_voucher_configuration(
     per_user_limit: int | None,
     store_id: str | None,
     promotion_type: str = "coupon",
+    owner_type: str = "platform",
     bogo_buy_quantity: int | None = None,
     bogo_get_quantity: int | None = None,
     category_slugs: list[str] | None = None,
     product_ids: list[str] | None = None,
+    eligible_store_ids: list[str] | None = None,
+    excluded_category_slugs: list[str] | None = None,
 ) -> None:
     if scope not in SUPPORTED_VOUCHER_SCOPES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Unsupported voucher scope.",
+        )
+    if owner_type not in SUPPORTED_VOUCHER_OWNER_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unsupported voucher owner type.",
         )
     if availability not in SUPPORTED_VOUCHER_AVAILABILITY:
         raise HTTPException(
@@ -415,12 +473,28 @@ def validate_voucher_configuration(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Percent vouchers cannot exceed 100%.",
         )
+    if owner_type == "vendor":
+        if scope != "store" or not store_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Vendor vouchers must be scoped to the vendor's own store.",
+            )
+        if eligible_store_ids:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Vendor vouchers cannot target other stores.",
+            )
     if scope == "store" and not store_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Store promotions must be attached to a store.",
         )
-    if scope == "store" and discount_type == "free_shipping":
+    if owner_type == "vendor" and discount_type == "free_shipping":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Store promotions do not support free shipping yet.",
+        )
+    if scope == "store" and discount_type == "free_shipping" and owner_type == "vendor":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Store promotions do not support free shipping yet.",
@@ -451,4 +525,5 @@ def validate_voucher_configuration(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Per-user limit cannot be higher than the total usage limit.",
         )
+    _ = excluded_category_slugs  # validated as optional list by schema layer
 

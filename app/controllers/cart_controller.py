@@ -3,7 +3,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models import CartItem, User
+from app.models import CartItem, Product, User
 from app.schemas.user import CartItemCreate, CartItemUpdate
 
 
@@ -17,6 +17,33 @@ def list_cart_items(db: Session, user: User) -> list[CartItem]:
     )
 
 
+def _assert_product_available_for_cart(
+    db: Session,
+    *,
+    product_id: str,
+    quantity: int,
+    title: str | None = None,
+) -> Product:
+    product = db.scalar(select(Product).where(Product.id == product_id))
+    label = title or (product.title if product else "That item")
+    if (
+        not product
+        or not product.is_active
+        or product.status != "active"
+        or product.stock <= 0
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{label} is out of stock.",
+        )
+    if product.stock < quantity:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Only {product.stock} left in stock for {label}.",
+        )
+    return product
+
+
 def add_cart_item(
     db: Session,
     user: User,
@@ -28,8 +55,20 @@ def add_cart_item(
             CartItem.product_id == payload.product_id,
         )
     )
+    next_quantity = (
+        min(existing_item.quantity + payload.quantity, 99)
+        if existing_item
+        else payload.quantity
+    )
+    _assert_product_available_for_cart(
+        db,
+        product_id=payload.product_id,
+        quantity=next_quantity,
+        title=payload.title,
+    )
+
     if existing_item:
-        existing_item.quantity = min(existing_item.quantity + payload.quantity, 99)
+        existing_item.quantity = next_quantity
         existing_item.title = payload.title
         existing_item.image_url = payload.image_url
         existing_item.image_key = payload.image_key
@@ -82,6 +121,12 @@ def update_cart_item_quantity(
             detail="That cart item was not found.",
         )
 
+    _assert_product_available_for_cart(
+        db,
+        product_id=product_id,
+        quantity=payload.quantity,
+        title=cart_item.title,
+    )
     cart_item.quantity = payload.quantity
     db.commit()
     db.refresh(cart_item)

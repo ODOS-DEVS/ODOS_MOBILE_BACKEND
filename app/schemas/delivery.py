@@ -8,6 +8,7 @@ DeliveryMethodId = Literal["economy", "express", "same_day"]
 class DeliveryQuoteRequest(BaseModel):
     subtotal: float = Field(ge=0)
     region: str | None = Field(default=None, max_length=120)
+    city: str | None = Field(default=None, max_length=120)
     selected_method: DeliveryMethodId = "economy"
 
 

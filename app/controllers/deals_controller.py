@@ -3,33 +3,20 @@ from datetime import datetime, timezone
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.controllers.campaign_controller import list_public_campaigns
 from app.controllers.catalog_controller import (
     list_active_flash_sale_events,
     list_promo_banners,
     serialize_catalog_products,
 )
 from app.controllers.voucher_controller import list_public_promotions
+from app.core.promo_banner_config import PROMO_CAMPAIGN_TAGS
 from app.models import Product, Voucher
 from app.schemas.catalog import DealsHubRead, DealsHubSectionRead
 
 
-GHANA_CAMPAIGN_TAGS = [
-    ("christmas", "Christmas Deals"),
-    ("easter", "Easter Offers"),
-    ("eid", "Eid Specials"),
-    ("valentine", "Valentine Offers"),
-    ("black-friday", "Black Friday Ghana"),
-    ("independence", "Independence Day Deals"),
-    ("republic-day", "Republic Day Deals"),
-    ("back-to-school", "Back to School"),
-    ("payday", "Salary Week Deals"),
-    ("student", "Student Deals"),
-    ("free-delivery", "Free Delivery"),
-    ("weekend-market", "ODOS Weekend Market"),
-    ("made-in-ghana", "Made in Ghana Deals"),
-    ("campus", "Campus Deals"),
-    ("hot-deals", "Hot Deals Today"),
-]
+# Backward-compatible alias — single source of truth is promo_banner_config.
+GHANA_CAMPAIGN_TAGS = PROMO_CAMPAIGN_TAGS
 
 
 def _active_deal_products(db: Session, *, limit: int = 24) -> list:
@@ -40,6 +27,7 @@ def _active_deal_products(db: Session, *, limit: int = 24) -> list:
             .where(
                 Product.is_active.is_(True),
                 Product.status == "active",
+                Product.stock > 0,
             )
             .order_by(Product.updated_at.desc())
             .limit(limit * 3)
@@ -65,15 +53,27 @@ def get_deals_hub(db: Session) -> DealsHubRead:
     flash_events = list_active_flash_sale_events(db)
     promotions = list_public_promotions(db)
     deal_products = _active_deal_products(db)
+    campaigns = list_public_campaigns(db, limit=24)
 
     sections: list[DealsHubSectionRead] = []
+
+    if campaigns:
+        sections.append(
+            DealsHubSectionRead(
+                key="merchandising-campaigns",
+                title="Campaigns",
+                subtitle="Seasonal offers and curated marketplace campaigns",
+                kind="campaigns",
+                count=len(campaigns),
+            )
+        )
 
     if banners:
         sections.append(
             DealsHubSectionRead(
-                key="campaigns",
-                title="Campaigns",
-                subtitle="Seasonal offers and curated ODOS campaigns",
+                key="banners",
+                title="Featured banners",
+                subtitle="Highlighted marketplace creatives",
                 kind="banners",
             )
         )
@@ -112,6 +112,18 @@ def get_deals_hub(db: Session) -> DealsHubRead:
             )
         )
 
+    for campaign in campaigns:
+        sections.append(
+            DealsHubSectionRead(
+                key=f"campaign:{campaign.slug}",
+                title=campaign.title,
+                subtitle=campaign.subtitle or "Shop this campaign",
+                kind="campaign",
+                count=campaign.product_count,
+                slug=campaign.slug,
+            )
+        )
+
     for tag, label in GHANA_CAMPAIGN_TAGS:
         tagged_count = db.scalar(
             select(func.count())
@@ -138,6 +150,7 @@ def get_deals_hub(db: Session) -> DealsHubRead:
         flash_events=flash_events,
         promotions=promotions,
         deal_products=deal_products,
+        campaigns=campaigns,
         sections=sections,
         campaign_tags=[{"tag": tag, "label": label} for tag, label in GHANA_CAMPAIGN_TAGS],
     )

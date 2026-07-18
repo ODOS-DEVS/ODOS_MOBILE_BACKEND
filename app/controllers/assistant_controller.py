@@ -10,6 +10,7 @@ from app.schemas.assistant import (
     AssistantChatResponse,
     AssistantFeedbackRequest,
     AssistantFeedbackResponse,
+    AssistantReferenceContext,
     AssistantSessionResponse,
     AssistantStatusResponse,
 )
@@ -59,12 +60,14 @@ def get_assistant_session(
     *,
     conversation_id: uuid.UUID | None = None,
     screen: str | None = None,
+    context: AssistantReferenceContext | None = None,
 ) -> AssistantSessionResponse:
     response = build_assistant_session(
         db,
         user,
         conversation_id=conversation_id,
         screen=screen,
+        context=context,
     )
     db.commit()
     return response

@@ -36,6 +36,13 @@ class Voucher(Base):
         server_default="odos",
         index=True,
     )
+    owner_type: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="platform",
+        server_default="platform",
+        index=True,
+    )
     availability: Mapped[str] = mapped_column(
         String(20),
         nullable=False,
@@ -49,6 +56,10 @@ class Voucher(Base):
         nullable=True,
         index=True,
     )
+    eligible_store_ids: Mapped[list[str] | None] = mapped_column(
+        ARRAY(String(50)),
+        nullable=True,
+    )
     reward_text: Mapped[str] = mapped_column(String(80), nullable=False)
     discount_type: Mapped[str] = mapped_column(String(20), nullable=False)
     discount_value: Mapped[float] = mapped_column(Float, nullable=False)
@@ -61,9 +72,18 @@ class Voucher(Base):
         default=True,
         server_default="true",
         nullable=False,
+        index=True,
     )
-    starts_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    starts_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True,
+    )
+    ends_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True,
+    )
     campaign_tag: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
     visibility: Mapped[str] = mapped_column(
         String(20),
@@ -103,6 +123,10 @@ class Voucher(Base):
         nullable=False,
     )
     category_slugs: Mapped[list[str] | None] = mapped_column(ARRAY(String(80)), nullable=True)
+    excluded_category_slugs: Mapped[list[str] | None] = mapped_column(
+        ARRAY(String(80)),
+        nullable=True,
+    )
     product_ids: Mapped[list[str] | None] = mapped_column(ARRAY(String(100)), nullable=True)
     excluded_product_ids: Mapped[list[str] | None] = mapped_column(ARRAY(String(100)), nullable=True)
     promotion_type: Mapped[str] = mapped_column(

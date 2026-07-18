@@ -123,6 +123,7 @@ class VendorVoucherRead(BaseModel):
     title: str
     description: str | None = None
     issuer_name: str | None = None
+    owner_type: str = "vendor"
     availability: str
     reward_text: str
     discount_type: str
@@ -141,6 +142,8 @@ class VendorVoucherRead(BaseModel):
     approval_status: str = "approved"
     campaign_tag: str | None = None
     review_notes: str | None = None
+    product_ids: list[str] | None = None
+    excluded_product_ids: list[str] | None = None
     created_at: datetime
 
 
@@ -159,6 +162,8 @@ class VendorVoucherUpsert(BaseModel):
     is_active: bool = True
     starts_at: datetime | None = None
     ends_at: datetime | None = None
+    product_ids: list[str] | None = None
+    excluded_product_ids: list[str] | None = None
 
     @field_validator("code", mode="before")
     @classmethod
@@ -177,6 +182,23 @@ class VendorVoucherUpsert(BaseModel):
     @classmethod
     def normalize_voucher_modes(cls, value: str) -> str:
         return value.strip().lower()
+
+    @field_validator("product_ids", "excluded_product_ids", mode="before")
+    @classmethod
+    def normalize_product_lists(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        cleaned = [str(item).strip() for item in value if str(item).strip()]
+        return cleaned or None
+
+
+class VendorVoucherRedemptionRead(BaseModel):
+    id: uuid.UUID
+    order_id: uuid.UUID
+    voucher_code: str
+    discount_amount: float
+    user_id: uuid.UUID
+    created_at: datetime
 
 
 class VendorFlashSaleNominationCreate(BaseModel):

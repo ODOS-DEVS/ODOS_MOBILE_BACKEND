@@ -30,6 +30,39 @@ DEFAULT_SAME_DAY_REGIONS = (
     "ablekuma",
 )
 
+DEFAULT_SAME_DAY_CITIES = (
+    "accra",
+    "tema",
+    "ashaiman",
+    "madina",
+    "adenta",
+    "nungua",
+    "teshie",
+    "lashibi",
+    "dome",
+    "gbawe",
+    "dodowa",
+    "kasoa",
+    "la",
+    "osu",
+    "east legon",
+    "spintex",
+    "kaneshie",
+    "achimota",
+    "weija",
+    "pokuase",
+    "amasaman",
+    "ablekuma",
+    "kpone",
+    "sakumono",
+    "tema new town",
+    "mallam",
+    "haatso",
+    "legon",
+    "dansoman",
+    "teshie-nungua",
+)
+
 
 @dataclass(frozen=True)
 class DeliveryConfig:
@@ -132,6 +165,29 @@ def is_same_day_eligible_region(region: str | None, config: DeliveryConfig) -> b
     )
 
 
+def is_same_day_eligible_city(city: str | None, config: DeliveryConfig) -> bool:
+    normalized = (city or "").strip().lower()
+    if not normalized:
+        return False
+    if any(alias == normalized or alias in normalized for alias in config.same_day_regions):
+        return True
+    return any(
+        city_name == normalized or city_name in normalized or normalized in city_name
+        for city_name in DEFAULT_SAME_DAY_CITIES
+    )
+
+
+def is_same_day_eligible_location(
+    *,
+    region: str | None,
+    city: str | None,
+    config: DeliveryConfig,
+) -> bool:
+    return is_same_day_eligible_region(region, config) or is_same_day_eligible_city(
+        city, config
+    )
+
+
 def is_same_day_order_window_open(
     config: DeliveryConfig,
     now: datetime | None = None,
@@ -150,14 +206,20 @@ def build_delivery_options(
     *,
     subtotal: float,
     region: str | None,
+    city: str | None = None,
     config: DeliveryConfig = DEFAULT_DELIVERY_CONFIG,
     now: datetime | None = None,
 ) -> list[DeliveryOption]:
-    same_day_region_ok = is_same_day_eligible_region(region, config)
+    same_day_location_ok = is_same_day_eligible_location(
+        region=region,
+        city=city,
+        config=config,
+    )
     same_day_window_ok = is_same_day_order_window_open(config, now)
     same_day_available = (
-        config.same_day_enabled and same_day_region_ok and same_day_window_ok
+        config.same_day_enabled and same_day_location_ok and same_day_window_ok
     )
+    cutoff_label = f"{config.same_day_cutoff_hour}:00"
 
     economy_amount = (
         0.0 if subtotal >= config.free_shipping_threshold else config.economy_fee
@@ -172,17 +234,26 @@ def build_delivery_options(
         same_day_reason = "Same-day delivery is temporarily unavailable"
         same_day_subtitle = "Check back later or choose express delivery"
         same_day_eta = "Unavailable"
-    elif not same_day_region_ok:
-        same_day_reason = "Select a Greater Accra address at checkout"
-        same_day_subtitle = "Available when your delivery address is in Greater Accra"
+    elif not same_day_location_ok:
+        same_day_reason = "Select a Greater Accra address to unlock same-day"
+        same_day_subtitle = "Available for Greater Accra addresses"
         same_day_eta = "Greater Accra only"
     elif not same_day_window_ok:
-        same_day_reason = f"Same-day orders close at {config.same_day_cutoff_hour}:00 (Mon–Sat)"
-        same_day_subtitle = f"Order before {config.same_day_cutoff_hour}:00 for evening drop-off"
-        same_day_eta = "Unavailable today"
+        current = now or datetime.now(ACCRA_TZ)
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=ACCRA_TZ)
+        else:
+            current = current.astimezone(ACCRA_TZ)
+        same_day_reason = (
+            "Same-day resumes Monday before 2:00 PM"
+            if current.weekday() == 6
+            else f"Same-day orders close at {cutoff_label} (Mon–Sat)"
+        )
+        same_day_subtitle = f"Order before {cutoff_label} (Mon–Sat) for evening drop-off"
+        same_day_eta = "Opens Monday" if current.weekday() == 6 else "Closed for today"
     else:
         same_day_reason = None
-        same_day_subtitle = f"Order before {config.same_day_cutoff_hour}:00 for evening drop-off"
+        same_day_subtitle = f"Order before {cutoff_label} for evening drop-off"
         same_day_eta = config.same_day_eta
 
     options: list[DeliveryOption] = []
@@ -220,6 +291,7 @@ def build_delivery_options(
                 subtitle=same_day_subtitle,
                 eta=same_day_eta,
                 amount=config.same_day_fee,
+                badge="Live" if same_day_available else None,
                 available=same_day_available,
                 unavailable_reason=same_day_reason,
             )
@@ -269,6 +341,7 @@ def quote_delivery(
     *,
     subtotal: float,
     region: str | None,
+    city: str | None = None,
     selected_method: DeliveryMethodId = "economy",
     config: DeliveryConfig = DEFAULT_DELIVERY_CONFIG,
     now: datetime | None = None,
@@ -276,6 +349,7 @@ def quote_delivery(
     options = build_delivery_options(
         subtotal=subtotal,
         region=region,
+        city=city,
         config=config,
         now=now,
     )
@@ -287,7 +361,11 @@ def quote_delivery(
         "selected_method": active_method,
         "shipping_amount": shipping_amount,
         "free_shipping_threshold": config.free_shipping_threshold,
-        "same_day_cutoff_passed": is_same_day_eligible_region(region, config)
+        "same_day_cutoff_passed": is_same_day_eligible_location(
+            region=region,
+            city=city,
+            config=config,
+        )
         and not is_same_day_order_window_open(config, now),
     }
 
@@ -296,6 +374,7 @@ def validate_delivery_checkout(
     *,
     subtotal: float,
     region: str,
+    city: str | None = None,
     delivery_method: DeliveryMethodId | None,
     shipping_amount: float,
     config: DeliveryConfig = DEFAULT_DELIVERY_CONFIG,
@@ -303,6 +382,7 @@ def validate_delivery_checkout(
     quote = quote_delivery(
         subtotal=subtotal,
         region=region,
+        city=city,
         selected_method=delivery_method or "economy",
         config=config,
     )

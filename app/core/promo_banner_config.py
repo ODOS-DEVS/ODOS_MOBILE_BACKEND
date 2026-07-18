@@ -15,6 +15,7 @@ SUPPORTED_PROMO_LINK_TYPES = frozenset(
         "store",
         "vouchers",
         "campaign",
+        "merchandising_campaign",
         "external",
         "screen",
     }
@@ -50,6 +51,7 @@ PROMO_DESTINATION_LABELS: dict[str, str] = {
     "store": "Store page",
     "vouchers": "Voucher wallet",
     "campaign": "Seasonal campaign",
+    "merchandising_campaign": "Campaign landing page",
     "external": "Website link",
     "screen": "Custom app screen",
 }
@@ -81,8 +83,9 @@ def describe_promo_destination(
     target = (cta_link or "").strip()
     tag = (campaign_tag or "").strip()
 
-    if resolved_type == "campaign" and tag:
-        tag_label = dict(PROMO_CAMPAIGN_TAGS).get(tag, tag.replace("-", " ").title())
+    if resolved_type in {"campaign", "merchandising_campaign"} and (tag or target):
+        key = tag or target
+        tag_label = dict(PROMO_CAMPAIGN_TAGS).get(key, key.replace("-", " ").title())
         return f"{base} · {tag_label}"
     if resolved_type == "discounted_products" and target.isdigit():
         return f"{base} · {target}%+ off"

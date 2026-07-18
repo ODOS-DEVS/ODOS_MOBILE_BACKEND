@@ -318,6 +318,12 @@ class PromoBanner(Base):
     starts_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     campaign_tag: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    campaign_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("merchandising_campaigns.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     link_type: Mapped[str] = mapped_column(
         String(30),
         nullable=False,
@@ -329,6 +335,189 @@ class PromoBanner(Base):
         nullable=False,
         default="home",
         server_default="home",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+
+class MerchandisingCampaign(Base):
+    """First-class marketplace marketing campaign (not a checkout voucher)."""
+
+    __tablename__ = "merchandising_campaigns"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    slug: Mapped[str] = mapped_column(String(80), unique=True, index=True, nullable=False)
+    title: Mapped[str] = mapped_column(String(120), nullable=False)
+    subtitle: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    description: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    banner_image_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    thumbnail_image_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    icon_key: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    theme_color: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        default="draft",
+        server_default="draft",
+        index=True,
+    )
+    is_active: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        server_default="true",
+        nullable=False,
+    )
+    is_featured: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default="false",
+        nullable=False,
+    )
+    visibility: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="public",
+        server_default="public",
+    )
+    starts_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    display_priority: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        server_default="0",
+        nullable=False,
+    )
+    max_products: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    product_sort: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        default="manual",
+        server_default="manual",
+    )
+    hide_out_of_stock: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        server_default="true",
+        nullable=False,
+    )
+    include_entire_marketplace: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default="false",
+        nullable=False,
+    )
+    allow_vendor_opt_in: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default="false",
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+
+class MerchandisingCampaignProduct(Base):
+    __tablename__ = "merchandising_campaign_products"
+
+    campaign_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("merchandising_campaigns.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    product_id: Mapped[str] = mapped_column(
+        String(100),
+        ForeignKey("products.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    is_pinned: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default="false",
+        nullable=False,
+    )
+
+
+class MerchandisingCampaignCategory(Base):
+    __tablename__ = "merchandising_campaign_categories"
+
+    campaign_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("merchandising_campaigns.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    category_slug: Mapped[str] = mapped_column(String(80), primary_key=True)
+
+
+class MerchandisingCampaignStore(Base):
+    __tablename__ = "merchandising_campaign_stores"
+
+    campaign_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("merchandising_campaigns.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    store_id: Mapped[str] = mapped_column(
+        String(50),
+        ForeignKey("stores.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+
+
+class MerchandisingCampaignOptIn(Base):
+    """Vendor-submitted products for open campaigns (admin-approved)."""
+
+    __tablename__ = "merchandising_campaign_opt_ins"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    campaign_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("merchandising_campaigns.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    product_id: Mapped[str] = mapped_column(
+        String(100),
+        ForeignKey("products.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    vendor_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    status: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="pending",
+        server_default="pending",
+        index=True,
+    )
+    review_notes: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    reviewed_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

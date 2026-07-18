@@ -138,9 +138,10 @@ def list_catalog_products(
     limit: int | None = None,
     offset: int | None = None,
 ) -> list[Product]:
+    from app.services.inventory_service import customer_visible_product_filters
+
     statement: Select[tuple[Product]] = select(Product).where(
-        Product.is_active.is_(True),
-        Product.status == "active",
+        customer_visible_product_filters(),
     )
 
     if audience:
@@ -240,11 +241,12 @@ def list_catalog_products(
 
 
 def get_catalog_product(db: Session, product_id: str) -> Product | None:
+    from app.services.inventory_service import customer_visible_product_filters
+
     return db.scalar(
         select(Product).where(
             Product.id == product_id,
-            Product.is_active.is_(True),
-            Product.status == "active",
+            customer_visible_product_filters(),
         )
     )
 
@@ -499,12 +501,13 @@ def list_flash_sale_event_products(db: Session, slug: str) -> list[ProductRead]:
     if not product_ids:
         return []
 
+    from app.services.inventory_service import customer_visible_product_filters
+
     products = list(
         db.scalars(
             select(Product).where(
                 Product.id.in_(product_ids),
-                Product.is_active.is_(True),
-                Product.status == "active",
+                customer_visible_product_filters(),
             )
         ).all()
     )

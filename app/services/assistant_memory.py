@@ -19,13 +19,33 @@ from app.schemas.assistant import (
     AssistantMessageRead,
     AssistantNudgeRead,
     AssistantProductRead,
+    AssistantReferenceContext,
     AssistantSessionResponse,
     AssistantStoreRead,
 )
 from app.services.assistant_context import build_assistant_user_context
+from app.services.assistant_reference import normalize_reference_context, resolve_store_reference
 
 
 MAX_STORED_MESSAGES = 20
+
+
+def _conversation_store_id(conversation: AssistantConversation) -> str | None:
+    context = conversation.context_json or {}
+    store_id = context.get("store_id")
+    return str(store_id).strip() if store_id else None
+
+
+def _apply_conversation_metadata(
+    conversation: AssistantConversation,
+    *,
+    screen: str | None,
+    context: dict[str, str] | None,
+) -> None:
+    if screen:
+        conversation.screen = screen
+    if context:
+        conversation.context_json = context
 
 
 def get_or_create_conversation(
@@ -34,7 +54,11 @@ def get_or_create_conversation(
     *,
     conversation_id: uuid.UUID | None = None,
     screen: str | None = None,
+    context: AssistantReferenceContext | dict | None = None,
 ) -> AssistantConversation:
+    resolved_context = resolve_store_reference(db, context) or normalize_reference_context(context)
+    target_store_id = resolved_context.get("store_id") if resolved_context else None
+
     if conversation_id is not None:
         existing = db.scalar(
             select(AssistantConversation).where(
@@ -43,22 +67,55 @@ def get_or_create_conversation(
             )
         )
         if existing is not None:
-            if screen and existing.screen != screen:
-                existing.screen = screen
-            return existing
+            # Keep store-scoped threads isolated from general chat.
+            existing_store_id = _conversation_store_id(existing)
+            if target_store_id and existing_store_id and existing_store_id != target_store_id:
+                pass
+            else:
+                _apply_conversation_metadata(
+                    existing,
+                    screen=screen,
+                    context=resolved_context,
+                )
+                return existing
 
-    latest = db.scalar(
-        select(AssistantConversation)
-        .where(AssistantConversation.user_id == user.id)
-        .order_by(desc(AssistantConversation.updated_at))
-        .limit(1)
+    recent = list(
+        db.scalars(
+            select(AssistantConversation)
+            .where(AssistantConversation.user_id == user.id)
+            .order_by(desc(AssistantConversation.updated_at))
+            .limit(25)
+        ).all()
     )
-    if latest is not None:
-        if screen:
-            latest.screen = screen
-        return latest
 
-    conversation = AssistantConversation(user_id=user.id, screen=screen)
+    if target_store_id:
+        for candidate in recent:
+            if _conversation_store_id(candidate) == target_store_id:
+                _apply_conversation_metadata(
+                    candidate,
+                    screen=screen or "store",
+                    context=resolved_context,
+                )
+                return candidate
+        conversation = AssistantConversation(
+            user_id=user.id,
+            screen=screen or "store",
+            context_json=resolved_context,
+        )
+        db.add(conversation)
+        db.flush()
+        return conversation
+
+    for candidate in recent:
+        if not _conversation_store_id(candidate):
+            _apply_conversation_metadata(
+                candidate,
+                screen=screen,
+                context=None,
+            )
+            return candidate
+
+    conversation = AssistantConversation(user_id=user.id, screen=screen, context_json=None)
     db.add(conversation)
     db.flush()
     return conversation
@@ -217,13 +274,34 @@ def build_assistant_session(
     *,
     conversation_id: uuid.UUID | None = None,
     screen: str | None = None,
+    context: AssistantReferenceContext | dict | None = None,
 ) -> AssistantSessionResponse:
     nudge = build_proactive_nudge(db, user)
+    resolved_context = resolve_store_reference(db, context) or normalize_reference_context(context)
+
+    # Store-focused sessions get a store-specific nudge over generic cart prompts.
+    if resolved_context and resolved_context.get("store_name"):
+        store_name = resolved_context["store_name"]
+        nudge = AssistantNudgeRead(
+            message=(
+                f"You're shopping {store_name}. Ask about products, deals, delivery, "
+                "or how to message the store — I'll keep answers focused here."
+            ),
+            prompt=f"What should I browse first at {store_name}?",
+            kind="store_reference",
+        )
+
     if user is None:
+        session_context = (
+            AssistantReferenceContext.model_validate(resolved_context)
+            if resolved_context
+            else None
+        )
         return AssistantSessionResponse(
             conversation_id=None,
             messages=[],
             nudge=nudge,
+            context=session_context,
         )
 
     conversation = get_or_create_conversation(
@@ -231,13 +309,22 @@ def build_assistant_session(
         user,
         conversation_id=conversation_id,
         screen=screen,
+        context=resolved_context,
     )
     db.flush()
+
+    stored_context = conversation.context_json or resolved_context
+    session_context = (
+        AssistantReferenceContext.model_validate(stored_context)
+        if stored_context
+        else None
+    )
 
     return AssistantSessionResponse(
         conversation_id=str(conversation.id),
         messages=load_conversation_messages(db, conversation.id),
         nudge=nudge,
+        context=session_context,
     )
 
 

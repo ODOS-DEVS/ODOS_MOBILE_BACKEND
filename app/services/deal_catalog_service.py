@@ -38,9 +38,10 @@ def list_deal_products(
 
     candidate_map: dict[str, Product] = {}
 
+    from app.services.inventory_service import customer_visible_product_filters
+
     base_statement = select(Product).where(
-        Product.is_active.is_(True),
-        Product.status == "active",
+        customer_visible_product_filters(),
     )
     if normalized_campaign:
         base_statement = base_statement.where(
@@ -58,8 +59,7 @@ def list_deal_products(
         product = db.scalar(
             select(Product).where(
                 Product.id == product_id,
-                Product.is_active.is_(True),
-                Product.status == "active",
+                customer_visible_product_filters(),
             )
         )
         if not product:

@@ -19,7 +19,10 @@ MAX_TOOL_LOOP = 5
 GEMINI_TOOL_DECLARATIONS: list[dict[str, Any]] = [
     {
         "name": "search_products",
-        "description": "Search the ODOS product catalog by keywords and optional max price in GH₵.",
+        "description": (
+            "Search the ODOS product catalog by keywords and optional max price in GH₵. "
+            "When a focused store reference is active, results are automatically limited to that store."
+        ),
         "parameters": {
             "type": "object",
             "properties": {
@@ -34,7 +37,10 @@ GEMINI_TOOL_DECLARATIONS: list[dict[str, Any]] = [
     },
     {
         "name": "search_stores",
-        "description": "Search ODOS stores by name, category, city, or market.",
+        "description": (
+            "Search ODOS stores by name, category, city, or market. "
+            "When a focused store reference is active, returns that store only unless the user asks to browse other stores."
+        ),
         "parameters": {
             "type": "object",
             "properties": {
@@ -145,14 +151,21 @@ def execute_assistant_tool(
     *,
     name: str,
     args: dict[str, Any],
+    store_id: str | None = None,
+    store_name: str | None = None,
 ) -> dict[str, Any]:
     try:
         if name == "search_products":
-            query = str(args.get("query", "")).strip()
+            query = str(args.get("query", "")).strip() or "products"
             max_price = args.get("max_price_cedis")
             if max_price is None:
                 max_price = parse_max_price_cedis(query)
-            result = build_catalog_search_context(db, query)
+            result = build_catalog_search_context(
+                db,
+                query,
+                store_id=store_id,
+                store_name=store_name,
+            )
             if max_price is not None:
                 filtered = [product for product in result.products if product.price <= int(max_price)]
                 if filtered:
@@ -160,14 +173,26 @@ def execute_assistant_tool(
             return {
                 "products": [_json_safe(product) for product in result.products[:5]],
                 "context": result.context_text,
+                "scoped_store_id": store_id,
             }
 
         if name == "search_stores":
             query = str(args.get("query", "")).strip()
-            result = build_catalog_search_context(db, f"stores {query}")
+            # Stay on the focused store unless the shopper clearly wants other shops.
+            broaden = any(
+                token in query.lower()
+                for token in ("other store", "other stores", "another store", "all stores", "near me")
+            )
+            result = build_catalog_search_context(
+                db,
+                f"stores {query}",
+                store_id=None if broaden else store_id,
+                store_name=None if broaden else store_name,
+            )
             return {
                 "stores": [_json_safe(store) for store in result.stores[:5]],
                 "context": result.context_text,
+                "scoped_store_id": None if broaden else store_id,
             }
 
         if name == "list_orders":

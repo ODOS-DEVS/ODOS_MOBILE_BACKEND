@@ -1,6 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 
+from app.controllers.campaign_controller import (
+    get_public_campaign_detail,
+    list_public_campaigns,
+)
 from app.controllers.deals_controller import get_deals_hub, GHANA_CAMPAIGN_TAGS
 from app.controllers.catalog_controller import (
     get_catalog_product,
@@ -39,6 +43,8 @@ from app.schemas.catalog import (
     FlashSaleEventRead,
     MarketRead,
     DealsHubRead,
+    MerchandisingCampaignDetailRead,
+    MerchandisingCampaignRead,
     ProductRead,
     PromoBannerRead,
     StoreRead,
@@ -203,6 +209,49 @@ def get_deals_hub_endpoint(db: Session = Depends(get_db)):
 @router.get("/campaign-tags")
 def get_campaign_tags():
     return [{"tag": tag, "label": label} for tag, label in GHANA_CAMPAIGN_TAGS]
+
+
+@router.get("/campaigns", response_model=list[MerchandisingCampaignRead])
+def get_merchandising_campaigns(
+    response: Response,
+    db: Session = Depends(get_db),
+    featured: bool = Query(default=False),
+    limit: int = Query(default=40, ge=1, le=100),
+):
+    cache_key = f"catalog:campaigns:live:featured={int(featured)}:limit={limit}"
+    cached = cache_get_json(cache_key)
+    if cached is not None:
+        set_cache_control(response, TTL_PROMO_BANNERS, hit=True)
+        return [MerchandisingCampaignRead.model_validate(item) for item in cached]
+
+    items = list_public_campaigns(db, featured_only=featured, limit=limit)
+    cache_set_json(
+        cache_key,
+        [item.model_dump(mode="json") for item in items],
+        TTL_PROMO_BANNERS,
+    )
+    set_cache_control(response, TTL_PROMO_BANNERS, hit=False)
+    return items
+
+
+@router.get("/campaigns/{slug}", response_model=MerchandisingCampaignDetailRead)
+def get_merchandising_campaign_detail(
+    slug: str,
+    response: Response,
+    db: Session = Depends(get_db),
+    limit: int = Query(default=30, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+):
+    cache_key = f"catalog:campaigns:{slug}:limit={limit}:offset={offset}"
+    cached = cache_get_json(cache_key)
+    if cached is not None:
+        set_cache_control(response, TTL_PROMO_BANNERS, hit=True)
+        return MerchandisingCampaignDetailRead.model_validate(cached)
+
+    detail = get_public_campaign_detail(db, slug, limit=limit, offset=offset)
+    cache_set_json(cache_key, detail.model_dump(mode="json"), TTL_PROMO_BANNERS)
+    set_cache_control(response, TTL_PROMO_BANNERS, hit=False)
+    return detail
 
 
 @router.get("/deal-products", response_model=list[ProductRead])

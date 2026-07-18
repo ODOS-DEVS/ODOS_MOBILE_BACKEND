@@ -1,7 +1,8 @@
 from typing import Annotated
 from datetime import datetime
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile, status
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
@@ -19,6 +20,9 @@ from app.controllers.admin_controller import (
     create_admin_flash_sale_event,
     create_admin_store,
     create_admin_voucher,
+    duplicate_admin_voucher,
+    pause_admin_voucher,
+    resume_admin_voucher,
     delete_admin_category,
     delete_admin_market,
     get_admin_bootstrap_status,
@@ -71,12 +75,26 @@ from app.controllers.event_log_controller import (
     admin_event_log_list_dependency,
     get_admin_event_log_stats,
 )
-from app.core.admin_permissions import require_audit_access, require_super_admin
+from app.core.admin_permissions import (
+    require_admin_feature,
+    require_audit_access,
+    require_super_admin,
+)
 from app.core.rate_limit import limit_login
 from app.schemas.event_log import EventLogPageRead, EventLogStatsRead
 from app.controllers.delivery_settings_controller import (
     get_admin_delivery_settings,
     update_admin_delivery_settings,
+)
+from app.controllers.campaign_controller import (
+    archive_admin_campaign,
+    create_admin_campaign,
+    duplicate_admin_campaign,
+    get_admin_campaign,
+    list_admin_campaign_opt_ins,
+    list_admin_campaigns,
+    review_admin_campaign_opt_in,
+    update_admin_campaign,
 )
 from app.controllers.flash_sale_nominations_controller import (
     list_admin_flash_sale_nominations,
@@ -105,6 +123,9 @@ from app.schemas.delivery_settings import (
 )
 from app.schemas.pagination import AdminPageRead
 from app.models import User
+
+RequirePromotionsAdmin = Annotated[User, Depends(require_admin_feature("promotions"))]
+
 from app.schemas.admin import (
     AdminBootstrapStatusRead,
     AdminCategoryRead,
@@ -117,6 +138,9 @@ from app.schemas.admin import (
     AdminPromoBannerUpsert,
     AdminFlashSaleEventRead,
     AdminFlashSaleEventUpsert,
+    AdminMerchandisingCampaignOptInRead,
+    AdminMerchandisingCampaignRead,
+    AdminMerchandisingCampaignUpsert,
     AdminOrderDetailRead,
     AdminOrderRead,
     AdminOrderStatusUpdate,
@@ -606,6 +630,131 @@ def remove_flash_sale_event(
     return {"success": True}
 
 
+@router.get(
+    "/merchandising-campaigns",
+    response_model=AdminPageRead[AdminMerchandisingCampaignRead],
+)
+def get_merchandising_campaigns(
+    current_user: RequirePromotionsAdmin,
+    list_params: AdminListParams,
+    db: Session = Depends(get_db),
+    search: str | None = Query(default=None, max_length=120),
+    status_filter: str | None = Query(default=None, alias="status", max_length=30),
+):
+    limit, offset = list_params
+    return list_admin_campaigns(
+        db,
+        current_user,
+        limit=limit,
+        offset=offset,
+        search=search,
+        status_filter=status_filter,
+    )
+
+
+@router.get(
+    "/merchandising-campaigns/{campaign_id}",
+    response_model=AdminMerchandisingCampaignRead,
+)
+def get_merchandising_campaign(
+    campaign_id: UUID,
+    current_user: RequirePromotionsAdmin,
+    db: Session = Depends(get_db),
+):
+    return get_admin_campaign(db, current_user, campaign_id)
+
+
+@router.post(
+    "/merchandising-campaigns",
+    response_model=AdminMerchandisingCampaignRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_merchandising_campaign(
+    payload: AdminMerchandisingCampaignUpsert,
+    current_user: RequirePromotionsAdmin,
+    db: Session = Depends(get_db),
+):
+    return await create_admin_campaign(db, current_user, payload)
+
+
+@router.patch(
+    "/merchandising-campaigns/{campaign_id}",
+    response_model=AdminMerchandisingCampaignRead,
+)
+async def patch_merchandising_campaign(
+    campaign_id: UUID,
+    payload: AdminMerchandisingCampaignUpsert,
+    current_user: RequirePromotionsAdmin,
+    db: Session = Depends(get_db),
+):
+    return await update_admin_campaign(db, current_user, campaign_id, payload)
+
+
+@router.delete("/merchandising-campaigns/{campaign_id}")
+def remove_merchandising_campaign(
+    campaign_id: UUID,
+    current_user: RequirePromotionsAdmin,
+    db: Session = Depends(get_db),
+):
+    archive_admin_campaign(db, current_user, campaign_id)
+    return {"success": True}
+
+
+@router.post(
+    "/merchandising-campaigns/{campaign_id}/duplicate",
+    response_model=AdminMerchandisingCampaignRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def post_duplicate_merchandising_campaign(
+    campaign_id: UUID,
+    current_user: RequirePromotionsAdmin,
+    db: Session = Depends(get_db),
+):
+    return duplicate_admin_campaign(db, current_user, campaign_id)
+
+
+@router.get(
+    "/merchandising-campaign-opt-ins",
+    response_model=AdminPageRead[AdminMerchandisingCampaignOptInRead],
+)
+def get_merchandising_campaign_opt_ins(
+    current_user: RequirePromotionsAdmin,
+    list_params: AdminListParams,
+    db: Session = Depends(get_db),
+    campaign_id: UUID | None = Query(default=None),
+    status_filter: str | None = Query(default=None, alias="status", max_length=30),
+):
+    limit, offset = list_params
+    return list_admin_campaign_opt_ins(
+        db,
+        current_user,
+        campaign_id=campaign_id,
+        status_filter=status_filter,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.post(
+    "/merchandising-campaign-opt-ins/{opt_in_id}/review",
+    response_model=AdminMerchandisingCampaignOptInRead,
+)
+def post_review_merchandising_campaign_opt_in(
+    opt_in_id: UUID,
+    current_user: RequirePromotionsAdmin,
+    db: Session = Depends(get_db),
+    status_value: str = Query(alias="status", min_length=1, max_length=30),
+    review_notes: str | None = Query(default=None, max_length=255),
+):
+    return review_admin_campaign_opt_in(
+        db,
+        current_user,
+        opt_in_id,
+        status_value=status_value,
+        review_notes=review_notes,
+    )
+
+
 @router.get("/categories", response_model=AdminPageRead[AdminCategoryRead])
 def get_categories(
     current_user: Annotated[User, Depends(get_current_user)],
@@ -808,18 +957,31 @@ def patch_product_status(
 
 @router.get("/vouchers", response_model=AdminPageRead[AdminVoucherRead])
 def get_vouchers(
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequirePromotionsAdmin,
     list_params: AdminListParams,
     db: Session = Depends(get_db),
+    q: str | None = Query(default=None, max_length=120),
+    status: str | None = Query(default=None, max_length=40),
+    owner_type: str | None = Query(default=None, max_length=20),
+    scope: str | None = Query(default=None, max_length=20),
 ):
     limit, offset = list_params
-    return list_admin_vouchers(db, current_user, limit=limit, offset=offset)
+    return list_admin_vouchers(
+        db,
+        current_user,
+        limit=limit,
+        offset=offset,
+        q=q,
+        status_filter=status,
+        owner_type=owner_type,
+        scope=scope,
+    )
 
 
 @router.post("/vouchers", response_model=AdminVoucherRead, status_code=status.HTTP_201_CREATED)
 def post_voucher(
     payload: AdminVoucherUpsert,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequirePromotionsAdmin,
     db: Session = Depends(get_db),
 ):
     return create_admin_voucher(db, current_user, payload)
@@ -829,7 +991,7 @@ def post_voucher(
 def patch_voucher(
     voucher_id: str,
     payload: AdminVoucherUpsert,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequirePromotionsAdmin,
     db: Session = Depends(get_db),
 ):
     return update_admin_voucher(db, current_user, voucher_id, payload)
@@ -838,18 +1000,45 @@ def patch_voucher(
 @router.delete("/vouchers/{voucher_id}")
 def remove_voucher(
     voucher_id: str,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequirePromotionsAdmin,
     db: Session = Depends(get_db),
 ):
     archive_admin_voucher(db, current_user, voucher_id)
     return {"success": True}
 
 
+@router.post("/vouchers/{voucher_id}/pause", response_model=AdminVoucherRead)
+def post_pause_voucher(
+    voucher_id: str,
+    current_user: RequirePromotionsAdmin,
+    db: Session = Depends(get_db),
+):
+    return pause_admin_voucher(db, current_user, voucher_id)
+
+
+@router.post("/vouchers/{voucher_id}/resume", response_model=AdminVoucherRead)
+def post_resume_voucher(
+    voucher_id: str,
+    current_user: RequirePromotionsAdmin,
+    db: Session = Depends(get_db),
+):
+    return resume_admin_voucher(db, current_user, voucher_id)
+
+
+@router.post("/vouchers/{voucher_id}/duplicate", response_model=AdminVoucherRead, status_code=status.HTTP_201_CREATED)
+def post_duplicate_voucher(
+    voucher_id: str,
+    current_user: RequirePromotionsAdmin,
+    db: Session = Depends(get_db),
+):
+    return duplicate_admin_voucher(db, current_user, voucher_id)
+
+
 @router.post("/vouchers/{voucher_id}/review", response_model=AdminVoucherRead)
 def post_voucher_review(
     voucher_id: str,
     payload: AdminVoucherReview,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequirePromotionsAdmin,
     db: Session = Depends(get_db),
 ):
     return review_admin_voucher(db, current_user, voucher_id, payload)
@@ -857,7 +1046,7 @@ def post_voucher_review(
 
 @router.get("/vouchers/analytics", response_model=AdminPromotionAnalyticsRead)
 def get_voucher_analytics(
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequirePromotionsAdmin,
     db: Session = Depends(get_db),
 ):
     return get_admin_promotion_analytics(db, current_user)
@@ -866,7 +1055,7 @@ def get_voucher_analytics(
 @router.post("/vouchers/bulk-generate", response_model=list[AdminVoucherRead], status_code=status.HTTP_201_CREATED)
 def post_bulk_vouchers(
     payload: AdminVoucherBulkGenerate,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequirePromotionsAdmin,
     db: Session = Depends(get_db),
 ):
     return bulk_generate_admin_vouchers(db, current_user, payload)

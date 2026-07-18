@@ -504,11 +504,12 @@ def get_similar_product_recommendations(
     *,
     limit: int = 8,
 ) -> RecommendationFeedRead:
+    from app.services.inventory_service import customer_visible_product_filters
+
     anchor = db.scalar(
         select(Product).where(
             Product.id == product_id,
-            Product.is_active.is_(True),
-            Product.status == "active",
+            customer_visible_product_filters(),
         )
     )
     if not anchor:

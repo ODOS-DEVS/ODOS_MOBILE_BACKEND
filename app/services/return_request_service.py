@@ -14,6 +14,7 @@ from app.controllers.notification_controller import create_notification_event
 from app.controllers.order_controller import _broadcast_order_realtime
 from app.controllers.wallet_controller import publish_vendor_wallet_updates, reverse_vendor_wallet_for_return_request
 from app.models import Order, OrderItem, ReturnRequest, User
+from app.services.push_service import dispatch_customer_return_push
 
 SUPPORTED_RETURN_REQUEST_STATUSES = {
     "requested",
@@ -93,12 +94,14 @@ def apply_return_request_status_change(
         record_refund_adjustments(db, request)
         credit_customer_wallet_for_return(db, request)
 
-    create_notification_event(
+    title = _STATUS_COPY.get(status, "Return request updated")
+    body = f"{request.order_item.title}: {status.replace('_', ' ')}."
+    return_event = create_notification_event(
         db,
         request.order.user,
         kind="return_updated",
-        title=_STATUS_COPY.get(status, "Return request updated"),
-        body=f"{request.order_item.title}: {status.replace('_', ' ')}.",
+        title=title,
+        body=body,
         icon="swap-horizontal-outline",
         accent=(
             "warning"
@@ -111,6 +114,13 @@ def apply_return_request_status_change(
         route_type="order",
         route_target_id=str(request.order_id),
         image_key=request.order_item.image_key,
+    )
+    dispatch_customer_return_push(
+        user=request.order.user,
+        title=title,
+        body=body,
+        order_id=request.order_id,
+        notification_event=return_event,
     )
     db.commit()
     db.refresh(request)

@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from sqlalchemy import desc, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.models import CartItem, Order, ReturnRequest, User, Voucher, VoucherAssignment
+from app.models import CartItem, Order, ReturnRequest, Store, User, Voucher, VoucherAssignment
 from app.models.account import SavedAddress
 from app.models.chat import ChatThread, ChatThreadType, SupportChatStatus
 from app.controllers.vendor_controller import fetch_vendor_dashboard
@@ -42,9 +42,18 @@ def build_assistant_user_context(
     user: User | None,
 ) -> tuple[str, AssistantUserSnapshot | None]:
     if user is None:
+        active_store_count = int(
+            db.scalar(
+                select(func.count())
+                .select_from(Store)
+                .where(Store.is_active.is_(True), Store.status == "active")
+            )
+            or 0
+        )
         return (
             "User is browsing as a guest (not signed in). "
-            "They cannot see personal orders, vouchers, or wallet details until they sign in.",
+            "They cannot see personal orders, vouchers, or wallet details until they sign in. "
+            f"Marketplace: {active_store_count} active stores on ODOS.",
             None,
         )
 
@@ -55,6 +64,16 @@ def build_assistant_user_context(
         f"Signed-in user: {user.full_name or user.email}",
         f"Roles: {', '.join(user.roles or ['customer'])}",
     ]
+
+    active_store_count = int(
+        db.scalar(
+            select(func.count())
+            .select_from(Store)
+            .where(Store.is_active.is_(True), Store.status == "active")
+        )
+        or 0
+    )
+    lines.append(f"Marketplace: {active_store_count} active stores on ODOS")
 
     default_address = db.scalar(
         select(SavedAddress)

@@ -61,8 +61,8 @@ class User(Base):
     expo_push_token: Mapped[str | None] = mapped_column(String(255), nullable=True)
     allow_notifications: Mapped[bool] = mapped_column(
         Boolean,
-        default=False,
-        server_default="false",
+        default=True,
+        server_default="true",
         nullable=False,
     )
     discount_notifications: Mapped[bool] = mapped_column(
@@ -73,8 +73,8 @@ class User(Base):
     )
     store_notifications: Mapped[bool] = mapped_column(
         Boolean,
-        default=False,
-        server_default="false",
+        default=True,
+        server_default="true",
         nullable=False,
     )
     vendor_order_notifications: Mapped[bool] = mapped_column(
