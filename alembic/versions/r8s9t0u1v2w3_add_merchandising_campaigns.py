@@ -7,6 +7,7 @@ Create Date: 2026-07-17
 
 from alembic import op
 import sqlalchemy as sa
+from sqlalchemy import inspect
 from sqlalchemy.dialects import postgresql
 
 revision = "r8s9t0u1v2w3"
@@ -16,6 +17,37 @@ depends_on = None
 
 
 def upgrade() -> None:
+    bind = op.get_bind()
+    existing = set(inspect(bind).get_table_names())
+    if "merchandising_campaigns" in existing:
+        # Tables already present (partial deploy / recovery). Still ensure seed rows.
+        op.execute(
+            """
+            INSERT INTO merchandising_campaigns (
+                id, slug, title, subtitle, status, is_active, is_featured, visibility,
+                display_priority, product_sort, hide_out_of_stock
+            )
+            VALUES
+                (gen_random_uuid(), 'christmas', 'Christmas Deals', 'Seasonal holiday offers', 'draft', false, false, 'public', 10, 'manual', true),
+                (gen_random_uuid(), 'easter', 'Easter Offers', 'Seasonal Easter picks', 'draft', false, false, 'public', 20, 'manual', true),
+                (gen_random_uuid(), 'eid', 'Eid Specials', 'Eid celebration deals', 'draft', false, false, 'public', 30, 'manual', true),
+                (gen_random_uuid(), 'valentine', 'Valentine Offers', 'Gifts and romantic picks', 'draft', false, false, 'public', 40, 'manual', true),
+                (gen_random_uuid(), 'black-friday', 'Black Friday Ghana', 'Biggest savings of the year', 'draft', false, false, 'public', 50, 'manual', true),
+                (gen_random_uuid(), 'independence', 'Independence Day Deals', 'Celebrate Ghana Independence', 'draft', false, false, 'public', 60, 'manual', true),
+                (gen_random_uuid(), 'republic-day', 'Republic Day Deals', 'Republic Day specials', 'draft', false, false, 'public', 70, 'manual', true),
+                (gen_random_uuid(), 'back-to-school', 'Back To School', 'School essentials and gear', 'draft', false, false, 'public', 80, 'manual', true),
+                (gen_random_uuid(), 'payday', 'Salary Week Deals', 'Payday marketplace specials', 'draft', false, false, 'public', 90, 'manual', true),
+                (gen_random_uuid(), 'student', 'Student Deals', 'Campus-friendly pricing', 'draft', false, false, 'public', 100, 'manual', true),
+                (gen_random_uuid(), 'free-delivery', 'Free Delivery', 'Campaigns with delivery perks', 'draft', false, false, 'public', 110, 'manual', true),
+                (gen_random_uuid(), 'weekend-market', 'ODOS Weekend Market', 'Weekend marketplace highlights', 'draft', false, false, 'public', 120, 'manual', true),
+                (gen_random_uuid(), 'made-in-ghana', 'Made In Ghana Deals', 'Local makers and brands', 'draft', false, false, 'public', 130, 'manual', true),
+                (gen_random_uuid(), 'campus', 'Campus Deals', 'Deals for campus shoppers', 'draft', false, false, 'public', 140, 'manual', true),
+                (gen_random_uuid(), 'hot-deals', 'Hot Deals Today', 'Trending discounted picks', 'draft', false, false, 'public', 150, 'manual', true)
+            ON CONFLICT (slug) DO NOTHING
+            """
+        )
+        return
+
     op.create_table(
         "merchandising_campaigns",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True, nullable=False),
