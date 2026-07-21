@@ -1448,8 +1448,28 @@ def update_admin_user_status(
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
 
+    if user.id == current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You cannot change your own account status.",
+        )
+
+    if user.role == UserRole.ADMIN:
+        from app.core.admin_permissions import (
+            AdminPermissionLevel,
+            resolve_admin_permission,
+        )
+
+        if resolve_admin_permission(current_user) != AdminPermissionLevel.SUPER_ADMIN:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only a super admin can change another admin's account status.",
+            )
+
     before_active = user.is_active
     user.is_active = payload.account_status == "active"
+    if not user.is_active:
+        user.token_version = int(getattr(user, "token_version", 0) or 0) + 1
     db.commit()
     db.refresh(user)
     log_admin_user_status_change(

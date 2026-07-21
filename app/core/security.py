@@ -19,10 +19,14 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     )
 
 
-def create_access_token(subject: str) -> str:
+def create_access_token(subject: str, *, token_version: int = 0) -> str:
     return create_signed_token(
         subject=subject,
         expires_in_minutes=settings.access_token_expire_minutes,
+        extra_claims={
+            "typ": "access",
+            "tv": int(token_version),
+        },
     )
 
 
@@ -55,6 +59,7 @@ def create_password_reset_token(subject: str, email: str) -> str:
         expires_in_minutes=settings.password_reset_token_expire_minutes,
         extra_claims={
             "purpose": "password_reset",
+            "typ": "password_reset",
             "email": email.lower(),
         },
     )

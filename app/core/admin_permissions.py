@@ -94,7 +94,12 @@ def resolve_admin_permission(user: User) -> AdminPermissionLevel:
             return AdminPermissionLevel(raw)
         except ValueError:
             pass
-    return AdminPermissionLevel.ADMIN
+    # Fail closed: unknown / missing band is least privilege for non–super-admins.
+    # Legacy admins with null permission keep full "admin" via explicit value or
+    # bootstrap which sets super_admin.
+    if not raw:
+        return AdminPermissionLevel.ADMIN
+    return AdminPermissionLevel.ANALYST
 
 
 def admin_has_feature(user: User, feature: str) -> bool:

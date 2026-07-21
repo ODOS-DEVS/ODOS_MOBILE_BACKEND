@@ -24,18 +24,31 @@ def raise_account_blocked() -> None:
     )
 
 
-def get_current_user(
-    token: Annotated[str, Depends(oauth2_scheme)],
-    db: Annotated[Session, Depends(get_db)],
-) -> User:
-    credentials_error = HTTPException(
+def _credentials_error() -> HTTPException:
+    return HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate authentication credentials.",
         headers={"WWW-Authenticate": "Bearer"},
     )
 
+
+def assert_session_token_payload(payload: dict) -> None:
+    """Reject password-reset (and other non-session) JWTs as Bearer credentials."""
+    purpose = payload.get("purpose")
+    token_type = payload.get("typ")
+    if purpose or (token_type and token_type != "access"):
+        raise _credentials_error()
+
+
+def get_current_user(
+    token: Annotated[str, Depends(oauth2_scheme)],
+    db: Annotated[Session, Depends(get_db)],
+) -> User:
+    credentials_error = _credentials_error()
+
     try:
         payload = decode_access_token(token)
+        assert_session_token_payload(payload)
         subject = payload.get("sub")
         if subject is None:
             raise credentials_error
@@ -47,6 +60,8 @@ def get_current_user(
             detail="Session expired. Please sign in again.",
             headers={"WWW-Authenticate": "Bearer"},
         ) from exc
+    except HTTPException:
+        raise
     except (jwt.InvalidTokenError, ValueError) as exc:
         raise credentials_error from exc
 
@@ -56,6 +71,10 @@ def get_current_user(
 
     if not user.is_active:
         raise_account_blocked()
+
+    token_version = int(payload.get("tv") or 0)
+    if int(getattr(user, "token_version", 0) or 0) != token_version:
+        raise credentials_error
 
     return user
 
@@ -69,15 +88,20 @@ def get_optional_current_user(
 
     try:
         payload = decode_access_token(token)
+        assert_session_token_payload(payload)
         subject = payload.get("sub")
         if subject is None:
             return None
         user_id = uuid.UUID(subject)
-    except (jwt.ExpiredSignatureError, jwt.InvalidTokenError, ValueError):
+    except (jwt.ExpiredSignatureError, jwt.InvalidTokenError, ValueError, HTTPException):
         return None
 
     user = db.get(User, user_id)
     if user is None or not user.is_active:
+        return None
+
+    token_version = int(payload.get("tv") or 0)
+    if int(getattr(user, "token_version", 0) or 0) != token_version:
         return None
 
     return user

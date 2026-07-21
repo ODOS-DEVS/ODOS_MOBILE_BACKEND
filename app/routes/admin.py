@@ -125,6 +125,12 @@ from app.schemas.pagination import AdminPageRead
 from app.models import User
 
 RequirePromotionsAdmin = Annotated[User, Depends(require_admin_feature("promotions"))]
+RequireUsersAdmin = Annotated[User, Depends(require_admin_feature("users"))]
+RequireVendorsAdmin = Annotated[User, Depends(require_admin_feature("vendors"))]
+RequireFinanceAdmin = Annotated[User, Depends(require_admin_feature("finance"))]
+RequirePayoutsAdmin = Annotated[User, Depends(require_admin_feature("payouts"))]
+RequireOrdersAdmin = Annotated[User, Depends(require_admin_feature("orders"))]
+RequireDashboardAdmin = Annotated[User, Depends(require_admin_feature("dashboard"))]
 
 from app.schemas.admin import (
     AdminBootstrapStatusRead,
@@ -263,7 +269,7 @@ async def patch_admin_me(
 
 @router.get("/dashboard", response_model=AdminDashboardRead)
 def admin_dashboard(
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequireDashboardAdmin,
     db: Session = Depends(get_db),
 ):
     return get_admin_dashboard(db, current_user)
@@ -271,7 +277,7 @@ def admin_dashboard(
 
 @router.get("/users", response_model=AdminPageRead[AdminUserRead])
 def get_users(
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequireUsersAdmin,
     list_params: AdminListParams,
     db: Session = Depends(get_db),
 ):
@@ -282,7 +288,7 @@ def get_users(
 @router.get("/users/{user_id}", response_model=AdminUserDetailRead)
 def get_user(
     user_id: str,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequireUsersAdmin,
     db: Session = Depends(get_db),
 ):
     return get_admin_user(db, current_user, user_id)
@@ -292,7 +298,7 @@ def get_user(
 def patch_user_status(
     user_id: str,
     payload: AdminUserStatusUpdate,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequireUsersAdmin,
     db: Session = Depends(get_db),
 ):
     return update_admin_user_status(db, current_user, user_id, payload)
@@ -331,7 +337,7 @@ def get_vendor(
 def patch_vendor_status(
     vendor_id: str,
     payload: AdminVendorStatusUpdate,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequireVendorsAdmin,
     db: Session = Depends(get_db),
 ):
     return update_admin_vendor_status(db, current_user, vendor_id, payload)
@@ -339,7 +345,7 @@ def patch_vendor_status(
 
 @router.get("/vendor-applications", response_model=AdminPageRead[VendorApplicationListItem])
 def get_vendor_applications(
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequireVendorsAdmin,
     list_params: AdminListParams,
     db: Session = Depends(get_db),
 ):
@@ -350,7 +356,7 @@ def get_vendor_applications(
 @router.patch("/vendor-applications/{application_id}/approve", response_model=VendorApplicationRead)
 def approve_application(
     application_id: str,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequireVendorsAdmin,
     db: Session = Depends(get_db),
 ):
     return approve_vendor_application(db, current_user, application_id)
@@ -360,7 +366,7 @@ def approve_application(
 def reject_application(
     application_id: str,
     payload: VendorApplicationReviewPayload,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequireVendorsAdmin,
     db: Session = Depends(get_db),
 ):
     return reject_vendor_application(
@@ -1106,7 +1112,7 @@ def patch_review_moderation(
 
 @router.get("/orders", response_model=AdminPageRead[AdminOrderRead])
 def get_orders(
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequireOrdersAdmin,
     list_params: AdminListParams,
     db: Session = Depends(get_db),
 ):
@@ -1116,7 +1122,7 @@ def get_orders(
 
 @router.get("/finance/overview", response_model=AdminFinanceOverviewRead)
 def get_finance_overview(
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequireFinanceAdmin,
     db: Session = Depends(get_db),
 ):
     return get_admin_finance_overview_payload(db, current_user)
@@ -1124,7 +1130,7 @@ def get_finance_overview(
 
 @router.get("/finance/payments", response_model=AdminPageRead[AdminPaymentTransactionRead])
 def get_finance_payments(
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequireFinanceAdmin,
     list_params: AdminListParams,
     db: Session = Depends(get_db),
 ):
@@ -1134,7 +1140,7 @@ def get_finance_payments(
 
 @router.get("/finance/ledger", response_model=AdminPageRead[AdminPlatformLedgerEntryRead])
 def get_finance_ledger(
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequireFinanceAdmin,
     list_params: AdminListParams,
     db: Session = Depends(get_db),
 ):
@@ -1195,7 +1201,7 @@ def patch_return_request(
     response_model=AdminPageRead[AdminVendorWithdrawalRequestRead],
 )
 def get_vendor_withdrawal_requests(
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequirePayoutsAdmin,
     list_params: AdminListParams,
     db: Session = Depends(get_db),
 ):
@@ -1210,7 +1216,7 @@ def get_vendor_withdrawal_requests(
 def patch_vendor_withdrawal_request(
     request_id: str,
     payload: AdminVendorWithdrawalUpdate,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequirePayoutsAdmin,
     db: Session = Depends(get_db),
 ):
     return update_admin_vendor_withdrawal_request(

@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.controllers.notification_controller import create_notification_event
 from app.core.auth import raise_account_blocked
 from app.core.config import settings
 from app.core.event_types import (
@@ -444,8 +445,15 @@ def google_auth_user(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Google account email is not verified.",
             )
+        # Prevent takeover of unverified email/password accounts via Google.
         if not user.is_verified:
-            user.is_verified = True
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "An account with this email already exists but is not verified. "
+                    "Sign in with your password and verify your email first."
+                ),
+            )
         _apply_google_avatar(user, avatar_url)
     else:
         imported_avatar = import_avatar_from_url(avatar_url) if avatar_url else None
@@ -519,7 +527,10 @@ def build_auth_token(
         user_agent=request_user_agent(request),
     )
 
-    access_token = create_access_token(subject=str(user.id))
+    access_token = create_access_token(
+        subject=str(user.id),
+        token_version=int(getattr(user, "token_version", 0) or 0),
+    )
     return AuthToken(
         access_token=access_token,
         expires_in=settings.access_token_expire_minutes * 60,
@@ -594,7 +605,8 @@ def request_password_reset(
     normalized_email = payload.email.lower()
     user = db.scalar(select(User).where(User.email == normalized_email))
 
-    if not user or not user.is_active or not user.hashed_password:
+    # Allow Google-only accounts (no password yet) to set one via email OTP.
+    if not user or not user.is_active:
         return MessageResponse(
             message="If that email is registered, a reset code is on the way."
         )
@@ -633,6 +645,10 @@ def verify_password_reset_code(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="That reset code is not correct.",
         )
+
+    # One-time OTP: clear before minting the reset JWT.
+    _clear_password_reset_code(user)
+    db.commit()
 
     reset_token = create_password_reset_token(
         subject=str(user.id),
@@ -678,6 +694,7 @@ def reset_password(
         )
 
     user.hashed_password = hash_password(payload.new_password)
+    user.token_version = int(getattr(user, "token_version", 0) or 0) + 1
     _clear_password_reset_code(user)
     create_notification_event(
         db,

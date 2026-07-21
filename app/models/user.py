@@ -8,6 +8,7 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    Integer,
     String,
     UniqueConstraint,
     func,
@@ -233,6 +234,12 @@ class User(Base):
     password_reset_sent_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
+    )
+    token_version: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        server_default="0",
+        nullable=False,
     )
     last_login_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),

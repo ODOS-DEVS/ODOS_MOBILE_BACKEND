@@ -17,6 +17,11 @@ def _resolve_websocket_user_id(token: str | None) -> uuid.UUID | None:
 
     try:
         payload = decode_access_token(token)
+        # Reject password-reset JWTs (same rule as Bearer auth).
+        if payload.get("purpose") or (
+            payload.get("typ") and payload.get("typ") != "access"
+        ):
+            return None
         subject = payload.get("sub")
         if subject is None:
             return None
