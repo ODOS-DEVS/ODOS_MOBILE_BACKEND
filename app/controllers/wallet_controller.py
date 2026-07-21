@@ -23,11 +23,11 @@ from app.models import (
     Store,
     User,
     UserRole,
-    VendorStatus,
     VendorWallet,
     VendorWalletTransaction,
     VendorWithdrawalRequest,
 )
+from app.services.push_service import vendor_wants_payout_notify
 from app.schemas.admin import (
     AdminVendorWithdrawalRequestRead,
     AdminVendorWithdrawalUpdate,
@@ -66,14 +66,11 @@ PAYOUT_METHOD_TO_RECIPIENT_TYPE = {
 
 
 def _require_approved_vendor(current_user: User) -> None:
-    if (
-        current_user.role == UserRole.CUSTOMER
-        or current_user.vendor_status != VendorStatus.APPROVED
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Your vendor wallet is only available to approved vendors.",
-        )
+    # Lazy import avoids a circular import: vendor_controller imports helpers
+    # from this module at module load time.
+    from app.controllers.vendor_controller import require_vendor_access
+
+    require_vendor_access(current_user)
 
 
 def _mask_account_number(value: str | None) -> str | None:
@@ -635,20 +632,21 @@ def create_vendor_withdrawal_request(
         )
     )
 
-    create_notification_event(
-        db,
-        current_user,
-        kind="withdrawal_requested",
-        title="Withdrawal request submitted",
-        body=(
-            f"We've queued your {wallet.currency} {amount:.2f} withdrawal for review."
-        ),
-        icon="cash-outline",
-        accent="neutral",
-        action_label="View wallet",
-        route_type="vendor_wallet",
-        route_target_id=str(wallet.id),
-    )
+    if vendor_wants_payout_notify(current_user):
+        create_notification_event(
+            db,
+            current_user,
+            kind="withdrawal_requested",
+            title="Withdrawal request submitted",
+            body=(
+                f"We've queued your {wallet.currency} {amount:.2f} withdrawal for review."
+            ),
+            icon="cash-outline",
+            accent="neutral",
+            action_label="View wallet",
+            route_type="vendor_wallet",
+            route_target_id=str(wallet.id),
+        )
     db.commit()
     refreshed_wallet = _load_vendor_wallet(db, current_user.id)
     publish_vendor_wallet_updates(current_user.id)
@@ -820,21 +818,22 @@ def reconcile_paystack_transfer_event(
 
     if event_type == "transfer.success" or event_status == "success":
         _mark_withdrawal_paid(db, request)
-        create_notification_event(
-            db,
-            request.vendor_user,
-            kind="withdrawal_updated",
-            title="Withdrawal paid out",
-            body=(
-                f"Your {request.wallet.currency} {request.amount:.2f} withdrawal "
-                "has been sent successfully."
-            ),
-            icon="cash-outline",
-            accent="success",
-            action_label="View wallet",
-            route_type="vendor_wallet",
-            route_target_id=str(request.wallet.id),
-        )
+        if vendor_wants_payout_notify(request.vendor_user):
+            create_notification_event(
+                db,
+                request.vendor_user,
+                kind="withdrawal_updated",
+                title="Withdrawal paid out",
+                body=(
+                    f"Your {request.wallet.currency} {request.amount:.2f} withdrawal "
+                    "has been sent successfully."
+                ),
+                icon="cash-outline",
+                accent="success",
+                action_label="View wallet",
+                route_type="vendor_wallet",
+                route_target_id=str(request.wallet.id),
+            )
     elif event_type in {"transfer.failed", "transfer.reversed"} or event_status in {
         "failed",
         "reversed",
@@ -852,22 +851,23 @@ def reconcile_paystack_transfer_event(
             transaction_kind="withdrawal_failed",
             transaction_title="Withdrawal returned after transfer failure",
         )
-        create_notification_event(
-            db,
-            request.vendor_user,
-            kind="withdrawal_updated",
-            title="Withdrawal transfer failed",
-            body=(
-                f"ODOS could not complete your {request.wallet.currency} "
-                f"{request.amount:.2f} transfer, so the money has been returned "
-                "to your available wallet balance."
-            ),
-            icon="alert-circle-outline",
-            accent="warning",
-            action_label="View wallet",
-            route_type="vendor_wallet",
-            route_target_id=str(request.wallet.id),
-        )
+        if vendor_wants_payout_notify(request.vendor_user):
+            create_notification_event(
+                db,
+                request.vendor_user,
+                kind="withdrawal_updated",
+                title="Withdrawal transfer failed",
+                body=(
+                    f"ODOS could not complete your {request.wallet.currency} "
+                    f"{request.amount:.2f} transfer, so the money has been returned "
+                    "to your available wallet balance."
+                ),
+                icon="alert-circle-outline",
+                accent="warning",
+                action_label="View wallet",
+                route_type="vendor_wallet",
+                route_target_id=str(request.wallet.id),
+            )
     else:
         request.status = "processing"
 
@@ -1081,18 +1081,19 @@ def update_admin_vendor_withdrawal_request(
         message_body = f"Your {wallet.currency} {request.amount:.2f} withdrawal is now {next_status}."
         accent = "neutral"
 
-    create_notification_event(
-        db,
-        request.vendor_user,
-        kind="withdrawal_updated",
-        title=message_title,
-        body=message_body,
-        icon="cash-outline",
-        accent=accent,
-        action_label="View wallet",
-        route_type="vendor_wallet",
-        route_target_id=str(wallet.id),
-    )
+    if vendor_wants_payout_notify(request.vendor_user):
+        create_notification_event(
+            db,
+            request.vendor_user,
+            kind="withdrawal_updated",
+            title=message_title,
+            body=message_body,
+            icon="cash-outline",
+            accent=accent,
+            action_label="View wallet",
+            route_type="vendor_wallet",
+            route_target_id=str(wallet.id),
+        )
 
     db.commit()
     refreshed_request = db.scalar(

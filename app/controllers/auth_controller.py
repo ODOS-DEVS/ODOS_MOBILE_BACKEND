@@ -857,6 +857,15 @@ def update_user_profile(db: Session, user: User, payload: UserUpdate) -> User:
     for field, value in updates.items():
         setattr(user, field, value)
 
+    # `vendor_notify_orders` is the source of truth going forward, but the
+    # legacy `vendor_order_notifications` column is still read directly by
+    # SQL queries (e.g. the vendor order reminder sweep) and older mobile
+    # builds, so keep both in sync no matter which one the client sent.
+    if "vendor_notify_orders" in updates:
+        user.vendor_order_notifications = user.vendor_notify_orders
+    elif "vendor_order_notifications" in updates:
+        user.vendor_notify_orders = user.vendor_order_notifications
+
     try:
         db.commit()
         db.refresh(user)

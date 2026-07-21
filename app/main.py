@@ -1,9 +1,13 @@
 from pathlib import Path
 import asyncio
+import logging
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.core.config import settings
 from app.middleware.event_logging import EventLoggingMiddleware
@@ -36,6 +40,41 @@ from app.services.vendor_order_reminder_service import process_vendor_order_remi
 app = FastAPI(title="ODOS Mobile Backend")
 
 VENDOR_REMINDER_INTERVAL_SECONDS = 180
+logger = logging.getLogger(__name__)
+
+
+def _detail_to_message(detail: object) -> str:
+    if isinstance(detail, str) and detail.strip():
+        return detail.strip()
+    if isinstance(detail, list) and detail:
+        first = detail[0]
+        if isinstance(first, dict):
+            msg = first.get("msg")
+            if isinstance(msg, str) and msg.strip():
+                return msg.strip()
+        return "Please check the submitted values."
+    if isinstance(detail, dict):
+        message = detail.get("message")
+        if isinstance(message, str) and message.strip():
+            return message.strip()
+    return "Something went wrong."
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(_: Request, exc: StarletteHTTPException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": _detail_to_message(exc.detail)},
+        headers=getattr(exc, "headers", None),
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(_: Request, exc: RequestValidationError):
+    return JSONResponse(
+        status_code=422,
+        content={"detail": _detail_to_message(exc.errors())},
+    )
 
 
 async def _vendor_order_reminder_loop() -> None:

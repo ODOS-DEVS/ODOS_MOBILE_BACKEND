@@ -46,7 +46,11 @@ def build_assistant_user_context(
             db.scalar(
                 select(func.count())
                 .select_from(Store)
-                .where(Store.is_active.is_(True), Store.status == "active")
+                .where(
+                    Store.is_active.is_(True),
+                    Store.status == "active",
+                    Store.is_on_vacation.is_(False),
+                )
             )
             or 0
         )
@@ -69,7 +73,11 @@ def build_assistant_user_context(
         db.scalar(
             select(func.count())
             .select_from(Store)
-            .where(Store.is_active.is_(True), Store.status == "active")
+            .where(
+                Store.is_active.is_(True),
+                Store.status == "active",
+                Store.is_on_vacation.is_(False),
+            )
         )
         or 0
     )

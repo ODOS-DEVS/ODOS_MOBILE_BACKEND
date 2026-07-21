@@ -271,6 +271,7 @@ def list_stores(
     statement: Select[tuple[Store]] = select(Store).where(
         Store.is_active.is_(True),
         Store.status == "active",
+        Store.is_on_vacation.is_(False),
     )
 
     if market_slug:
@@ -293,6 +294,7 @@ def get_store(db: Session, store_id: str) -> Store | None:
             Store.id == store_id,
             Store.is_active.is_(True),
             Store.status == "active",
+            Store.is_on_vacation.is_(False),
         )
     )
 

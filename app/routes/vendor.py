@@ -1,12 +1,14 @@
+import json
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.controllers.campaign_controller import (
     create_vendor_campaign_opt_in,
+    list_vendor_campaign_opt_ins,
     list_vendor_open_campaigns,
 )
 from app.controllers.flash_sale_nominations_controller import (
@@ -17,6 +19,7 @@ from app.schemas.admin import AdminMerchandisingCampaignOptInRead
 from app.schemas.catalog import MerchandisingCampaignRead
 from app.controllers.vendor_controller import (
     archive_vendor_voucher,
+    bulk_update_vendor_products,
     create_vendor_voucher,
     create_vendor_product,
     delete_vendor_product,
@@ -29,13 +32,17 @@ from app.controllers.vendor_controller import (
     acknowledge_vendor_order,
     fetch_vendor_analytics,
     get_vendor_return_request,
+    list_vendor_customers,
     list_vendor_orders,
+    list_vendor_product_inventory_movements,
     list_vendor_products,
     list_vendor_return_requests,
+    list_vendor_reviews,
     list_vendor_voucher_redemptions,
     list_vendor_vouchers,
     patch_vendor_product_stock,
     patch_vendor_return_request,
+    reply_to_vendor_review,
     submit_vendor_application,
     update_vendor_order_status,
     update_vendor_product,
@@ -56,9 +63,12 @@ from app.schemas.user import MessageResponse
 from app.schemas.vendor import (
     VendorAnalyticsRead,
     VendorApplicationRead,
+    VendorCustomerRead,
     VendorDashboardRead,
+    VendorInventoryMovementRead,
     VendorOrderRead,
     VendorOrderStatusUpdate,
+    VendorProductBulkUpdate,
     VendorProductCreate,
     VendorProductRead,
     VendorProductStatusUpdate,
@@ -67,6 +77,8 @@ from app.schemas.vendor import (
     VendorProfileRead,
     VendorReturnRequestRead,
     VendorReturnRequestUpdate,
+    VendorReviewReplyUpdate,
+    VendorReviewRead,
     VendorStoreRead,
     VendorVoucherGiftPayload,
     VendorVoucherRead,
@@ -207,8 +219,41 @@ def get_vendor_dashboard(
 def get_vendor_analytics(
     current_user: Annotated[User, Depends(get_current_user)],
     db: Session = Depends(get_db),
+    period: Annotated[str, Query(max_length=10)] = "30d",
 ):
-    return fetch_vendor_analytics(db, current_user)
+    return fetch_vendor_analytics(db, current_user, period=period)
+
+
+@router.get("/reviews", response_model=list[VendorReviewRead])
+def get_vendor_reviews(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+    q: Annotated[str | None, Query(max_length=160)] = None,
+    limit: Annotated[int | None, Query(ge=1, le=100)] = None,
+    offset: Annotated[int | None, Query(ge=0)] = None,
+):
+    return list_vendor_reviews(db, current_user, q=q, limit=limit, offset=offset)
+
+
+@router.patch("/reviews/{review_id}/reply", response_model=VendorReviewRead)
+def patch_vendor_review_reply(
+    review_id: str,
+    payload: VendorReviewReplyUpdate,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return reply_to_vendor_review(db, current_user, review_id, payload)
+
+
+@router.get("/customers", response_model=list[VendorCustomerRead])
+def get_vendor_customers(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+    q: Annotated[str | None, Query(max_length=160)] = None,
+    limit: Annotated[int | None, Query(ge=1, le=100)] = None,
+    offset: Annotated[int | None, Query(ge=0)] = None,
+):
+    return list_vendor_customers(db, current_user, q=q, limit=limit, offset=offset)
 
 
 @router.get("/returns", response_model=list[VendorReturnRequestRead])
@@ -280,8 +325,11 @@ def post_vendor_wallet_withdrawal(
 def get_vendor_products(
     current_user: Annotated[User, Depends(get_current_user)],
     db: Session = Depends(get_db),
+    q: Annotated[str | None, Query(max_length=160)] = None,
+    limit: Annotated[int | None, Query(ge=1, le=100)] = None,
+    offset: Annotated[int | None, Query(ge=0)] = None,
 ):
-    return list_vendor_products(db, current_user)
+    return list_vendor_products(db, current_user, q=q, limit=limit, offset=offset)
 
 
 @router.post("/products", response_model=VendorProductRead, status_code=status.HTTP_201_CREATED)
@@ -323,6 +371,21 @@ async def add_vendor_product(
         is_returnable=is_returnable,
     )
     return await create_vendor_product(db, current_user, payload, images)
+
+
+@router.patch("/products/bulk", response_model=list[VendorProductRead])
+def patch_vendor_products_bulk(
+    payload: VendorProductBulkUpdate,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return bulk_update_vendor_products(
+        db,
+        current_user,
+        product_ids=payload.product_ids,
+        stock=payload.stock,
+        status=payload.status,
+    )
 
 
 @router.patch("/products/{product_id}", response_model=VendorProductRead)
@@ -401,12 +464,35 @@ def patch_vendor_product_stock_route(
     return patch_vendor_product_stock(db, current_user, product_id, payload.stock)
 
 
+@router.get(
+    "/products/{product_id}/inventory-movements",
+    response_model=list[VendorInventoryMovementRead],
+)
+def get_vendor_product_inventory_movements(
+    product_id: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+    limit: Annotated[int | None, Query(ge=1, le=100)] = 30,
+    offset: Annotated[int | None, Query(ge=0)] = 0,
+):
+    return list_vendor_product_inventory_movements(
+        db,
+        current_user,
+        product_id,
+        limit=limit,
+        offset=offset,
+    )
+
+
 @router.get("/orders", response_model=list[VendorOrderRead])
 def get_vendor_orders(
     current_user: Annotated[User, Depends(get_current_user)],
     db: Session = Depends(get_db),
+    q: Annotated[str | None, Query(max_length=160)] = None,
+    limit: Annotated[int | None, Query(ge=1, le=100)] = None,
+    offset: Annotated[int | None, Query(ge=0)] = None,
 ):
-    return list_vendor_orders(db, current_user)
+    return list_vendor_orders(db, current_user, q=q, limit=limit, offset=offset)
 
 
 @router.get("/orders/{order_id}", response_model=VendorOrderRead)
@@ -520,6 +606,17 @@ def get_vendor_open_merchandising_campaigns(
     return list_vendor_open_campaigns(db, current_user)
 
 
+@router.get(
+    "/merchandising-campaign-opt-ins",
+    response_model=list[AdminMerchandisingCampaignOptInRead],
+)
+def get_vendor_merchandising_campaign_opt_ins(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return list_vendor_campaign_opt_ins(db, current_user)
+
+
 @router.post(
     "/merchandising-campaign-opt-ins",
     response_model=AdminMerchandisingCampaignOptInRead,
@@ -577,9 +674,25 @@ async def patch_vendor_store(
     twitter_url: Annotated[str | None, Form(max_length=255)] = None,
     whatsapp_url: Annotated[str | None, Form(max_length=255)] = None,
     website_url: Annotated[str | None, Form(max_length=255)] = None,
+    is_on_vacation: Annotated[bool | None, Form()] = None,
+    vacation_message: Annotated[str | None, Form(max_length=500)] = None,
+    business_hours: Annotated[str | None, Form(max_length=4000)] = None,
     logo_image: UploadFile | None = File(default=None),
     banner_image: UploadFile | None = File(default=None),
 ):
+    business_hours_provided = business_hours is not None
+    parsed_business_hours: dict | None = None
+    if business_hours_provided:
+        cleaned_business_hours = business_hours.strip()
+        if cleaned_business_hours:
+            try:
+                parsed_business_hours = json.loads(cleaned_business_hours)
+            except json.JSONDecodeError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="business_hours must be valid JSON.",
+                ) from exc
+
     return await update_vendor_store(
         db,
         current_user,
@@ -600,6 +713,10 @@ async def patch_vendor_store(
         website_url=website_url,
         region=region,
         city=city,
+        is_on_vacation=is_on_vacation,
+        vacation_message=vacation_message,
+        business_hours=parsed_business_hours,
+        business_hours_provided=business_hours_provided,
         logo_image=logo_image,
         banner_image=banner_image,
     )

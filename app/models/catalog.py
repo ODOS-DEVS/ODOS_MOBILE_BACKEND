@@ -3,7 +3,7 @@ from datetime import datetime
 import uuid
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, func
-from sqlalchemy.dialects.postgresql import ARRAY, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -172,6 +172,14 @@ class Store(Base):
         nullable=True,
         index=True,
     )
+    is_on_vacation: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default="false",
+        nullable=False,
+    )
+    vacation_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    business_hours: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     is_active: Mapped[bool] = mapped_column(
         Boolean,

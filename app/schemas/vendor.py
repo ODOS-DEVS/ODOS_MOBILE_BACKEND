@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.models import VendorStatus
 
@@ -81,13 +81,57 @@ class VendorDashboardRead(BaseModel):
     total_products: int
     active_products: int
     pending_orders: int
+    processing_orders: int = 0
     completed_orders: int
+    cancelled_orders: int = 0
     total_sales: float
+    today_sales: float = 0
+    today_orders: int = 0
+    low_stock_count: int = 0
+    out_of_stock_count: int = 0
+    avg_rating: float | None = None
+    review_count: int = 0
+    customer_count: int = 0
     currency: str = "GHS"
     available_balance: float = 0
     pending_withdrawal_balance: float = 0
     lifetime_earnings: float = 0
     total_commission: float = 0
+    active_voucher_count: int = 0
+    is_on_vacation: bool = False
+
+
+class VendorReviewRead(BaseModel):
+    id: uuid.UUID
+    product_id: str
+    product_title: str
+    product_image_url: str | None = None
+    rating: float
+    comment: str
+    customer_name: str | None = None
+    is_hidden: bool = False
+    vendor_reply: str | None = None
+    vendor_replied_at: datetime | None = None
+    created_at: datetime
+
+
+class VendorReviewReplyUpdate(BaseModel):
+    reply: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("reply", mode="before")
+    @classmethod
+    def strip_reply(cls, value: str) -> str:
+        return value.strip()
+
+
+class VendorCustomerRead(BaseModel):
+    customer_key: str
+    customer_name: str
+    customer_phone: str | None = None
+    order_count: int
+    total_spent: float
+    last_order_at: datetime | None = None
+    currency: str = "GHS"
 
 
 class VendorStoreRead(BaseModel):
@@ -115,6 +159,9 @@ class VendorStoreRead(BaseModel):
     banner_image_url: str | None
     logo_image_url: str | None
     status: str
+    is_on_vacation: bool = False
+    vacation_message: str | None = None
+    business_hours: dict | None = None
 
 
 class VendorVoucherRead(BaseModel):
@@ -475,6 +522,31 @@ class VendorProductStockUpdate(BaseModel):
     stock: int = Field(ge=0)
 
 
+class VendorProductBulkUpdate(BaseModel):
+    product_ids: list[str] = Field(min_length=1, max_length=50)
+    stock: int | None = Field(default=None, ge=0)
+    status: str | None = Field(default=None, max_length=30)
+
+    @model_validator(mode="after")
+    def require_stock_or_status(self) -> "VendorProductBulkUpdate":
+        if self.stock is None and not (self.status or "").strip():
+            raise ValueError("Provide stock and/or status for bulk update.")
+        return self
+
+
+class VendorInventoryMovementRead(BaseModel):
+    id: uuid.UUID
+    product_id: str
+    delta: int
+    stock_after: int
+    reason: str
+    reference_type: str | None = None
+    reference_id: str | None = None
+    note: str | None = None
+    created_at: datetime
+    created_by_user_id: uuid.UUID | None = None
+
+
 class VendorProductRead(BaseModel):
     id: str
     store_id: str
@@ -488,6 +560,8 @@ class VendorProductRead(BaseModel):
     old_price: int | None = None
     discount: str | None = None
     stock: int
+    reserved_stock: int = 0
+    available_stock: int = 0
     image_key: str
     image_url: str | None
     image_urls: list[str] | None = None
@@ -576,11 +650,21 @@ class VendorTopProductRead(BaseModel):
     gross_sales: float
 
 
+class VendorAnalyticsDailyPoint(BaseModel):
+    date: str
+    sales: float
+    orders: int
+
+
 class VendorAnalyticsRead(BaseModel):
     currency: str = "GHS"
+    period: str = "30d"
     today_sales: float
     week_sales: float
     today_orders: int
     week_orders: int
+    period_sales: float = 0
+    period_orders: int = 0
     open_returns: int
     top_products: list[VendorTopProductRead]
+    daily_points: list[VendorAnalyticsDailyPoint] = []

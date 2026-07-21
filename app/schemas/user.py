@@ -208,6 +208,10 @@ class UserUpdate(BaseModel):
     discount_notifications: bool | None = None
     store_notifications: bool | None = None
     vendor_order_notifications: bool | None = None
+    vendor_notify_orders: bool | None = None
+    vendor_notify_inventory: bool | None = None
+    vendor_notify_reviews: bool | None = None
+    vendor_notify_payouts: bool | None = None
     system_notifications: bool | None = None
     location_notifications: bool | None = None
     location_updates: bool | None = None
@@ -246,6 +250,10 @@ class UserRead(BaseModel):
     discount_notifications: bool
     store_notifications: bool
     vendor_order_notifications: bool
+    vendor_notify_orders: bool
+    vendor_notify_inventory: bool
+    vendor_notify_reviews: bool
+    vendor_notify_payouts: bool
     system_notifications: bool
     location_notifications: bool
     location_updates: bool

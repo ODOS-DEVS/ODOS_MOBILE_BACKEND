@@ -11,7 +11,11 @@ from app.controllers.vendor_controller import VENDOR_ACTIVE_ORDER_STATUSES, list
 from app.core.database import SessionLocal
 from app.models import NotificationEvent, Order, User
 from app.models.user import UserRole, VendorStatus
-from app.services.push_service import build_push_data, send_vendor_order_push
+from app.services.push_service import (
+    build_push_data,
+    send_vendor_order_push,
+    vendor_wants_order_notify,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +54,6 @@ def process_vendor_order_reminders() -> None:
                 select(User).where(
                     User.vendor_status == VendorStatus.APPROVED,
                     User.allow_notifications.is_(True),
-                    User.vendor_order_notifications.is_(True),
                 )
             ).all()
         )
@@ -59,6 +62,8 @@ def process_vendor_order_reminders() -> None:
 
         for vendor in vendors:
             if UserRole.VENDOR.value not in vendor.roles:
+                continue
+            if not vendor_wants_order_notify(vendor):
                 continue
 
             vendor_orders = [

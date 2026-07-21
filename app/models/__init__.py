@@ -23,6 +23,7 @@ from app.models.catalog import (
     Store,
 )
 from app.models.delivery_settings import DeliverySettings
+from app.models.inventory import InventoryMovement
 from app.models.order import Order, OrderItem, ReturnRequest, Review
 from app.models.payment import (
     PaymentTransaction,
@@ -71,6 +72,7 @@ __all__ = [
     "CustomerWalletTopUp",
     "CustomerWalletTransaction",
     "DeliverySettings",
+    "InventoryMovement",
     "SupportChatStatus",
     "Market",
     "MerchandisingCampaign",

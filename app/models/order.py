@@ -287,6 +287,8 @@ class Review(Base):
         nullable=True,
         index=True,
     )
+    vendor_reply: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    vendor_replied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

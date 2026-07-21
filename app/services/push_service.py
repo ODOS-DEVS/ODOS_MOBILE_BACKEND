@@ -138,18 +138,34 @@ def build_push_data(
 
 
 def can_receive_vendor_order_alerts(user: User) -> bool:
+    notify_orders = getattr(user, "vendor_notify_orders", None)
+    if notify_orders is None:
+        notify_orders = user.vendor_order_notifications
     return bool(
         user.expo_push_token
         and user.allow_notifications
-        and user.vendor_order_notifications
+        and notify_orders
     )
+
+
+def vendor_wants_order_notify(user: User) -> bool:
+    notify_orders = getattr(user, "vendor_notify_orders", None)
+    if notify_orders is None:
+        return bool(user.vendor_order_notifications)
+    return bool(notify_orders)
+
+
+def vendor_wants_payout_notify(user: User) -> bool:
+    return bool(getattr(user, "vendor_notify_payouts", True))
+
+
+def vendor_wants_review_notify(user: User) -> bool:
+    return bool(getattr(user, "vendor_notify_reviews", True))
 
 
 def can_receive_vendor_chat_alerts(user: User) -> bool:
     return bool(
-        user.expo_push_token
-        and user.allow_notifications
-        and user.store_notifications
+        user.expo_push_token and user.allow_notifications and user.store_notifications
     )
 
 
@@ -196,9 +212,7 @@ def send_expo_push_notification(
 
 def can_receive_customer_chat_alerts(user: User) -> bool:
     return bool(
-        user.expo_push_token
-        and user.allow_notifications
-        and user.store_notifications
+        user.expo_push_token and user.allow_notifications and user.store_notifications
     )
 
 

@@ -3,11 +3,11 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 from fastapi import HTTPException, UploadFile, status
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
-from app.core.admin_pagination import paginate_scalars
+from app.core.admin_pagination import normalize_page_params, paginate_scalars
 from app.schemas.pagination import AdminPageRead
 from app.controllers.notification_controller import create_notification_event
 from app.services.push_service import (
@@ -32,6 +32,7 @@ from app.models import (
     OrderItem,
     Product,
     ReturnRequest,
+    Review,
     Store,
     User,
     UserRole,
@@ -42,19 +43,25 @@ from app.models import (
     Voucher,
     VoucherRedemption,
 )
+from app.services.inventory_service import LOW_STOCK_THRESHOLD
 from app.services.finance_math import vendor_allocation_map
 from app.schemas.vendor import (
+    VendorAnalyticsDailyPoint,
     VendorAnalyticsRead,
     VendorApplicationListItem,
     VendorApplicationRead,
+    VendorCustomerRead,
     VendorDashboardRead,
     VendorOrderItemRead,
     VendorOrderRead,
     VendorOrderStatusUpdate,
     VendorReturnRequestRead,
+    VendorReviewReplyUpdate,
+    VendorReviewRead,
     VendorTopProductRead,
     VendorProductCreate,
     VendorProductRead,
+    VendorInventoryMovementRead,
     VendorProductUpdate,
     VendorProfileRead,
     VendorStoreRead,
@@ -78,13 +85,16 @@ from app.services.delivery_service import (
 logger = logging.getLogger(__name__)
 VENDOR_ACTIVE_ORDER_STATUSES = {"pending", "confirmed", "processing", "ready", "out_for_delivery"}
 VENDOR_OPEN_RETURN_STATUSES = {"requested", "under_review", "approved"}
-VENDOR_ANALYTICS_ORDER_STATUSES = {
+# Canonical countable sales statuses for dashboard + analytics (keep in sync).
+VENDOR_SALES_ORDER_STATUSES = {
     "confirmed",
     "processing",
     "ready",
     "out_for_delivery",
     "delivered",
 }
+VENDOR_ANALYTICS_ORDER_STATUSES = VENDOR_SALES_ORDER_STATUSES
+VENDOR_CANCELLED_ORDER_STATUSES = {"cancelled", "canceled", "refunded"}
 VENDOR_ALLOWED_STATUSES = {
     "pending",
     "confirmed",
@@ -291,10 +301,19 @@ def serialize_vendor_store(store: Store) -> VendorStoreRead:
         banner_image_url=store.image_banner_url,
         logo_image_url=store.image_url,
         status=store.status,
+        is_on_vacation=store.is_on_vacation,
+        vacation_message=store.vacation_message,
+        business_hours=store.business_hours,
     )
 
 
-def serialize_vendor_product(product: Product) -> VendorProductRead:
+def serialize_vendor_product(
+    product: Product,
+    *,
+    reserved_stock: int | None = None,
+) -> VendorProductRead:
+    on_hand = int(product.stock or 0)
+    reserved = int(reserved_stock or 0)
     return VendorProductRead(
         id=product.id,
         store_id=product.store_id or "",
@@ -307,7 +326,9 @@ def serialize_vendor_product(product: Product) -> VendorProductRead:
         price=product.price,
         old_price=product.old_price,
         discount=product.discount,
-        stock=product.stock,
+        stock=on_hand,
+        reserved_stock=reserved,
+        available_stock=max(0, on_hand - reserved),
         image_key=product.image_key,
         image_url=product.image_url,
         image_urls=product.image_urls,
@@ -358,6 +379,7 @@ def broadcast_catalog_store_change(store: Store) -> None:
             "market_slug": store.market_slug,
             "category": store.category,
             "audience_slugs": store.audience_slugs,
+            "is_on_vacation": store.is_on_vacation,
         },
     )
 
@@ -477,10 +499,21 @@ def _serialize_vendor_return_request(request: ReturnRequest) -> VendorReturnRequ
 
 
 def list_vendor_orders_payloads(db: Session, user: User) -> list[VendorOrderRead]:
+    order_ids = list(
+        db.scalars(
+            select(OrderItem.order_id)
+            .where(OrderItem.vendor_user_id == user.id)
+            .distinct()
+        ).all()
+    )
+    if not order_ids:
+        return []
+
     orders = list(
         db.scalars(
             select(Order)
             .options(selectinload(Order.items), selectinload(Order.user))
+            .where(Order.id.in_(order_ids))
             .order_by(Order.placed_at.desc(), Order.created_at.desc())
         ).all()
     )
@@ -695,23 +728,83 @@ def fetch_vendor_dashboard(db: Session, user: User) -> VendorDashboardRead:
         select(VendorWallet).where(VendorWallet.vendor_user_id == user.id)
     )
 
+    now = datetime.now(UTC)
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    today_orders = [
+        order
+        for order in orders
+        if (order.placed_at or order.created_at) >= today_start
+        and order.status in VENDOR_SALES_ORDER_STATUSES
+    ]
+
+    review_stats = db.execute(
+        select(func.count(Review.id), func.avg(Review.rating))
+        .join(Product, Product.id == Review.product_id)
+        .where(
+            Product.vendor_user_id == user.id,
+            Review.is_hidden.is_(False),
+        )
+    ).one()
+    review_count = int(review_stats[0] or 0)
+    avg_rating = round(float(review_stats[1]), 2) if review_stats[1] is not None else None
+
+    customer_keys = {
+        (order.customer_phone or "").strip() or (order.customer_name or "").strip().lower()
+        for order in orders
+        if order.status not in VENDOR_CANCELLED_ORDER_STATUSES
+        and (order.customer_phone or order.customer_name)
+    }
+    customer_keys.discard("")
+
+    active_voucher_count = int(
+        db.scalar(
+            select(func.count(Voucher.id)).where(
+                Voucher.scope == "store",
+                Voucher.store_id == store.id,
+                Voucher.owner_type == "vendor",
+                Voucher.is_active.is_(True),
+                Voucher.approval_status == "approved",
+            )
+        )
+        or 0
+    )
+
     return VendorDashboardRead(
         store_name=store.title,
         vendor_status=user.vendor_status,
+        active_voucher_count=active_voucher_count,
+        is_on_vacation=bool(store.is_on_vacation),
         total_products=len(products),
         active_products=sum(1 for product in products if product.status == "active"),
         pending_orders=sum(
             1 for order in orders if order.status in VENDOR_ACTIVE_ORDER_STATUSES
         ),
+        processing_orders=sum(
+            1 for order in orders if order.status in {"confirmed", "processing", "ready"}
+        ),
         completed_orders=sum(1 for order in orders if order.status == "delivered"),
+        cancelled_orders=sum(
+            1 for order in orders if order.status in VENDOR_CANCELLED_ORDER_STATUSES
+        ),
         total_sales=round(
             sum(
                 order.total_amount
                 for order in orders
-                if order.status in {"confirmed", "processing", "ready", "delivered"}
+                if order.status in VENDOR_SALES_ORDER_STATUSES
             ),
             2,
         ),
+        today_sales=round(sum(order.total_amount for order in today_orders), 2),
+        today_orders=len(today_orders),
+        low_stock_count=sum(
+            1
+            for product in products
+            if 0 < int(product.stock or 0) <= LOW_STOCK_THRESHOLD
+        ),
+        out_of_stock_count=sum(1 for product in products if int(product.stock or 0) <= 0),
+        avg_rating=avg_rating,
+        review_count=review_count,
+        customer_count=len(customer_keys),
         available_balance=round(wallet.available_balance, 2) if wallet else 0,
         pending_withdrawal_balance=round(wallet.pending_withdrawal_balance, 2)
         if wallet
@@ -721,16 +814,219 @@ def fetch_vendor_dashboard(db: Session, user: User) -> VendorDashboardRead:
     )
 
 
-def list_vendor_products(db: Session, user: User) -> list[VendorProductRead]:
-    require_vendor_access(user)
-    products = list(
-        db.scalars(
-            select(Product)
-            .where(Product.vendor_user_id == user.id)
-            .order_by(Product.created_at.desc(), Product.title.asc())
-        ).all()
+def _serialize_vendor_review(review: Review, product: Product, customer: User) -> VendorReviewRead:
+    image_url = None
+    if product.image_url:
+        image_url = product.image_url
+    elif product.image_urls:
+        image_url = product.image_urls[0] if product.image_urls else None
+    return VendorReviewRead(
+        id=review.id,
+        product_id=product.id,
+        product_title=product.title,
+        product_image_url=image_url,
+        rating=float(review.rating),
+        comment=review.comment,
+        customer_name=customer.full_name,
+        is_hidden=bool(review.is_hidden),
+        vendor_reply=review.vendor_reply,
+        vendor_replied_at=review.vendor_replied_at,
+        created_at=review.created_at,
     )
-    return [serialize_vendor_product(product) for product in products]
+
+
+def list_vendor_reviews(
+    db: Session,
+    user: User,
+    *,
+    q: str | None = None,
+    limit: int | None = None,
+    offset: int | None = None,
+) -> list[VendorReviewRead]:
+    require_vendor_access(user)
+    resolved_limit, resolved_offset = normalize_page_params(limit, offset)
+
+    statement = (
+        select(Review, Product, User)
+        .join(Product, Product.id == Review.product_id)
+        .join(User, User.id == Review.user_id)
+        .where(Product.vendor_user_id == user.id)
+    )
+
+    cleaned_query = (q or "").strip()
+    if cleaned_query:
+        pattern = f"%{cleaned_query}%"
+        statement = statement.where(
+            or_(
+                Product.title.ilike(pattern),
+                Review.comment.ilike(pattern),
+                User.full_name.ilike(pattern),
+            )
+        )
+
+    statement = (
+        statement.order_by(Review.created_at.desc())
+        .offset(resolved_offset)
+        .limit(resolved_limit)
+    )
+    rows = db.execute(statement).all()
+
+    return [
+        _serialize_vendor_review(review, product, customer)
+        for review, product, customer in rows
+    ]
+
+
+def reply_to_vendor_review(
+    db: Session,
+    user: User,
+    review_id: str,
+    payload: VendorReviewReplyUpdate,
+) -> VendorReviewRead:
+    require_vendor_access(user)
+    try:
+        normalized_review_id = uuid.UUID(str(review_id))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="That review was not found for this vendor.",
+        ) from exc
+
+    row = db.execute(
+        select(Review, Product, User)
+        .join(Product, Product.id == Review.product_id)
+        .join(User, User.id == Review.user_id)
+        .where(
+            Review.id == normalized_review_id,
+            Product.vendor_user_id == user.id,
+        )
+    ).first()
+    if not row:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="That review was not found for this vendor.",
+        )
+
+    review, product, customer = row
+    review.vendor_reply = payload.reply
+    review.vendor_replied_at = datetime.now(UTC)
+    db.commit()
+    db.refresh(review)
+    return _serialize_vendor_review(review, product, customer)
+
+
+def list_vendor_customers(
+    db: Session,
+    user: User,
+    *,
+    q: str | None = None,
+    limit: int | None = None,
+    offset: int | None = None,
+) -> list[VendorCustomerRead]:
+    require_vendor_access(user)
+    orders = list_vendor_orders_payloads(db, user)
+    buckets: dict[str, VendorCustomerRead] = {}
+    epoch = datetime(1970, 1, 1, tzinfo=UTC)
+
+    for order in orders:
+        if order.status in VENDOR_CANCELLED_ORDER_STATUSES:
+            continue
+
+        phone = (order.customer_phone or "").strip()
+        name = (order.customer_name or "").strip() or "Customer"
+        # Prefer phone; fall back to name only when phone is missing.
+        key = phone or f"name:{(name or 'customer').lower()}"
+        if not key:
+            continue
+
+        existing = buckets.get(key)
+        placed_at = order.placed_at or order.created_at
+        spent = float(order.total_amount or 0)
+        if existing is None:
+            buckets[key] = VendorCustomerRead(
+                customer_key=key,
+                customer_name=name,
+                customer_phone=phone or None,
+                order_count=1,
+                total_spent=round(spent, 2),
+                last_order_at=placed_at,
+                currency=order.currency or "GHS",
+            )
+            continue
+
+        existing.order_count += 1
+        existing.total_spent = round(existing.total_spent + spent, 2)
+        if placed_at and (
+            existing.last_order_at is None or placed_at > existing.last_order_at
+        ):
+            existing.last_order_at = placed_at
+            existing.customer_name = name
+            if phone:
+                existing.customer_phone = phone
+
+    def sort_key(item: VendorCustomerRead) -> tuple[datetime, float]:
+        last = item.last_order_at
+        if last is None:
+            return (epoch, item.total_spent)
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=UTC)
+        return (last, item.total_spent)
+
+    customers = sorted(buckets.values(), key=sort_key, reverse=True)
+
+    cleaned_query = (q or "").strip().lower()
+    if cleaned_query:
+        customers = [
+            customer
+            for customer in customers
+            if cleaned_query in customer.customer_name.lower()
+            or cleaned_query in (customer.customer_phone or "").lower()
+        ]
+
+    resolved_limit, resolved_offset = normalize_page_params(limit, offset)
+    return customers[resolved_offset : resolved_offset + resolved_limit]
+
+
+def list_vendor_products(
+    db: Session,
+    user: User,
+    *,
+    q: str | None = None,
+    limit: int | None = None,
+    offset: int | None = None,
+) -> list[VendorProductRead]:
+    require_vendor_access(user)
+    resolved_limit, resolved_offset = normalize_page_params(limit, offset)
+
+    statement = select(Product).where(Product.vendor_user_id == user.id)
+
+    cleaned_query = (q or "").strip()
+    if cleaned_query:
+        pattern = f"%{cleaned_query}%"
+        statement = statement.where(
+            or_(
+                Product.title.ilike(pattern),
+                Product.description.ilike(pattern),
+                Product.category.ilike(pattern),
+            )
+        )
+
+    statement = (
+        statement.order_by(Product.created_at.desc(), Product.title.asc())
+        .offset(resolved_offset)
+        .limit(resolved_limit)
+    )
+    products = list(db.scalars(statement).all())
+    from app.services.inventory_service import compute_reserved_stock_map
+
+    reserved_map = compute_reserved_stock_map(db, [product.id for product in products])
+    return [
+        serialize_vendor_product(
+            product,
+            reserved_stock=reserved_map.get(product.id, 0),
+        )
+        for product in products
+    ]
 
 
 async def create_vendor_product(
@@ -782,7 +1078,7 @@ async def create_vendor_product(
         size_options=normalize_list(payload.size_options),
         specifications=normalize_list(payload.specifications),
         is_returnable=payload.is_returnable,
-        stock=payload.stock,
+        stock=0,
         status="pending",
         store_id=store.id,
         vendor_user_id=user.id,
@@ -791,6 +1087,18 @@ async def create_vendor_product(
         is_active=False,
     )
     db.add(product)
+    db.flush()
+    from app.services.inventory_service import record_stock_change
+
+    if int(payload.stock or 0) > 0:
+        record_stock_change(
+            db,
+            product,
+            new_stock=int(payload.stock),
+            reason="system",
+            note="Initial stock on create",
+            actor=user,
+        )
     db.commit()
     db.refresh(product)
     broadcast_catalog_product_change(product)
@@ -833,6 +1141,7 @@ async def update_vendor_product(
     if "name" in data:
         data["title"] = data.pop("name")
     data.pop("status", None)
+    next_stock = data.pop("stock", None)
 
     previous_image_urls = list(product.image_urls or ([] if not product.image_url else [product.image_url]))
     next_gallery_urls = data.pop("image_urls", None)
@@ -900,6 +1209,18 @@ async def update_vendor_product(
     if product.status != "suspended":
         product.status = "pending"
     product.is_active = False
+
+    if next_stock is not None:
+        from app.services.inventory_service import record_stock_change
+
+        record_stock_change(
+            db,
+            product,
+            new_stock=int(next_stock),
+            reason="manual",
+            note="Updated via product editor",
+            actor=user,
+        )
 
     db.commit()
     db.refresh(product)
@@ -1044,7 +1365,10 @@ def patch_vendor_product_stock(
     product_id: str,
     stock: int,
 ) -> VendorProductRead:
-    from app.services.inventory_service import apply_inventory_side_effects
+    from app.services.inventory_service import (
+        compute_reserved_stock_map,
+        record_stock_change,
+    )
 
     require_vendor_access(user)
     product = db.scalar(
@@ -1065,18 +1389,207 @@ def patch_vendor_product_stock(
             detail="Suspended products can't be updated from the app.",
         )
 
-    previous_stock = int(product.stock or 0)
-    product.stock = stock
-    apply_inventory_side_effects(db, product, previous_stock=previous_stock)
+    record_stock_change(
+        db,
+        product,
+        new_stock=stock,
+        reason="manual",
+        note="Stock adjusted from Seller Center",
+        actor=user,
+    )
     # Restock alone does not republish — vendor must explicitly set status active.
     db.commit()
     db.refresh(product)
-    return _publish_vendor_product_change(db, user, product)
+    reserved = compute_reserved_stock_map(db, [product.id]).get(product.id, 0)
+    result = serialize_vendor_product(product, reserved_stock=reserved)
+    # Keep realtime payload aligned with serialize helper used elsewhere.
+    broadcast_catalog_product_change(product)
+    realtime_manager.publish_user_event_sync(
+        str(user.id),
+        "vendor.product.updated",
+        result.model_dump(mode="json"),
+    )
+    dashboard = fetch_vendor_dashboard(db, user)
+    realtime_manager.publish_user_event_sync(
+        str(user.id),
+        "vendor.dashboard.updated",
+        dashboard.model_dump(mode="json"),
+    )
+    return result
 
 
-def list_vendor_orders(db: Session, user: User) -> list[VendorOrderRead]:
+def bulk_update_vendor_products(
+    db: Session,
+    user: User,
+    *,
+    product_ids: list[str],
+    stock: int | None = None,
+    status: str | None = None,
+) -> list[VendorProductRead]:
+    from app.services.inventory_service import (
+        compute_reserved_stock_map,
+        record_stock_change,
+    )
+
     require_vendor_access(user)
-    return list_vendor_orders_payloads(db, user)
+    unique_ids = list(dict.fromkeys([pid.strip() for pid in product_ids if pid.strip()]))
+    if not unique_ids:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Select at least one product.",
+        )
+    if len(unique_ids) > 50:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You can update at most 50 products at once.",
+        )
+
+    products = list(
+        db.scalars(
+            select(Product).where(
+                Product.vendor_user_id == user.id,
+                Product.id.in_(unique_ids),
+            )
+        ).all()
+    )
+    if len(products) != len(unique_ids):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="One or more products were not found in your catalog.",
+        )
+
+    next_status = (status or "").strip().lower() or None
+    if next_status and next_status not in {"active", "hidden"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Bulk status may only be active or hidden.",
+        )
+
+    for product in products:
+        if product.status == "suspended":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{product.title} is suspended and can't be bulk-updated.",
+            )
+        if stock is not None:
+            record_stock_change(
+                db,
+                product,
+                new_stock=stock,
+                reason="bulk",
+                note="Bulk stock update",
+                actor=user,
+            )
+        if next_status == "hidden":
+            product.status = "hidden"
+            product.is_active = False
+        elif next_status == "active":
+            if int(product.stock or 0) <= 0:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Increase stock before republishing {product.title}.",
+                )
+            product.status = "active"
+            product.is_active = True
+
+    db.commit()
+    for product in products:
+        db.refresh(product)
+        broadcast_catalog_product_change(product)
+
+    reserved_map = compute_reserved_stock_map(db, [product.id for product in products])
+    results = [
+        serialize_vendor_product(product, reserved_stock=reserved_map.get(product.id, 0))
+        for product in products
+    ]
+    for result in results:
+        realtime_manager.publish_user_event_sync(
+            str(user.id),
+            "vendor.product.updated",
+            result.model_dump(mode="json"),
+        )
+    dashboard = fetch_vendor_dashboard(db, user)
+    realtime_manager.publish_user_event_sync(
+        str(user.id),
+        "vendor.dashboard.updated",
+        dashboard.model_dump(mode="json"),
+    )
+    return results
+
+
+def list_vendor_product_inventory_movements(
+    db: Session,
+    user: User,
+    product_id: str,
+    *,
+    limit: int | None = None,
+    offset: int | None = None,
+) -> list[VendorInventoryMovementRead]:
+    from app.models import InventoryMovement
+
+    require_vendor_access(user)
+    product = db.scalar(
+        select(Product).where(
+            Product.id == product_id,
+            Product.vendor_user_id == user.id,
+        )
+    )
+    if not product:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="That vendor product was not found.",
+        )
+
+    resolved_limit, resolved_offset = normalize_page_params(limit, offset)
+    rows = list(
+        db.scalars(
+            select(InventoryMovement)
+            .where(InventoryMovement.product_id == product_id)
+            .order_by(InventoryMovement.created_at.desc())
+            .offset(resolved_offset)
+            .limit(resolved_limit)
+        ).all()
+    )
+    return [
+        VendorInventoryMovementRead(
+            id=row.id,
+            product_id=row.product_id,
+            delta=row.delta,
+            stock_after=row.stock_after,
+            reason=row.reason,
+            reference_type=row.reference_type,
+            reference_id=row.reference_id,
+            note=row.note,
+            created_at=row.created_at,
+            created_by_user_id=row.created_by_user_id,
+        )
+        for row in rows
+    ]
+
+
+def list_vendor_orders(
+    db: Session,
+    user: User,
+    *,
+    q: str | None = None,
+    limit: int | None = None,
+    offset: int | None = None,
+) -> list[VendorOrderRead]:
+    require_vendor_access(user)
+    orders = list_vendor_orders_payloads(db, user)
+
+    cleaned_query = (q or "").strip().lower()
+    if cleaned_query:
+        orders = [
+            order
+            for order in orders
+            if cleaned_query in (order.order_number or "").lower()
+            or cleaned_query in (order.customer_name or "").lower()
+            or cleaned_query in (order.customer_phone or "").lower()
+        ]
+
+    resolved_limit, resolved_offset = normalize_page_params(limit, offset)
+    return orders[resolved_offset : resolved_offset + resolved_limit]
 
 
 def list_vendor_return_requests(db: Session, user: User) -> list[VendorReturnRequestRead]:
@@ -1148,29 +1661,90 @@ def patch_vendor_return_request(
     return _serialize_vendor_return_request(request)
 
 
-def fetch_vendor_analytics(db: Session, user: User) -> VendorAnalyticsRead:
+VENDOR_ANALYTICS_PERIOD_DAYS = {"7d": 7, "30d": 30, "90d": 90}
+VENDOR_ANALYTICS_DEFAULT_PERIOD = "30d"
+
+
+def _order_timestamp(order: VendorOrderRead) -> datetime:
+    return order.placed_at or order.created_at
+
+
+def _parse_analytics_period(period: str | None) -> tuple[str, int]:
+    normalized = (period or VENDOR_ANALYTICS_DEFAULT_PERIOD).strip().lower()
+    if normalized not in VENDOR_ANALYTICS_PERIOD_DAYS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Period must be one of 7d, 30d, or 90d.",
+        )
+    return normalized, VENDOR_ANALYTICS_PERIOD_DAYS[normalized]
+
+
+def _build_vendor_daily_points(
+    orders: list[VendorOrderRead],
+    *,
+    period_start: datetime,
+    days: int,
+) -> list[VendorAnalyticsDailyPoint]:
+    buckets: dict[str, dict[str, float]] = {}
+    for offset in range(days):
+        day = period_start + timedelta(days=offset)
+        buckets[day.date().isoformat()] = {"sales": 0.0, "orders": 0}
+
+    for order in orders:
+        if order.status not in VENDOR_ANALYTICS_ORDER_STATUSES:
+            continue
+        timestamp = _order_timestamp(order)
+        if timestamp is None or timestamp < period_start:
+            continue
+        key = timestamp.date().isoformat()
+        bucket = buckets.get(key)
+        if bucket is None:
+            continue
+        bucket["sales"] += float(order.total_amount or 0)
+        bucket["orders"] += 1
+
+    return [
+        VendorAnalyticsDailyPoint(
+            date=day,
+            sales=round(values["sales"], 2),
+            orders=int(values["orders"]),
+        )
+        for day, values in sorted(buckets.items())
+    ]
+
+
+def fetch_vendor_analytics(
+    db: Session,
+    user: User,
+    *,
+    period: str = VENDOR_ANALYTICS_DEFAULT_PERIOD,
+) -> VendorAnalyticsRead:
     require_vendor_access(user)
+    normalized_period, period_days = _parse_analytics_period(period)
 
     now = datetime.now(UTC)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     week_start = today_start - timedelta(days=6)
-    month_start = today_start - timedelta(days=29)
+    period_start = today_start - timedelta(days=period_days - 1)
 
     orders = list_vendor_orders_payloads(db, user)
-
-    def order_timestamp(order: VendorOrderRead) -> datetime:
-        return order.placed_at or order.created_at
 
     today_orders = [
         order
         for order in orders
-        if order_timestamp(order) >= today_start
+        if _order_timestamp(order) >= today_start
         and order.status in VENDOR_ANALYTICS_ORDER_STATUSES
     ]
     week_orders = [
         order
         for order in orders
-        if order_timestamp(order) >= week_start
+        if _order_timestamp(order) >= week_start
+        and order.status in VENDOR_ANALYTICS_ORDER_STATUSES
+    ]
+    period_orders = [
+        order
+        for order in orders
+        if _order_timestamp(order) >= period_start
         and order.status in VENDOR_ANALYTICS_ORDER_STATUSES
     ]
 
@@ -1198,7 +1772,7 @@ def fetch_vendor_analytics(db: Session, user: User) -> VendorAnalyticsRead:
         .where(
             OrderItem.vendor_user_id == user.id,
             Order.vendor_status == "delivered",
-            func.coalesce(Order.placed_at, Order.created_at) >= month_start,
+            func.coalesce(Order.placed_at, Order.created_at) >= period_start,
         )
         .group_by(OrderItem.product_id, OrderItem.title, OrderItem.image_url)
         .order_by(func.sum(OrderItem.line_total).desc())
@@ -1216,13 +1790,23 @@ def fetch_vendor_analytics(db: Session, user: User) -> VendorAnalyticsRead:
         for row in top_rows
     ]
 
+    daily_points = _build_vendor_daily_points(
+        orders,
+        period_start=period_start,
+        days=period_days,
+    )
+
     return VendorAnalyticsRead(
+        period=normalized_period,
         today_sales=round(sum(order.total_amount for order in today_orders), 2),
         week_sales=round(sum(order.total_amount for order in week_orders), 2),
         today_orders=len(today_orders),
         week_orders=len(week_orders),
+        period_sales=round(sum(order.total_amount for order in period_orders), 2),
+        period_orders=len(period_orders),
         open_returns=int(open_returns),
         top_products=top_products,
+        daily_points=daily_points,
     )
 
 
@@ -1371,21 +1955,49 @@ def update_vendor_order_status(
             detail="That order was not found for this vendor.",
         )
 
+    other_vendor_ids = {
+        item.vendor_user_id
+        for item in order.items
+        if item.vendor_user_id and item.vendor_user_id != user.id
+    }
+    is_sole_vendor = len(other_vendor_ids) == 0
+
+    # Always track this vendor's fulfillment view.
     order.vendor_status = next_status
     changed_wallet_vendor_ids: set[uuid.UUID] = set()
     if next_status == "delivered":
-        order.status = "delivered"
-        order.progress = 1
-        order.tracking_eta = None
-        order.delivered_at = datetime.now(UTC)
-        order.cancelled_at = None
-        order.cancellation_reason = None
+        # Settle this vendor's earnings even on shared carts.
         changed_wallet_vendor_ids = settle_vendor_wallets_for_order(
             db,
             order,
             vendor_scope={user.id},
         )
+        if is_sole_vendor:
+            order.status = "delivered"
+            order.progress = 1
+            order.tracking_eta = None
+            order.delivered_at = datetime.now(UTC)
+            order.cancelled_at = None
+            order.cancellation_reason = None
+        else:
+            # Do not mark the whole customer order delivered when other sellers
+            # still have line items on the cart.
+            if order.status not in {"delivered", "cancelled", "refunded"}:
+                order.status = "processing"
+                order.progress = max(float(order.progress or 0), 0.9)
+                order.tracking_eta = (
+                    order.tracking_eta
+                    or "Partially fulfilled · remaining sellers still preparing"
+                )
     elif next_status == "cancelled":
+        if not is_sole_vendor:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "This order includes items from other sellers. "
+                    "Contact ODOS support to cancel a shared cart."
+                ),
+            )
         order.status = "cancelled"
         order.progress = 0
         order.tracking_eta = None
@@ -1796,6 +2408,10 @@ async def update_vendor_store(
     city: str,
     logo_image: UploadFile | None,
     banner_image: UploadFile | None,
+    is_on_vacation: bool | None = None,
+    vacation_message: str | None = None,
+    business_hours: dict | None = None,
+    business_hours_provided: bool = False,
 ) -> VendorStoreRead:
     require_vendor_access(user)
     store = get_vendor_store(db, user)
@@ -1825,6 +2441,11 @@ async def update_vendor_store(
     store.website_url = website_url.strip() if website_url else None
     store.region = region.strip()
     store.city = city.strip()
+    if is_on_vacation is not None:
+        store.is_on_vacation = is_on_vacation
+    store.vacation_message = vacation_message.strip() if vacation_message else None
+    if business_hours_provided:
+        store.business_hours = business_hours
 
     if logo_image:
         remove_media_file(store.image_url)

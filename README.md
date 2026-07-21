@@ -27,9 +27,13 @@ FastAPI API for the ODOS marketplace — powers the mobile shopper app, vendor t
 - **Behavior tracking**: product views, clicks, search taps (feeds the recommendation engine)
 - **In-app AI assistant**: `/api/assistant/chat` with order/cart context when signed in
 
-**Vendor**
+**Vendor / Seller Center**
 
-- Store profile, products, orders, vouchers, flash sale nominations
+- Store profile (including vacation mode + business hours), products, orders, vouchers, flash sale nominations
+- Inventory movements / stock ledger, bulk product updates, reserved vs available stock
+- Customers aggregate, reviews list + seller reply, analytics with `7d|30d|90d` periods
+- Merchandising campaign opt-ins, wallet / payouts (dual-role approved vendors)
+- Vendor notification preference gates (orders, inventory, payouts)
 
 **Admin**
 
@@ -101,6 +105,9 @@ Recent additions (run `alembic upgrade head` after pull):
 - User behavior tracking tables (recommendations input)
 - Promo banner placement and link metadata
 - Promotions / voucher system enhancements
+- Seller Center Wave 1: store vacation fields, review reply columns
+- Seller Center Wave 2: inventory movements, vendor notification preference columns
+- Merchandising campaigns and related catalog flags
 
 ## Deployment (Render)
 

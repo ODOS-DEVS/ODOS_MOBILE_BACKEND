@@ -555,7 +555,62 @@ def review_admin_campaign_opt_in(
     )
 
 
+def list_vendor_campaign_opt_ins(
+    db: Session,
+    vendor_user: User,
+) -> list[AdminMerchandisingCampaignOptInRead]:
+    from app.controllers.vendor_controller import require_vendor_access
+
+    require_vendor_access(vendor_user)
+    rows = list(
+        db.scalars(
+            select(MerchandisingCampaignOptIn)
+            .where(MerchandisingCampaignOptIn.vendor_user_id == vendor_user.id)
+            .order_by(MerchandisingCampaignOptIn.created_at.desc())
+        ).all()
+    )
+    if not rows:
+        return []
+
+    campaign_ids = {row.campaign_id for row in rows}
+    product_ids = {row.product_id for row in rows}
+    campaigns = {
+        campaign.id: campaign
+        for campaign in db.scalars(
+            select(MerchandisingCampaign).where(MerchandisingCampaign.id.in_(campaign_ids))
+        ).all()
+    }
+    products = {
+        product.id: product
+        for product in db.scalars(select(Product).where(Product.id.in_(product_ids))).all()
+    }
+
+    return [
+        AdminMerchandisingCampaignOptInRead(
+            id=row.id,
+            campaign_id=row.campaign_id,
+            campaign_slug=(campaigns.get(row.campaign_id).slug if campaigns.get(row.campaign_id) else ""),
+            campaign_title=(
+                campaigns.get(row.campaign_id).title if campaigns.get(row.campaign_id) else "Campaign"
+            ),
+            product_id=row.product_id,
+            product_title=(
+                products.get(row.product_id).title if products.get(row.product_id) else row.product_id
+            ),
+            vendor_user_id=row.vendor_user_id,
+            status=row.status,
+            review_notes=row.review_notes,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+        )
+        for row in rows
+    ]
+
+
 def list_vendor_open_campaigns(db: Session, vendor_user: User) -> list[MerchandisingCampaignRead]:
+    from app.controllers.vendor_controller import require_vendor_access
+
+    require_vendor_access(vendor_user)
     campaigns = [
         campaign
         for campaign in list_live_campaigns(db, limit=60)
@@ -571,6 +626,9 @@ def create_vendor_campaign_opt_in(
     campaign_id: uuid.UUID,
     product_id: str,
 ) -> AdminMerchandisingCampaignOptInRead:
+    from app.controllers.vendor_controller import require_vendor_access
+
+    require_vendor_access(vendor_user)
     campaign = db.get(MerchandisingCampaign, campaign_id)
     if not campaign or not campaign.allow_vendor_opt_in or not campaign_is_live(campaign):
         raise HTTPException(

@@ -7,14 +7,35 @@ from fastapi import HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.controllers.notification_controller import create_notification_event, order_notification_image
-from app.controllers.vendor_controller import fetch_vendor_dashboard, list_vendor_orders_payloads
+from app.controllers.notification_controller import (
+    create_notification_event,
+    order_notification_image,
+)
+from app.controllers.vendor_controller import (
+    fetch_vendor_dashboard,
+    list_vendor_orders_payloads,
+)
 from app.services.promotion_engine import calculate_best_discount
 from app.helpers.promo_audit import log_promo_applied, log_promo_rejections
 from app.core.event_types import ORDER_CREATED
-from app.models import CartItem, NotificationEvent, Order, OrderItem, Product, ReturnRequest, User, VoucherRedemption
+from app.models import (
+    CartItem,
+    NotificationEvent,
+    Order,
+    OrderItem,
+    Product,
+    ReturnRequest,
+    User,
+    VoucherRedemption,
+)
 from app.services.event_log_service import record_user_event
-from app.schemas.order import OrderCreate, OrderItemCreate, OrderRead, ReturnRequestCreate, ReturnRequestRead
+from app.schemas.order import (
+    OrderCreate,
+    OrderItemCreate,
+    OrderRead,
+    ReturnRequestCreate,
+    ReturnRequestRead,
+)
 from app.services.pricing_service import compute_server_subtotal
 from app.services.delivery_service import (
     get_delivery_config,
@@ -55,7 +76,9 @@ def _broadcast_order_realtime(db: Session, order: Order) -> None:
             str(vendor_user_id)
             for vendor_user_id in db.scalars(
                 select(Product.vendor_user_id).where(
-                    Product.id.in_([item.product_id for item in order.items if item.product_id]),
+                    Product.id.in_(
+                        [item.product_id for item in order.items if item.product_id]
+                    ),
                     Product.vendor_user_id.is_not(None),
                 )
             ).all()
@@ -102,7 +125,9 @@ def _order_vendor_users(db: Session, order: Order) -> list[User]:
             str(vendor_user_id)
             for vendor_user_id in db.scalars(
                 select(Product.vendor_user_id).where(
-                    Product.id.in_([item.product_id for item in order.items if item.product_id]),
+                    Product.id.in_(
+                        [item.product_id for item in order.items if item.product_id]
+                    ),
                     Product.vendor_user_id.is_not(None),
                 )
             ).all()
@@ -221,7 +246,9 @@ def _validate_checkout_items(db: Session, items: list[OrderItemCreate]) -> None:
 
     products = {
         product.id: product
-        for product in db.scalars(select(Product).where(Product.id.in_(product_ids))).all()
+        for product in db.scalars(
+            select(Product).where(Product.id.in_(product_ids))
+        ).all()
     }
 
     for item in items:
@@ -251,7 +278,7 @@ def _validate_checkout_items(db: Session, items: list[OrderItemCreate]) -> None:
 
 def _decrement_order_inventory(db: Session, order: Order) -> None:
     from app.controllers.vendor_controller import broadcast_catalog_product_change
-    from app.services.inventory_service import apply_inventory_side_effects
+    from app.services.inventory_service import record_stock_change
 
     product_ids = [item.product_id for item in order.items if item.product_id]
     if not product_ids:
@@ -279,17 +306,22 @@ def _decrement_order_inventory(db: Session, order: Order) -> None:
                 detail=f"Not enough stock left for {item.title}.",
             )
         previous_stock = int(product.stock)
-        product.stock -= item.quantity
-        visibility_changed = apply_inventory_side_effects(
+        visibility_changed = record_stock_change(
             db,
             product,
-            previous_stock=previous_stock,
+            new_stock=previous_stock - item.quantity,
+            reason="order_sale",
+            reference_type="order",
+            reference_id=str(order.id),
+            note=f"Sold on order #{order.order_number}",
         )
         if visibility_changed:
             broadcast_catalog_product_change(product)
 
 
-def _load_product_snapshot_map(db: Session, payload: OrderCreate) -> dict[str, dict[str, object | None]]:
+def _load_product_snapshot_map(
+    db: Session, payload: OrderCreate
+) -> dict[str, dict[str, object | None]]:
     return {
         product_id: {
             "is_returnable": bool(is_returnable),
@@ -317,7 +349,9 @@ def _validate_order_totals(
     computed_subtotal: float,
     computed_discount: float,
 ) -> float:
-    computed_total = round(computed_subtotal + payload.shipping_amount - computed_discount, 2)
+    computed_total = round(
+        computed_subtotal + payload.shipping_amount - computed_discount, 2
+    )
     if (
         abs(computed_subtotal - payload.subtotal_amount) > 0.01
         or abs(computed_discount - payload.discount_amount) > 0.01
@@ -423,7 +457,11 @@ def prepare_order_for_checkout(
         voucher_code=primary_voucher.code if primary_voucher else None,
         voucher_title=primary_voucher.title if primary_voucher else None,
         discount_amount=computed_discount,
-        promotion_breakdown=promo_result.to_breakdown_json() if promo_result.applied_promotions else None,
+        promotion_breakdown=(
+            promo_result.to_breakdown_json()
+            if promo_result.applied_promotions
+            else None
+        ),
     )
 
     for item in payload.items:
@@ -449,9 +487,7 @@ def prepare_order_for_checkout(
                 vendor_user_id=product_snapshot_map.get(item.product_id, {}).get(
                     "vendor_user_id"
                 ),
-                store_id=product_snapshot_map.get(item.product_id, {}).get(
-                    "store_id"
-                ),
+                store_id=product_snapshot_map.get(item.product_id, {}).get("store_id"),
                 selected_color=item.selected_color,
                 selected_size=item.selected_size,
             )
@@ -532,7 +568,9 @@ def activate_order_after_payment(
     )
     if order.voucher_id and not existing_redemption:
         from app.models import Voucher
-        from app.services.promotion_service import voucher_status as compute_voucher_status
+        from app.services.promotion_service import (
+            voucher_status as compute_voucher_status,
+        )
 
         # Lock the voucher row to prevent concurrent over-redemption races.
         locked_voucher = db.scalar(
@@ -562,7 +600,12 @@ def activate_order_after_payment(
                 now=now,
                 overall_count=overall_count,
             )
-            if current_status in {"expired", "limit_reached", "disabled", "pending_review"}:
+            if current_status in {
+                "expired",
+                "limit_reached",
+                "disabled",
+                "pending_review",
+            }:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="This voucher is no longer available for redemption.",
@@ -587,7 +630,9 @@ def activate_order_after_payment(
         )
 
     if order.source == "cart":
-        cart_items = list(db.scalars(select(CartItem).where(CartItem.user_id == user.id)).all())
+        cart_items = list(
+            db.scalars(select(CartItem).where(CartItem.user_id == user.id)).all()
+        )
         for cart_item in cart_items:
             db.delete(cart_item)
 
@@ -716,7 +761,9 @@ def create_return_request(
             detail="Returns can only be requested after an order has been delivered.",
         )
 
-    order_item = next((item for item in order.items if item.id == payload.order_item_id), None)
+    order_item = next(
+        (item for item in order.items if item.id == payload.order_item_id), None
+    )
     if not order_item:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

@@ -305,6 +305,7 @@ def _search_stores(
                 Store.id == store_id,
                 Store.is_active.is_(True),
                 Store.status == "active",
+                Store.is_on_vacation.is_(False),
             )
         ).first()
         if not row:
@@ -330,7 +331,11 @@ def _search_stores(
     statement = (
         select(Store, Market)
         .outerjoin(Market, Store.market_slug == Market.slug)
-        .where(Store.is_active.is_(True), Store.status == "active")
+        .where(
+            Store.is_active.is_(True),
+            Store.status == "active",
+            Store.is_on_vacation.is_(False),
+        )
     )
     like_filters = []
     for token in tokens[:6]:
@@ -395,7 +400,11 @@ def build_catalog_search_context(
             db.scalar(
                 select(func.count())
                 .select_from(Store)
-                .where(Store.is_active.is_(True), Store.status == "active")
+                .where(
+                    Store.is_active.is_(True),
+                    Store.status == "active",
+                    Store.is_on_vacation.is_(False),
+                )
             )
             or 0
         )

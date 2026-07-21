@@ -2526,7 +2526,19 @@ async def update_admin_product(
     product.specifications = _normalize_list(payload.specifications)
     product.placement_tags = _normalize_list(payload.placement_tags)
     product.description = payload.description
-    product.stock = payload.stock
+    if int(product.stock or 0) != int(payload.stock):
+        from app.services.inventory_service import record_stock_change
+
+        record_stock_change(
+            db,
+            product,
+            new_stock=int(payload.stock),
+            reason="system",
+            note="Updated by admin",
+            actor=current_user,
+        )
+    else:
+        product.stock = payload.stock
     product.status = payload.status
     product.store_id = store.id
     product.vendor_user_id = store.vendor_user_id
@@ -3126,6 +3138,8 @@ def _serialize_admin_review(
         user_email=review.user.email,
         rating=review.rating,
         comment=review.comment,
+        vendor_reply=review.vendor_reply,
+        vendor_replied_at=review.vendor_replied_at,
         is_hidden=review.is_hidden,
         moderation_reason=review.moderation_reason,
         moderated_at=review.moderated_at,

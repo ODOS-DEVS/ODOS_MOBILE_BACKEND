@@ -2,7 +2,16 @@ import enum
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Date, DateTime, Enum, ForeignKey, String, UniqueConstraint, func
+from sqlalchemy import (
+    Boolean,
+    Date,
+    DateTime,
+    Enum,
+    ForeignKey,
+    String,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -78,6 +87,30 @@ class User(Base):
         nullable=False,
     )
     vendor_order_notifications: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        server_default="true",
+        nullable=False,
+    )
+    vendor_notify_orders: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        server_default="true",
+        nullable=False,
+    )
+    vendor_notify_inventory: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        server_default="true",
+        nullable=False,
+    )
+    vendor_notify_reviews: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        server_default="true",
+        nullable=False,
+    )
+    vendor_notify_payouts: Mapped[bool] = mapped_column(
         Boolean,
         default=True,
         server_default="true",
@@ -312,18 +345,22 @@ class User(Base):
         foreign_keys="VendorWithdrawalRequest.vendor_user_id",
         back_populates="vendor_user",
     )
-    reviewed_vendor_withdrawal_requests: Mapped[list["VendorWithdrawalRequest"]] = relationship(
-        foreign_keys="VendorWithdrawalRequest.reviewed_by_user_id",
-        back_populates="reviewed_by_user",
+    reviewed_vendor_withdrawal_requests: Mapped[list["VendorWithdrawalRequest"]] = (
+        relationship(
+            foreign_keys="VendorWithdrawalRequest.reviewed_by_user_id",
+            back_populates="reviewed_by_user",
+        )
     )
     customer_wallet: Mapped["CustomerWallet | None"] = relationship(
         back_populates="user",
         cascade="all, delete-orphan",
         uselist=False,
     )
-    customer_wallet_transactions: Mapped[list["CustomerWalletTransaction"]] = relationship(
-        foreign_keys="CustomerWalletTransaction.user_id",
-        back_populates="user",
+    customer_wallet_transactions: Mapped[list["CustomerWalletTransaction"]] = (
+        relationship(
+            foreign_keys="CustomerWalletTransaction.user_id",
+            back_populates="user",
+        )
     )
     customer_wallet_topups: Mapped[list["CustomerWalletTopUp"]] = relationship(
         foreign_keys="CustomerWalletTopUp.user_id",

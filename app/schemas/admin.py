@@ -708,6 +708,8 @@ class AdminReviewRead(BaseModel):
     user_email: str
     rating: float
     comment: str
+    vendor_reply: str | None = None
+    vendor_replied_at: datetime | None = None
     is_hidden: bool
     moderation_reason: str | None = None
     moderated_at: datetime | None = None
