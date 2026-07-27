@@ -95,9 +95,7 @@ def list_transfer_institutions(
     currency: str,
 ) -> list[dict[str, Any]]:
     requested_type = (
-        "mobile_money"
-        if payout_method_type == "mobile_money"
-        else "ghipss"
+        "mobile_money" if payout_method_type == "mobile_money" else "ghipss"
     )
     query = urlencode(
         {

@@ -18,6 +18,14 @@ class AdminDashboardStatsRead(BaseModel):
     total_orders: int
     pending_orders: int
     total_revenue: float
+    # Command-center attention queues / time windows
+    revenue_today: float = 0
+    orders_today: int = 0
+    pending_products: int = 0
+    low_stock_products: int = 0
+    open_return_requests: int = 0
+    support_waiting_on_admin: int = 0
+    pending_withdrawals: int = 0
 
 
 class AdminUserRead(BaseModel):

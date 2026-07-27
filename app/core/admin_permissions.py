@@ -17,6 +17,8 @@ class AdminPermissionLevel(str, enum.Enum):
     SUPPORT = "support"
     FINANCE = "finance"
     INVENTORY = "inventory"
+    MARKETING = "marketing"
+    MODERATOR = "moderator"
     ANALYST = "analyst"
 
 
@@ -75,6 +77,27 @@ PERMISSION_FEATURES: dict[AdminPermissionLevel, frozenset[str]] = {
             "markets",
             "categories",
             "promotions",
+        }
+    ),
+    AdminPermissionLevel.MARKETING: frozenset(
+        {
+            "dashboard",
+            "analytics",
+            "audit_log",
+            "promotions",
+            "notifications",
+            "products",
+        }
+    ),
+    AdminPermissionLevel.MODERATOR: frozenset(
+        {
+            "dashboard",
+            "audit_log",
+            "products",
+            "reviews",
+            "vendors",
+            "notifications",
+            "support",
         }
     ),
     AdminPermissionLevel.ANALYST: frozenset(
