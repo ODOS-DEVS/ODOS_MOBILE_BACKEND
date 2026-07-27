@@ -15,10 +15,6 @@ from app.models import Product, Voucher
 from app.schemas.catalog import DealsHubRead, DealsHubSectionRead
 
 
-# Backward-compatible alias — single source of truth is promo_banner_config.
-GHANA_CAMPAIGN_TAGS = PROMO_CAMPAIGN_TAGS
-
-
 def _active_deal_products(db: Session, *, limit: int = 24) -> list:
     now = datetime.now(timezone.utc)
     products = list(
@@ -124,7 +120,7 @@ def get_deals_hub(db: Session) -> DealsHubRead:
             )
         )
 
-    for tag, label in GHANA_CAMPAIGN_TAGS:
+    for tag, label in PROMO_CAMPAIGN_TAGS:
         tagged_count = db.scalar(
             select(func.count())
             .select_from(Voucher)
@@ -152,5 +148,5 @@ def get_deals_hub(db: Session) -> DealsHubRead:
         deal_products=deal_products,
         campaigns=campaigns,
         sections=sections,
-        campaign_tags=[{"tag": tag, "label": label} for tag, label in GHANA_CAMPAIGN_TAGS],
+        campaign_tags=[{"tag": tag, "label": label} for tag, label in PROMO_CAMPAIGN_TAGS],
     )

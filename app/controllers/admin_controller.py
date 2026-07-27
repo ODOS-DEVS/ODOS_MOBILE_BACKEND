@@ -94,6 +94,9 @@ from app.models import (
     VoucherRedemption,
     WishlistItem,
 )
+from app.models.chat import ChatThread, ChatThreadType, SupportChatStatus
+from app.models.wallet import VendorWithdrawalRequest
+from app.services.inventory_service import LOW_STOCK_THRESHOLD
 from app.models.user_behavior import UserBehaviorEvent
 from app.schemas.admin import (
     AdminBootstrapStatusRead,
@@ -1059,14 +1062,6 @@ def _taxonomy_lookup_by_slug() -> dict[str, dict]:
     return {entry["slug"]: entry for entry in ODOS_CATEGORY_TAXONOMY}
 
 
-def _normalize_slug(value: str) -> str:
-    return _slugify(value)
-
-
-def _normalize_string_list(values: list[str] | None) -> list[str] | None:
-    return _normalize_list(values)
-
-
 def _resolve_product_taxonomy(
     *,
     category: str,
@@ -1074,11 +1069,11 @@ def _resolve_product_taxonomy(
     category_slugs: list[str] | None,
     subcategory_slugs: list[str] | None,
 ) -> tuple[str, str | None, list[str] | None, list[str] | None]:
-    normalized_category_slugs = _normalize_string_list(
-        category_slugs or [_normalize_slug(category)]
+    normalized_category_slugs = _normalize_list(
+        category_slugs or [_slugify(category)]
     )
-    normalized_subcategory_slugs = _normalize_string_list(
-        subcategory_slugs or ([_normalize_slug(subcategory)] if subcategory else None)
+    normalized_subcategory_slugs = _normalize_list(
+        subcategory_slugs or ([_slugify(subcategory)] if subcategory else None)
     )
     primary_category = category.strip()
     primary_subcategory = subcategory.strip() if subcategory else None
@@ -1095,7 +1090,7 @@ def _resolve_product_taxonomy(
             if not entry:
                 continue
             slug_to_title = {
-                _normalize_slug(item): item for item in entry.get("subcategories", [])
+                _slugify(item): item for item in entry.get("subcategories", [])
             }
             for sub_slug in normalized_subcategory_slugs:
                 if sub_slug in slug_to_title:
@@ -1326,6 +1321,8 @@ async def update_admin_profile(
 def get_admin_dashboard(db: Session, current_user: User) -> AdminDashboardRead:
     require_admin(current_user)
 
+    today_start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+
     stats = AdminDashboardStatsRead(
         total_users=db.scalar(select(func.count(User.id))) or 0,
         total_vendors=db.scalar(
@@ -1353,6 +1350,52 @@ def get_admin_dashboard(db: Session, current_user: User) -> AdminDashboardRead:
             float(db.scalar(select(func.coalesce(func.sum(Order.total_amount), 0.0))) or 0.0),
             2,
         ),
+        revenue_today=round(
+            float(
+                db.scalar(
+                    select(func.coalesce(func.sum(Order.total_amount), 0.0)).where(
+                        Order.created_at >= today_start
+                    )
+                )
+                or 0.0
+            ),
+            2,
+        ),
+        orders_today=db.scalar(
+            select(func.count(Order.id)).where(Order.created_at >= today_start)
+        )
+        or 0,
+        pending_products=db.scalar(
+            select(func.count(Product.id)).where(Product.status == "pending")
+        )
+        or 0,
+        low_stock_products=db.scalar(
+            select(func.count(Product.id)).where(
+                Product.stock > 0,
+                Product.stock <= LOW_STOCK_THRESHOLD,
+                Product.status == "active",
+            )
+        )
+        or 0,
+        open_return_requests=db.scalar(
+            select(func.count(ReturnRequest.id)).where(
+                ReturnRequest.status.in_(["requested", "under_review", "approved"])
+            )
+        )
+        or 0,
+        support_waiting_on_admin=db.scalar(
+            select(func.count(ChatThread.id)).where(
+                ChatThread.thread_type == ChatThreadType.SUPPORT,
+                ChatThread.support_status == SupportChatStatus.WAITING_ON_ADMIN,
+            )
+        )
+        or 0,
+        pending_withdrawals=db.scalar(
+            select(func.count(VendorWithdrawalRequest.id)).where(
+                VendorWithdrawalRequest.status.in_(["pending", "approved"])
+            )
+        )
+        or 0,
     )
 
     recent_orders = list(
@@ -1619,7 +1662,7 @@ async def create_admin_store(
         if not market:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Market not found.")
 
-    category_slug = _normalize_slug(payload.category)
+    category_slug = _slugify(payload.category)
     taxonomy_entry = _taxonomy_lookup_by_slug().get(category_slug)
     store = Store(
         id=_generate_store_id(),

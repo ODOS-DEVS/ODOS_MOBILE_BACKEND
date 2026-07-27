@@ -5,7 +5,8 @@ from app.controllers.campaign_controller import (
     get_public_campaign_detail,
     list_public_campaigns,
 )
-from app.controllers.deals_controller import get_deals_hub, GHANA_CAMPAIGN_TAGS
+from app.controllers.deals_controller import get_deals_hub
+from app.core.promo_banner_config import PROMO_CAMPAIGN_TAGS
 from app.controllers.catalog_controller import (
     get_catalog_product,
     get_store,
@@ -208,7 +209,7 @@ def get_deals_hub_endpoint(db: Session = Depends(get_db)):
 
 @router.get("/campaign-tags")
 def get_campaign_tags():
-    return [{"tag": tag, "label": label} for tag, label in GHANA_CAMPAIGN_TAGS]
+    return [{"tag": tag, "label": label} for tag, label in PROMO_CAMPAIGN_TAGS]
 
 
 @router.get("/campaigns", response_model=list[MerchandisingCampaignRead])

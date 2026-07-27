@@ -140,12 +140,6 @@ def _validate_upsert(payload: AdminMerchandisingCampaignUpsert) -> None:
         )
 
 
-def _require_admin(user: User) -> None:
-    if user.role not in {"admin", "super_admin"} and getattr(user, "admin_role", None) is None:
-        # Feature gate is applied at the route layer; keep a soft check.
-        pass
-
-
 def list_public_campaigns(
     db: Session,
     *,
@@ -190,7 +184,6 @@ def list_admin_campaigns(
     search: str | None = None,
     status_filter: str | None = None,
 ) -> AdminPageRead[AdminMerchandisingCampaignRead]:
-    _require_admin(current_user)
     filters = []
     if search and search.strip():
         term = f"%{search.strip().lower()}%"
@@ -230,7 +223,6 @@ async def create_admin_campaign(
     banner_file: UploadFile | None = None,
     thumbnail_file: UploadFile | None = None,
 ) -> AdminMerchandisingCampaignRead:
-    _require_admin(current_user)
     _validate_upsert(payload)
     slug = slugify_campaign(payload.slug or payload.title)
     existing = get_campaign_by_slug(db, slug)
@@ -298,7 +290,6 @@ async def update_admin_campaign(
     banner_file: UploadFile | None = None,
     thumbnail_file: UploadFile | None = None,
 ) -> AdminMerchandisingCampaignRead:
-    _require_admin(current_user)
     _validate_upsert(payload)
     campaign = db.get(MerchandisingCampaign, campaign_id)
     if not campaign:
@@ -366,7 +357,6 @@ def get_admin_campaign(
     current_user: User,
     campaign_id: uuid.UUID,
 ) -> AdminMerchandisingCampaignRead:
-    _require_admin(current_user)
     campaign = db.get(MerchandisingCampaign, campaign_id)
     if not campaign:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Campaign not found.")
@@ -378,7 +368,6 @@ def archive_admin_campaign(
     current_user: User,
     campaign_id: uuid.UUID,
 ) -> None:
-    _require_admin(current_user)
     campaign = db.get(MerchandisingCampaign, campaign_id)
     if not campaign:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Campaign not found.")
@@ -394,7 +383,6 @@ def duplicate_admin_campaign(
     current_user: User,
     campaign_id: uuid.UUID,
 ) -> AdminMerchandisingCampaignRead:
-    _require_admin(current_user)
     source = db.get(MerchandisingCampaign, campaign_id)
     if not source:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Campaign not found.")
@@ -456,7 +444,6 @@ def list_admin_campaign_opt_ins(
     limit: int = 50,
     offset: int = 0,
 ) -> AdminPageRead[AdminMerchandisingCampaignOptInRead]:
-    _require_admin(current_user)
     query = select(MerchandisingCampaignOptIn).order_by(
         MerchandisingCampaignOptIn.created_at.desc()
     )
@@ -500,7 +487,6 @@ def review_admin_campaign_opt_in(
     status_value: str,
     review_notes: str | None = None,
 ) -> AdminMerchandisingCampaignOptInRead:
-    _require_admin(current_user)
     row = db.get(MerchandisingCampaignOptIn, opt_in_id)
     if not row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Opt-in not found.")
