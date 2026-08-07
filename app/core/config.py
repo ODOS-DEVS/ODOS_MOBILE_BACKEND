@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     brevo_api_key: str = ""
     brevo_sender_name: str = "ODOS"
     brevo_sender_email: str = ""
+    admin_panel_url: str = "https://odos-admin.onrender.com"
     email_verification_code_expire_minutes: int = 10
     phone_verification_code_expire_minutes: int = 10
     arkesel_api_key: str = ""

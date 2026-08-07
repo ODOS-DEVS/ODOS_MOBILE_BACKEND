@@ -28,6 +28,7 @@ from app.helpers.admin_audit import (
 from app.helpers.promo_audit import log_admin_promo_mutation
 from app.services.event_log_service import record_admin_event
 from app.schemas.pagination import AdminPageRead
+from app.schemas.order import OrderStatusEventRead
 from app.controllers.finance_controller import (
     get_admin_finance_overview,
     list_admin_payment_transactions,
@@ -104,6 +105,8 @@ from app.schemas.admin import (
     AdminCategoryUpsert,
     AdminDashboardRead,
     AdminDashboardStatsRead,
+    AdminDeliveryOpsOrderRead,
+    AdminDeliveryOpsRead,
     AdminMarketRead,
     AdminMarketUpsert,
     AdminNotificationRead,
@@ -142,6 +145,7 @@ from app.schemas.admin import (
     AdminUserRead,
     AdminUserStatusUpdate,
     AdminPermissionUpdate,
+    AdminStaffCreate,
     AdminUserVendorApplicationRead,
     AdminVendorRead,
     AdminVendorStatusUpdate,
@@ -159,6 +163,11 @@ from app.schemas.payment import (
 )
 from app.schemas.user import AuthToken, UserCreate, UserLogin
 from app.services.delivery_service import delivery_method_label, get_delivery_config
+from app.services.order_timeline_service import (
+    ensure_delivery_code,
+    record_order_status_event,
+)
+from app.services.sms_service import send_delivery_out_for_delivery_sms
 from app.services.finance_math import amount_from_subunit, round_money
 
 SUPPORTED_ACCOUNT_STATUSES = {"active", "blocked", "inactive"}
@@ -960,6 +969,7 @@ def _serialize_order_detail(db: Session, order: Order) -> AdminOrderDetailRead:
         progress=order.progress,
         tracking_eta=order.tracking_eta,
         cancellation_reason=order.cancellation_reason,
+        delivery_code=order.delivery_code,
         address_full_name=order.address_full_name,
         address_phone=order.address_phone,
         address_street=order.address_street,
@@ -983,6 +993,7 @@ def _serialize_order_detail(db: Session, order: Order) -> AdminOrderDetailRead:
         updated_at=order.updated_at,
         items=[_serialize_order_item(item) for item in order.items],
         return_requests=[_serialize_return_request(db, request) for request in order.return_requests],
+        timeline=[OrderStatusEventRead.model_validate(event) for event in order.timeline],
     )
 
 
@@ -3329,6 +3340,78 @@ def list_admin_orders(
     )
 
 
+DELIVERY_OPS_ACTIVE_STATUSES = ("pending", "confirmed", "processing", "ready", "out_for_delivery")
+# How long an order may sit in a given stage before dispatch should flag it as
+# stuck. Tuned for a vendor-fulfilled marketplace (no dedicated rider fleet),
+# so "processing" (the vendor packing it) gets the most slack.
+DELIVERY_OPS_STAGE_SLA_MINUTES = {
+    "pending": 30,
+    "confirmed": 45,
+    "processing": 120,
+    "ready": 30,
+    "out_for_delivery": 90,
+}
+
+
+def compute_delivery_ops_snapshot(db: Session) -> AdminDeliveryOpsRead:
+    statement = (
+        select(Order)
+        .options(selectinload(Order.items), selectinload(Order.timeline))
+        .where(
+            Order.vendor_status.in_(DELIVERY_OPS_ACTIVE_STATUSES),
+            Order.payment_status == "paid",
+        )
+        .order_by(Order.created_at.asc())
+    )
+    orders = list(db.scalars(statement).all())
+    now = datetime.now(UTC)
+    stage_counts: dict[str, int] = {stage: 0 for stage in DELIVERY_OPS_ACTIVE_STATUSES}
+    delayed_count = 0
+    rows: list[AdminDeliveryOpsOrderRead] = []
+
+    for order in orders:
+        stage_counts[order.vendor_status] = stage_counts.get(order.vendor_status, 0) + 1
+        stage_started_at = order.timeline[-1].occurred_at if order.timeline else order.created_at
+        minutes_in_stage = max(0, int((now - stage_started_at).total_seconds() // 60))
+        sla = DELIVERY_OPS_STAGE_SLA_MINUTES.get(order.vendor_status)
+        is_delayed = bool(sla and minutes_in_stage > sla)
+        if is_delayed:
+            delayed_count += 1
+
+        rows.append(
+            AdminDeliveryOpsOrderRead(
+                id=order.id,
+                order_number=order.order_number,
+                customer_name=order.address_full_name,
+                store_name=_store_name_lookup(db, order),
+                vendor_status=order.vendor_status,
+                delivery_method=order.delivery_method,
+                address_city=order.address_city,
+                address_region=order.address_region,
+                product_count=sum(item.quantity for item in order.items),
+                total_amount=round(order.total_amount, 2),
+                delivery_code=order.delivery_code,
+                stage_started_at=stage_started_at,
+                minutes_in_stage=minutes_in_stage,
+                is_delayed=is_delayed,
+                placed_at=order.placed_at,
+            )
+        )
+
+    rows.sort(key=lambda row: row.minutes_in_stage, reverse=True)
+    return AdminDeliveryOpsRead(
+        orders=rows,
+        stage_counts=stage_counts,
+        delayed_count=delayed_count,
+        total_active=len(rows),
+    )
+
+
+def list_admin_delivery_ops(db: Session, current_user: User) -> AdminDeliveryOpsRead:
+    require_admin(current_user)
+    return compute_delivery_ops_snapshot(db)
+
+
 def get_admin_order(db: Session, current_user: User, order_id: str) -> AdminOrderDetailRead:
     require_admin(current_user)
     order = db.scalar(
@@ -3338,6 +3421,7 @@ def get_admin_order(db: Session, current_user: User, order_id: str) -> AdminOrde
             selectinload(Order.user),
             selectinload(Order.return_requests).selectinload(ReturnRequest.order_item),
             selectinload(Order.return_requests).selectinload(ReturnRequest.reviewed_by_user),
+            selectinload(Order.timeline),
         )
         .where(Order.id == order_id)
     )
@@ -3505,7 +3589,7 @@ def update_admin_order_status(
 
     order = db.scalar(
         select(Order)
-        .options(selectinload(Order.items), selectinload(Order.user))
+        .options(selectinload(Order.items), selectinload(Order.user), selectinload(Order.timeline))
         .where(Order.id == order_id)
     )
     if not order:
@@ -3519,6 +3603,14 @@ def update_admin_order_status(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Only paid orders can be marked as delivered.",
+            )
+        # Admin can force-complete without the code (support overrides), but if
+        # a code was supplied it still has to match — no silent typo overrides.
+        entered_code = (payload.delivery_code or "").strip()
+        if entered_code and order.delivery_code and entered_code != order.delivery_code:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="That delivery code doesn't match this order's code.",
             )
         order.status = "delivered"
         order.delivered_at = datetime.now(UTC)
@@ -3537,6 +3629,14 @@ def update_admin_order_status(
         order.status = "processing"
         order.progress = 0.9
         order.tracking_eta = "Out for delivery"
+        is_new_dispatch = not order.delivery_code
+        ensure_delivery_code(order)
+        if is_new_dispatch and order.address_phone:
+            send_delivery_out_for_delivery_sms(
+                phone_number=order.address_phone,
+                order_number=order.order_number,
+                delivery_code=order.delivery_code,
+            )
     else:
         order.status = "processing"
         progress_map = {
@@ -3547,6 +3647,14 @@ def update_admin_order_status(
         }
         order.progress = progress_map.get(payload.status, order.progress)
         order.tracking_eta = payload.status.replace("_", " ").title()
+
+    record_order_status_event(
+        db,
+        order,
+        status=payload.status,
+        actor_role="admin",
+        note="Cancelled by admin" if payload.status == "cancelled" else None,
+    )
 
     push_title, push_body = customer_order_status_push_copy(
         order_number=order.order_number,
@@ -3673,6 +3781,103 @@ def mark_admin_notification_read(
     return NotificationMarkReadResponse(notification_key=str(notification.id))
 
 
+def _count_super_admins(db: Session) -> int:
+    return (
+        db.scalar(
+            select(func.count(User.id)).where(
+                User.role == UserRole.ADMIN,
+                User.admin_permission == AdminPermissionLevel.SUPER_ADMIN.value,
+            )
+        )
+        or 0
+    )
+
+
+def list_admin_staff(
+    db: Session,
+    current_user: User,
+    *,
+    limit: int = 30,
+    offset: int = 0,
+) -> AdminPageRead[AdminUserRead]:
+    require_super_admin(current_user)
+    statement = (
+        select(User)
+        .where(User.role == UserRole.ADMIN)
+        .order_by(User.created_at.desc())
+    )
+    users, has_more = paginate_scalars(db, statement, limit=limit, offset=offset)
+    return AdminPageRead(
+        items=[_serialize_user(user) for user in users],
+        has_more=has_more,
+    )
+
+
+def create_admin_staff(
+    db: Session,
+    current_user: User,
+    payload: AdminStaffCreate,
+) -> AdminUserRead:
+    require_super_admin(current_user)
+
+    try:
+        permission = AdminPermissionLevel(payload.admin_permission)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unsupported admin permission level.",
+        ) from exc
+
+    normalized_email = payload.email.lower()
+    existing_user = db.scalar(select(User).where(User.email == normalized_email))
+    if existing_user:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A user with this email already exists.",
+        )
+
+    if payload.phone_number:
+        existing_phone = db.scalar(
+            select(User).where(User.phone_number == payload.phone_number)
+        )
+        if existing_phone:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="A user with this phone number already exists.",
+            )
+
+    user = User(
+        full_name=payload.full_name.strip(),
+        email=normalized_email,
+        phone_number=payload.phone_number,
+        hashed_password=hash_password(payload.password),
+        role=UserRole.ADMIN,
+        admin_permission=permission.value,
+        is_active=True,
+        is_verified=True,
+    )
+
+    try:
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A user with these details already exists.",
+        ) from None
+
+    log_admin_role_change(
+        db,
+        admin_user=current_user,
+        target_user=user,
+        before_permission=None,
+        after_permission=permission.value,
+    )
+    return _serialize_user(user)
+
+
 def update_admin_user_permission(
     db: Session,
     current_user: User,
@@ -3694,6 +3899,17 @@ def update_admin_user_permission(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Admin user not found.")
 
     before_permission = getattr(user, "admin_permission", None)
+    if (
+        user.id == current_user.id
+        and before_permission == AdminPermissionLevel.SUPER_ADMIN.value
+        and permission != AdminPermissionLevel.SUPER_ADMIN
+        and _count_super_admins(db) <= 1
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You cannot remove the last super admin permission from your account.",
+        )
+
     user.admin_permission = permission.value
     db.commit()
     db.refresh(user)

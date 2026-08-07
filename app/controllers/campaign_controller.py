@@ -2,21 +2,26 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, timezone
 
 from fastapi import HTTPException, UploadFile, status
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.controllers.catalog_controller import serialize_catalog_products
+from app.controllers.notification_controller import create_notification_event
 from app.core.cache import cache_delete_matching
-from app.models import Product, User
+from app.models import Order, OrderItem, Product, User
 from app.models.catalog import (
     MerchandisingCampaign,
     MerchandisingCampaignOptIn,
     MerchandisingCampaignProduct,
 )
+from app.services.push_service import build_push_data, send_expo_push_notification
+
+logger = logging.getLogger(__name__)
 from app.schemas.admin import (
     AdminMerchandisingCampaignOptInRead,
     AdminMerchandisingCampaignRead,
@@ -435,6 +440,21 @@ def duplicate_admin_campaign(
     return _serialize_admin_campaign(db, clone)
 
 
+def _units_sold_since_approval(db: Session, opt_in: MerchandisingCampaignOptIn) -> int | None:
+    if opt_in.status != "approved":
+        return None
+    total = db.scalar(
+        select(func.coalesce(func.sum(OrderItem.quantity), 0))
+        .join(Order, Order.id == OrderItem.order_id)
+        .where(
+            OrderItem.product_id == opt_in.product_id,
+            Order.payment_status == "paid",
+            Order.created_at >= opt_in.updated_at,
+        )
+    )
+    return int(total or 0)
+
+
 def list_admin_campaign_opt_ins(
     db: Session,
     current_user: User,
@@ -460,6 +480,7 @@ def list_admin_campaign_opt_ins(
     for row in rows:
         product = db.get(Product, row.product_id)
         campaign = db.get(MerchandisingCampaign, row.campaign_id)
+        vendor = db.get(User, row.vendor_user_id)
         items.append(
             AdminMerchandisingCampaignOptInRead(
                 id=row.id,
@@ -469,8 +490,10 @@ def list_admin_campaign_opt_ins(
                 product_id=row.product_id,
                 product_title=product.title if product else row.product_id,
                 vendor_user_id=row.vendor_user_id,
+                vendor_name=(vendor.full_name or vendor.email) if vendor else None,
                 status=row.status,
                 review_notes=row.review_notes,
+                units_sold_since_approval=_units_sold_since_approval(db, row),
                 created_at=row.created_at,
                 updated_at=row.updated_at,
             )
@@ -526,6 +549,54 @@ def review_admin_campaign_opt_in(
 
     product = db.get(Product, row.product_id)
     campaign = db.get(MerchandisingCampaign, row.campaign_id)
+    vendor = db.get(User, row.vendor_user_id)
+
+    if cleaned in {"approved", "rejected"}:
+        if vendor:
+            product_title = product.title if product else "your product"
+            campaign_title = campaign.title if campaign else "the campaign"
+            if cleaned == "approved":
+                title = "Campaign opt-in approved"
+                body = f"{product_title} is now featured in {campaign_title}."
+            else:
+                title = "Campaign opt-in declined"
+                body = f"{product_title} was not selected for {campaign_title}."
+                if review_notes:
+                    body = f"{body} {review_notes}"
+
+            notification_event = create_notification_event(
+                db,
+                vendor,
+                kind=f"vendor_campaign_opt_in_{cleaned}",
+                title=title,
+                body=body,
+                icon="megaphone-outline" if cleaned == "approved" else "close-circle-outline",
+                accent="success" if cleaned == "approved" else "neutral",
+                action_label="View campaigns",
+                route_type="vendor_campaign",
+                route_target_id=str(row.id),
+            )
+            if vendor.expo_push_token and vendor.allow_notifications:
+                try:
+                    send_expo_push_notification(
+                        user=vendor,
+                        title=title,
+                        body=body,
+                        data=build_push_data(
+                            push_type="vendor_campaign_opt_in",
+                            route_type="vendor_campaign",
+                            route_target_id=str(row.id),
+                            notification_event=notification_event,
+                            extra={"optInId": str(row.id)},
+                        ),
+                    )
+                except Exception:
+                    logger.exception(
+                        "Failed to push campaign opt-in review alert to vendor %s",
+                        vendor.id,
+                    )
+            db.commit()
+
     return AdminMerchandisingCampaignOptInRead(
         id=row.id,
         campaign_id=row.campaign_id,
@@ -534,8 +605,10 @@ def review_admin_campaign_opt_in(
         product_id=row.product_id,
         product_title=product.title if product else row.product_id,
         vendor_user_id=row.vendor_user_id,
+        vendor_name=(vendor.full_name or vendor.email) if vendor else None,
         status=row.status,
         review_notes=row.review_notes,
+        units_sold_since_approval=_units_sold_since_approval(db, row),
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
@@ -586,6 +659,7 @@ def list_vendor_campaign_opt_ins(
             vendor_user_id=row.vendor_user_id,
             status=row.status,
             review_notes=row.review_notes,
+            units_sold_since_approval=_units_sold_since_approval(db, row),
             created_at=row.created_at,
             updated_at=row.updated_at,
         )

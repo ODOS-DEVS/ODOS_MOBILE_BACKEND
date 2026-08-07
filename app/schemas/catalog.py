@@ -46,6 +46,8 @@ class ProductRead(BaseModel):
     flash_sale_ends_at: datetime | None = None
     flash_sale_event_slug: str | None = None
     flash_sale_event_title: str | None = None
+    flash_sale_stock_limit: int | None = None
+    flash_sale_units_remaining: int | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -170,6 +172,9 @@ class StoreRead(BaseModel):
     description: str | None
     status: str
     sort_order: int
+    is_on_vacation: bool = False
+    vacation_message: str | None = None
+    business_hours: dict | None = None
 
     model_config = ConfigDict(from_attributes=True)
 

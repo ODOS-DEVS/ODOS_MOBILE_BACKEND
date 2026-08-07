@@ -127,8 +127,7 @@ def create_payment_method(db: Session, user: User, payload: PaymentMethodCreate)
         for method in current_methods:
             method.is_default = False
 
-    digits = "".join(character for character in (payload.card_number or "") if character.isdigit())
-    card_last4 = digits[-4:] if digits else None
+    card_last4 = payload.card_last4
     label = payload.label or (f"**** {card_last4}" if payload.type == "card" else f"{payload.network} MoMo")
 
     verified_phone = None

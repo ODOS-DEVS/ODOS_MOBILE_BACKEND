@@ -246,6 +246,8 @@ class FlashSaleEventProduct(Base):
     sort_order: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     flash_sale_price: Mapped[int | None] = mapped_column(Integer, nullable=True)
     flash_sale_old_price: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    stock_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    units_sold: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
 
 
 class FlashSaleNomination(Base):

@@ -94,12 +94,14 @@ class PaymentMethodCreate(BaseModel):
     label: str | None = Field(default=None, max_length=120)
     is_default: bool = False
     card_name: str | None = Field(default=None, max_length=120)
-    card_number: str | None = Field(default=None, min_length=4, max_length=32)
+    # Client-truncated last 4 digits only — the app never transmits a full PAN,
+    # so there's nothing here for the backend to reduce/tokenize.
+    card_last4: str | None = Field(default=None, min_length=4, max_length=4)
     expiry: str | None = Field(default=None, max_length=10)
     network: Literal["MTN", "Telecel", "AT"] | None = None
     phone: str | None = Field(default=None, max_length=30)
 
-    @field_validator("label", "card_name", "card_number", "expiry", "phone", mode="before")
+    @field_validator("label", "card_name", "card_last4", "expiry", "phone", mode="before")
     @classmethod
     def strip_payment_text(cls, value: str | None) -> str | None:
         if value is None:
@@ -107,14 +109,13 @@ class PaymentMethodCreate(BaseModel):
         cleaned = value.strip()
         return cleaned or None
 
-    @field_validator("card_number")
+    @field_validator("card_last4")
     @classmethod
-    def validate_card_number(cls, value: str | None) -> str | None:
+    def validate_card_last4(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        digits = "".join(ch for ch in value if ch.isdigit())
-        if len(digits) < 12 or len(digits) > 19:
-            raise ValueError("Card number must be between 12 and 19 digits.")
+        if not value.isdigit():
+            raise ValueError("Card last 4 digits must be numeric.")
         return value
 
     @field_validator("expiry")
@@ -146,8 +147,8 @@ class PaymentMethodCreate(BaseModel):
 
     @model_validator(mode="after")
     def validate_shape(self):
-        if self.type == "card" and (not self.card_name or not self.card_number or not self.expiry):
-            raise ValueError("Card name, number, and expiry are required.")
+        if self.type == "card" and (not self.card_name or not self.card_last4 or not self.expiry):
+            raise ValueError("Card name, last 4 digits, and expiry are required.")
         if self.type == "momo" and (not self.network or not self.phone):
             raise ValueError("Network and phone are required for mobile money.")
         return self

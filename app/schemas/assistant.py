@@ -11,14 +11,17 @@ class AssistantMessageInput(BaseModel):
 
 
 class AssistantReferenceContext(BaseModel):
-    """Entity the shopper opened the assistant from (e.g. a storefront)."""
+    """Entity the shopper opened the assistant from — a storefront, a specific
+    product, or the checkout screen."""
 
-    type: Literal["store"] = "store"
+    type: Literal["store", "product", "checkout"] = "store"
     store_id: str | None = Field(default=None, max_length=64)
     store_name: str | None = Field(default=None, max_length=160)
     market_title: str | None = Field(default=None, max_length=120)
     vendor_user_id: str | None = Field(default=None, max_length=64)
     category: str | None = Field(default=None, max_length=120)
+    product_id: str | None = Field(default=None, max_length=100)
+    product_title: str | None = Field(default=None, max_length=255)
 
 
 class AssistantChatRequest(BaseModel):

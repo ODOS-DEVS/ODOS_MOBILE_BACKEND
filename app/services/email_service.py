@@ -505,3 +505,192 @@ def send_vendor_application_approved_email(
         html_content=html_content,
         text_content=text_content,
     )
+
+
+def _render_admin_alert_email(
+    *,
+    eyebrow: str,
+    heading: str,
+    summary_title: str,
+    summary_rows: list[tuple[str, str]],
+    cta_label: str,
+    cta_url: str | None,
+) -> tuple[str, str]:
+    """Shared shell for admin-facing "this needs your attention" alerts —
+    vendor applications, withdrawal requests, voucher review, etc. Returns
+    (html_content, text_content); callers own their own subject line."""
+    safe_heading = escape(heading)
+    safe_eyebrow = escape(eyebrow)
+    rows_html = "".join(
+        f'<div style="margin-top:8px;"><strong>{escape(label)}:</strong> {escape(value)}</div>'
+        for label, value in summary_rows
+    )
+    cta_html = (
+        f"""
+        <div style="margin:26px 0 4px;text-align:center;">
+          <a href="{escape(cta_url)}" style="display:inline-block;padding:13px 28px;border-radius:999px;background:#696969;color:#FFFFFF;font-size:14px;font-weight:700;text-decoration:none;">
+            {escape(cta_label)}
+          </a>
+        </div>
+        """
+        if cta_url
+        else ""
+    )
+    html_content = dedent(
+        f"""
+        <html>
+          <body style="margin:0;padding:0;background:#F5F7FA;font-family:Arial,Helvetica,sans-serif;color:#374151;">
+            <div style="max-width:560px;margin:0 auto;padding:32px 16px;">
+              <div style="background:#FFFFFF;border:1px solid #E5E7EB;border-radius:24px;overflow:hidden;">
+                <div style="background:#0F172A;padding:24px 28px;">
+                  <div style="font-size:22px;font-weight:700;color:#FFFFFF;letter-spacing:0.5px;">ODOS Admin</div>
+                  <div style="margin-top:8px;font-size:13px;line-height:20px;color:#CBD5E1;text-transform:uppercase;letter-spacing:1px;">
+                    {safe_eyebrow}
+                  </div>
+                </div>
+                <div style="padding:28px;">
+                  <p style="margin:0 0 18px;font-size:16px;line-height:26px;color:#374151;">
+                    {safe_heading}
+                  </p>
+                  <div style="margin:20px 0;padding:20px 18px;border-radius:18px;background:#F1F3F5;border:1px solid #E5E7EB;">
+                    <div style="font-size:12px;line-height:18px;color:#66797F;letter-spacing:1.8px;text-transform:uppercase;">
+                      {escape(summary_title)}
+                    </div>
+                    <div style="margin-top:4px;font-size:14px;line-height:22px;color:#374151;">
+                      {rows_html}
+                    </div>
+                  </div>
+                  {cta_html}
+                </div>
+              </div>
+            </div>
+          </body>
+        </html>
+        """
+    ).strip()
+    text_lines = [heading, "", summary_title + ":"]
+    text_lines.extend(f"{label}: {value}" for label, value in summary_rows)
+    if cta_url:
+        text_lines.extend(["", f"{cta_label}: {cta_url}"])
+    return html_content, "\n".join(text_lines)
+
+
+def send_admin_vendor_application_email(
+    *,
+    to_email: str,
+    to_name: str | None,
+    store_name: str,
+    business_category: str,
+    applicant_name: str,
+    city: str,
+    region: str,
+    submitted_at_label: str,
+    application_id: str,
+    admin_panel_url: str,
+) -> None:
+    subject = f"New vendor application: {store_name}"
+    html_content, text_content = _render_admin_alert_email(
+        eyebrow="Vendor application",
+        heading=f"<strong>{escape(applicant_name)}</strong> submitted a new vendor application for <strong>{escape(store_name)}</strong> — it needs your review.",
+        summary_title="Application summary",
+        summary_rows=[
+            ("Store name", store_name),
+            ("Category", business_category),
+            ("Location", f"{city}, {region}"),
+            ("Applicant", applicant_name),
+            ("Submitted", submitted_at_label),
+        ],
+        cta_label="Review application",
+        cta_url=(
+            f"{admin_panel_url.rstrip('/')}/vendor-applications/full/{application_id}"
+            if admin_panel_url
+            else None
+        ),
+    )
+    send_transactional_email(
+        to_email=to_email,
+        to_name=to_name,
+        subject=subject,
+        html_content=html_content,
+        text_content=text_content,
+    )
+
+
+def send_admin_withdrawal_request_email(
+    *,
+    to_email: str,
+    to_name: str | None,
+    vendor_name: str,
+    store_name: str,
+    amount_label: str,
+    payout_method: str,
+    submitted_at_label: str,
+    withdrawal_id: str,
+    admin_panel_url: str,
+) -> None:
+    subject = f"Vendor withdrawal request: {amount_label}"
+    html_content, text_content = _render_admin_alert_email(
+        eyebrow="Withdrawal request",
+        heading=f"<strong>{escape(vendor_name)}</strong> ({escape(store_name)}) requested a withdrawal of <strong>{escape(amount_label)}</strong>.",
+        summary_title="Withdrawal summary",
+        summary_rows=[
+            ("Vendor", vendor_name),
+            ("Store", store_name),
+            ("Amount", amount_label),
+            ("Payout method", payout_method),
+            ("Submitted", submitted_at_label),
+        ],
+        cta_label="Review withdrawal",
+        cta_url=(
+            f"{admin_panel_url.rstrip('/')}/payouts/full/{withdrawal_id}"
+            if admin_panel_url
+            else None
+        ),
+    )
+    send_transactional_email(
+        to_email=to_email,
+        to_name=to_name,
+        subject=subject,
+        html_content=html_content,
+        text_content=text_content,
+    )
+
+
+def send_admin_voucher_review_email(
+    *,
+    to_email: str,
+    to_name: str | None,
+    store_name: str,
+    voucher_code: str,
+    voucher_title: str,
+    reward_text: str,
+    submitted_at_label: str,
+    voucher_id: str,
+    admin_panel_url: str,
+) -> None:
+    subject = f"Vendor voucher awaiting approval: {voucher_code}"
+    html_content, text_content = _render_admin_alert_email(
+        eyebrow="Voucher review",
+        heading=f"<strong>{escape(store_name)}</strong> created a voucher that needs approval before it can go live.",
+        summary_title="Voucher summary",
+        summary_rows=[
+            ("Store", store_name),
+            ("Code", voucher_code),
+            ("Title", voucher_title),
+            ("Reward", reward_text),
+            ("Submitted", submitted_at_label),
+        ],
+        cta_label="Review voucher",
+        cta_url=(
+            f"{admin_panel_url.rstrip('/')}/vouchers/full/{voucher_id}"
+            if admin_panel_url
+            else None
+        ),
+    )
+    send_transactional_email(
+        to_email=to_email,
+        to_name=to_name,
+        subject=subject,
+        html_content=html_content,
+        text_content=text_content,
+    )

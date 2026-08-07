@@ -50,6 +50,17 @@ class Order(Base):
     progress: Mapped[float | None] = mapped_column(Float, nullable=True)
     tracking_eta: Mapped[str | None] = mapped_column(String(120), nullable=True)
     cancellation_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Shown to the customer once the order is out for delivery; the vendor enters it
+    # back to confirm the handoff actually happened (proof of delivery without a rider).
+    delivery_code: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    delivery_instructions: Mapped[str | None] = mapped_column(String(280), nullable=True)
+    delivery_rating: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    delivery_rated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reschedule_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reschedule_note: Mapped[str | None] = mapped_column(String(280), nullable=True)
+    dispatch_photo_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    dispatch_photo_key: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    departure_notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     address_full_name: Mapped[str] = mapped_column(String(120), nullable=False)
     address_phone: Mapped[str] = mapped_column(String(30), nullable=False)
@@ -130,6 +141,42 @@ class Order(Base):
         cascade="all, delete-orphan",
         order_by="ReturnRequest.created_at.desc()",
     )
+    timeline: Mapped[list["OrderStatusEvent"]] = relationship(
+        back_populates="order",
+        cascade="all, delete-orphan",
+        order_by="OrderStatusEvent.occurred_at.asc()",
+    )
+
+
+class OrderStatusEvent(Base):
+    """Append-only audit trail powering the live delivery timeline shown to
+    customer, vendor, and admin. Written once per status transition; never
+    updated or deleted individually (rows are removed only via the order's
+    cascade)."""
+
+    __tablename__ = "order_status_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    order_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("orders.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    status: Mapped[str] = mapped_column(String(30), nullable=False)
+    actor_role: Mapped[str] = mapped_column(String(20), nullable=False)
+    note: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    order: Mapped["Order"] = relationship(back_populates="timeline")
 
 
 class OrderItem(Base):
@@ -169,6 +216,17 @@ class OrderItem(Base):
     )
     selected_color: Mapped[str | None] = mapped_column(String(60), nullable=True)
     selected_size: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    is_flash_sale: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default="false",
+        nullable=False,
+    )
+    flash_sale_event_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("flash_sale_events.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

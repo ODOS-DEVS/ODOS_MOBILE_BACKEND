@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.core.admin_pagination import normalize_page_params, paginate_scalars
 from app.schemas.pagination import AdminPageRead
-from app.controllers.notification_controller import create_notification_event
+from app.controllers.notification_controller import create_notification_event, order_notification_image
 from app.services.push_service import (
     customer_order_status_push_copy,
     dispatch_customer_order_push,
@@ -70,8 +70,12 @@ from app.schemas.vendor import (
     VendorVoucherRedemptionRead,
     VendorVoucherUpsert,
 )
-from app.schemas.order import OrderRead
+from app.schemas.order import OrderRead, OrderStatusEventRead
+from app.core.admin_permissions import list_admins_with_feature
+from app.core.config import settings
 from app.services.email_service import (
+    send_admin_vendor_application_email,
+    send_admin_voucher_review_email,
     send_vendor_application_approved_email,
     send_vendor_application_pending_email,
 )
@@ -81,6 +85,11 @@ from app.services.delivery_service import (
     get_delivery_config,
     tracking_eta_for_vendor_status,
 )
+from app.services.order_timeline_service import (
+    ensure_delivery_code,
+    record_order_status_event,
+)
+from app.services.sms_service import send_delivery_out_for_delivery_sms
 
 logger = logging.getLogger(__name__)
 VENDOR_ACTIVE_ORDER_STATUSES = {"pending", "confirmed", "processing", "ready", "out_for_delivery"}
@@ -104,6 +113,18 @@ VENDOR_ALLOWED_STATUSES = {
     "delivered",
     "cancelled",
 }
+# Mirrors the mobile client's VENDOR_ORDER_NEXT_STATUS (utils/vendorOrderFulfillment.ts) —
+# the app only ever offers a single "mark next stage" button, so the API should refuse
+# anything the UI itself would never send (skips, reversals, or PATCHing a stale state).
+VENDOR_STATUS_FORWARD_TRANSITIONS = {
+    "pending": "confirmed",
+    "confirmed": "processing",
+    "processing": "ready",
+    "ready": "out_for_delivery",
+    "out_for_delivery": "delivered",
+}
+# Mirrors canCancelVendorOrder on mobile — cancellation is only offered before prep starts.
+VENDOR_STATUS_CANCELLABLE_FROM = {"pending", "confirmed"}
 
 
 def slugify(value: str) -> str:
@@ -177,6 +198,67 @@ def _dispatch_vendor_application_pending_email(
             "Failed to send vendor application pending email to %s",
             user.email,
         )
+
+
+def _dispatch_admin_vendor_application_alert(
+    db: Session,
+    *,
+    user: User,
+    application: VendorApplication,
+) -> None:
+    admins = list_admins_with_feature(db, "vendors")
+    for admin in admins:
+        if not admin.email:
+            continue
+        try:
+            send_admin_vendor_application_email(
+                to_email=admin.email,
+                to_name=admin.full_name,
+                store_name=application.store_name,
+                business_category=application.business_category,
+                applicant_name=user.full_name or user.email,
+                city=application.city,
+                region=application.region,
+                submitted_at_label=(
+                    application.submitted_at or application.created_at or datetime.now(UTC)
+                ).strftime("%d %b %Y, %I:%M %p UTC"),
+                application_id=str(application.id),
+                admin_panel_url=settings.admin_panel_url,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to send admin vendor-application alert to %s",
+                admin.email,
+            )
+
+
+def _dispatch_admin_voucher_review_alert(
+    db: Session,
+    *,
+    voucher: Voucher,
+    store_title: str,
+) -> None:
+    admins = list_admins_with_feature(db, "promotions")
+    for admin in admins:
+        if not admin.email:
+            continue
+        try:
+            send_admin_voucher_review_email(
+                to_email=admin.email,
+                to_name=admin.full_name,
+                store_name=store_title,
+                voucher_code=voucher.code,
+                voucher_title=voucher.title,
+                reward_text=voucher.reward_text or "—",
+                submitted_at_label=datetime.now(UTC).strftime("%d %b %Y, %I:%M %p UTC"),
+                voucher_id=str(voucher.id),
+                admin_panel_url=settings.admin_panel_url,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to send admin voucher-review alert to %s",
+                admin.email,
+            )
 
 
 def _dispatch_vendor_application_approved_email(
@@ -454,9 +536,18 @@ def _serialize_vendor_order(db: Session, user: User, order: Order) -> VendorOrde
         is_settled=bool(earnings["is_settled"]),
         currency=str(earnings["currency"]),
         status=order.vendor_status,
+        delivery_code=order.delivery_code,
+        delivery_instructions=order.delivery_instructions,
+        reschedule_requested_at=order.reschedule_requested_at,
+        reschedule_note=order.reschedule_note,
+        dispatch_photo_url=order.dispatch_photo_url,
+        departure_notified_at=order.departure_notified_at,
         placed_at=order.placed_at,
         paid_at=order.paid_at,
         created_at=order.created_at,
+        timeline=[
+            OrderStatusEventRead.model_validate(event) for event in order.timeline
+        ],
         items=[
             VendorOrderItemRead(
                 id=item.id,
@@ -512,7 +603,7 @@ def list_vendor_orders_payloads(db: Session, user: User) -> list[VendorOrderRead
     orders = list(
         db.scalars(
             select(Order)
-            .options(selectinload(Order.items), selectinload(Order.user))
+            .options(selectinload(Order.items), selectinload(Order.user), selectinload(Order.timeline))
             .where(Order.id.in_(order_ids))
             .order_by(Order.placed_at.desc(), Order.created_at.desc())
         ).all()
@@ -531,7 +622,7 @@ def get_vendor_order(db: Session, user: User, order_id: str) -> VendorOrderRead:
     require_vendor_access(user)
     order = db.scalar(
         select(Order)
-        .options(selectinload(Order.items), selectinload(Order.user))
+        .options(selectinload(Order.items), selectinload(Order.user), selectinload(Order.timeline))
         .where(Order.id == order_id)
     )
     if not order:
@@ -693,6 +784,7 @@ async def submit_vendor_application(
     db.refresh(application)
     db.refresh(user)
     _dispatch_vendor_application_pending_email(user=user, application=application)
+    _dispatch_admin_vendor_application_alert(db, user=user, application=application)
 
     return application
 
@@ -1927,7 +2019,7 @@ def update_vendor_order_status(
 
     order = db.scalar(
         select(Order)
-        .options(selectinload(Order.items), selectinload(Order.user))
+        .options(selectinload(Order.items), selectinload(Order.user), selectinload(Order.timeline))
         .where(Order.id == order_id)
     )
     if not order:
@@ -1962,8 +2054,57 @@ def update_vendor_order_status(
     }
     is_sole_vendor = len(other_vendor_ids) == 0
 
+    current_status = order.vendor_status
+    if next_status != current_status:
+        if next_status == "cancelled":
+            if current_status not in VENDOR_STATUS_CANCELLABLE_FROM:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        f"An order that is already {current_status.replace('_', ' ')} "
+                        "can no longer be cancelled here."
+                    ),
+                )
+        elif VENDOR_STATUS_FORWARD_TRANSITIONS.get(current_status) != next_status:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Orders move one stage at a time — this order is currently "
+                    f"{current_status.replace('_', ' ')}."
+                ),
+            )
+
+    if next_status == "delivered":
+        # Proof of delivery: the vendor must key in the code the customer was
+        # shown once the order went out for delivery. No rider/GPS involved —
+        # this is the cheapest reliable handoff confirmation for a
+        # vendor-fulfilled marketplace.
+        entered_code = (payload.delivery_code or "").strip()
+        if not order.delivery_code:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="This order hasn't been marked out for delivery yet.",
+            )
+        if not entered_code:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Enter the delivery code the customer gives you to confirm handoff.",
+            )
+        if entered_code != order.delivery_code:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="That delivery code doesn't match. Ask the customer to double-check it.",
+            )
+
     # Always track this vendor's fulfillment view.
     order.vendor_status = next_status
+    record_order_status_event(
+        db,
+        order,
+        status=next_status,
+        actor_role="vendor",
+        note="Cancelled by store" if next_status == "cancelled" else None,
+    )
     changed_wallet_vendor_ids: set[uuid.UUID] = set()
     if next_status == "delivered":
         # Settle this vendor's earnings even on shared carts.
@@ -2009,6 +2150,14 @@ def update_vendor_order_status(
         order.tracking_eta = "Out for delivery · on the way to you"
         order.cancelled_at = None
         order.cancellation_reason = None
+        is_new_dispatch = not order.delivery_code
+        ensure_delivery_code(order)
+        if is_new_dispatch and order.address_phone:
+            send_delivery_out_for_delivery_sms(
+                phone_number=order.address_phone,
+                order_number=order.order_number,
+                delivery_code=order.delivery_code,
+            )
     else:
         order.status = "processing"
         progress_map = {
@@ -2079,6 +2228,118 @@ def update_vendor_order_status(
         "vendor.dashboard.updated",
         dashboard.model_dump(mode="json"),
     )
+    return vendor_order
+
+
+def _require_owned_vendor_order(db: Session, user: User, order_id: str) -> Order:
+    require_vendor_access(user)
+    order = db.scalar(
+        select(Order)
+        .options(
+            selectinload(Order.items),
+            selectinload(Order.user),
+            selectinload(Order.timeline),
+        )
+        .where(Order.id == order_id)
+    )
+    if not order or not _matching_vendor_items(db, user, order):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="That order was not found for this vendor.",
+        )
+    return order
+
+
+async def set_vendor_order_dispatch_photo(
+    db: Session,
+    user: User,
+    order_id: str,
+    photo: UploadFile,
+) -> VendorOrderRead:
+    order = _require_owned_vendor_order(db, user, order_id)
+    if order.vendor_status in {"delivered", "cancelled"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"This order is already {order.vendor_status} — no need for a dispatch photo now.",
+        )
+
+    photo_url = await save_image_upload(photo, folder="orders/dispatch")
+    order.dispatch_photo_url = photo_url
+    db.commit()
+    db.refresh(order)
+
+    vendor_order = _serialize_vendor_order(db, user, order)
+    if not vendor_order:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="That order was not found for this vendor.",
+        )
+    realtime_manager.publish_user_event_sync(
+        str(user.id),
+        "vendor.order.updated",
+        vendor_order.model_dump(mode="json"),
+    )
+    return vendor_order
+
+
+def notify_vendor_order_departure(
+    db: Session,
+    user: User,
+    order_id: str,
+) -> VendorOrderRead:
+    order = _require_owned_vendor_order(db, user, order_id)
+
+    if order.vendor_status not in {"ready", "out_for_delivery"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You can only send this heads-up once the order is ready.",
+        )
+    if order.departure_notified_at:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The customer has already been notified you're heading out.",
+        )
+
+    order.departure_notified_at = datetime.now(UTC)
+    db.commit()
+    db.refresh(order)
+
+    preview = order_notification_image(order)
+    try:
+        departure_event = create_notification_event(
+            db,
+            order.user,
+            kind="vendor_departing",
+            title="Your seller is heading out 🚴",
+            body=f"Order #{order.order_number} is being brought to you right now!",
+            icon="bicycle-outline",
+            accent="info",
+            action_label="Track order",
+            route_type="order",
+            route_target_id=str(order.id),
+            image_key=preview["image_key"],
+            image_url=preview["image_url"],
+        )
+        dispatch_customer_order_push(
+            user=order.user,
+            title="Your seller is heading out 🚴",
+            body=f"Order #{order.order_number} is being brought to you right now!",
+            order=order,
+            notification_event=departure_event,
+        )
+        db.commit()
+    except Exception:
+        logger.exception(
+            "Failed to send departure notice for order %s",
+            order.id,
+        )
+
+    vendor_order = _serialize_vendor_order(db, user, order)
+    if not vendor_order:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="That order was not found for this vendor.",
+        )
     return vendor_order
 
 
@@ -2189,6 +2450,7 @@ def create_vendor_voucher(
             detail="That voucher code already exists.",
         ) from exc
     db.refresh(voucher)
+    _dispatch_admin_voucher_review_alert(db, voucher=voucher, store_title=store.title)
     return _serialize_vendor_voucher(voucher)
 
 

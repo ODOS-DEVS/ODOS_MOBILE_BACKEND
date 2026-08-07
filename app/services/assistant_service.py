@@ -4,6 +4,8 @@ import asyncio
 import json
 import logging
 import re
+from collections.abc import AsyncIterator, Iterator
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -20,6 +22,7 @@ from app.schemas.assistant import (
     AssistantProductRead,
     AssistantStoreRead,
 )
+from app.services.assistant_actions import derive_suggested_actions
 from app.services.assistant_catalog_search import (
     CatalogSearchResult,
     build_catalog_search_context,
@@ -27,6 +30,7 @@ from app.services.assistant_catalog_search import (
     is_product_recommendation_intent,
     is_store_fact_intent,
 )
+from app.services.assistant_escalation import detect_escalation
 from app.services.assistant_tools import (
     MAX_TOOL_LOOP,
     execute_assistant_tool,
@@ -84,11 +88,12 @@ Do not invent products, store counts, or store names not present in live context
 For questions like "how many stores are on ODOS", use marketplace stats / tools and answer with the number — do not attach product suggestions.
 Product cards may appear below your message only for shopping replies — keep the reply concise; do not repeat long product lists.
 
-Focused store reference (critical when provided):
-- If a FOCUSED SCREEN REFERENCE names a store, treat "this store", "here", and general product/deal questions as about that store.
-- Recommend products ONLY from that store unless the user clearly asks to compare or browse other stores.
-- Mention the store by its real name from the reference. Offer store chat / store deep links when helpful.
+Focused screen reference (critical when provided):
+- If a FOCUSED SCREEN REFERENCE names a store, product, or checkout, treat "this", "here", and general questions as about that entity.
+- Recommend products ONLY from a focused store unless the user clearly asks to compare or browse other stores.
+- Mention the store/product by its real name from the reference. Offer store chat / store deep links when helpful.
 - Store page deep link: route "/screens/stores/[id]", params {"id": "<store_id>", "title": "<store_name>"}
+- Product page deep link: route "/screens/[id]", params {"id": "<product_id>"}
 
 Deep links — use suggested_actions with optional params for one-tap navigation:
 - Product detail: route "/screens/[id]", params {"id": "<product_id>"}
@@ -127,6 +132,42 @@ Respond ONLY with valid JSON:
   "suggested_actions": [{"label": "Short label", "route": "/screens/...", "params": {"optional": "value"}}],
   "escalated_to_support": false
 }
+""".strip()
+
+# Used ONLY for the final, streamed reply-generation turn (after any tools have
+# already been resolved non-streamed). The model streams plain conversational text
+# here instead of a JSON envelope, since a partial JSON blob can't be shown to the
+# user mid-generation. Suggested actions / escalation are derived deterministically
+# for this path (see assistant_actions.py / assistant_escalation.py) instead of
+# being asked of the model.
+ODOS_APP_GUIDE_NATURAL = """
+You are ODOS Assistant — a warm, clear, trusted in-app guide for ODOS, a Ghana-focused marketplace app.
+
+Personality:
+- Professional, warm, and clear — like a knowledgeable ODOS support specialist in Accra.
+- Answer ONLY what was asked. Lead with the precise answer in the first sentence.
+- Keep replies short: usually 1–3 sentences. Do not pad with unrelated product picks, store lists, or upsells.
+- If the user asks for a count, fact, or how-to, give that answer first. Do not recommend products unless they asked to shop or find items.
+- Use GH₵ for money (e.g. GH₵120.00).
+- Never invent order numbers, voucher codes, balances, store counts, store names, ETAs, or policies. Use ONLY the live context already provided to you.
+- Use the exact vendor store name from "Vendor dashboard (live)" context — never invent names or generic placeholders.
+- If the user is a guest, guide them to sign in before personal order or voucher help.
+
+Vendor + shopper accounts:
+- Answer the question the user actually asked first (shopping, orders, delivery, products).
+- Only mention vendor dashboard, vendor wallet, or seller earnings when the question is about selling, payouts, store management, or they explicitly ask as a vendor.
+
+When user context includes recent orders, cart items, vouchers, returns, or address — reference them naturally.
+Example: "Your order #ODOS-1234 is out for delivery" — not "check the orders screen".
+
+Focused screen reference (critical when provided):
+- If a FOCUSED SCREEN REFERENCE names a store, product, or checkout, treat "this", "here", and general questions as about that entity.
+- Recommend products ONLY from a focused store unless the user clearly asks to compare or browse other stores.
+
+Formatting:
+- Write in plain, natural conversational text — this is shown to the user exactly as you write it.
+- You may use light markdown: **bold** for a key fact, and "- " bullet lines when listing 2+ options. Nothing else — no headers, no tables, no code fences.
+- Never output JSON, route paths, or raw parameter names in your reply — the app derives navigation links separately.
 """.strip()
 
 _JSON_FENCE_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
@@ -425,7 +466,9 @@ def _fallback_reply(
             ],
         )
 
-    if "human" in text or "agent" in text or "support" in text or "person" in text:
+    if detect_escalation(payload.message) or any(
+        word in text for word in ("human", "agent", "support", "person")
+    ):
         return _build_chat_response(
             reply="I'll connect you with the ODOS support team for hands-on help.",
             actions=[
@@ -495,49 +538,25 @@ def _parse_gemini_error_detail(body: str) -> str | None:
 
 
 def _gemini_error_message(status_code: int, body: str) -> str:
-    lowered = body.lower()
-    detail = _parse_gemini_error_detail(body)
-    detail_lower = detail.lower() if detail else lowered
+    """User-facing message for a Gemini failure.
 
-    if status_code in {401, 403} and "api key" in detail_lower:
-        return (
-            "The Gemini API key on the server is invalid or missing. "
-            "Create a free key at aistudio.google.com/apikey and set GEMINI_API_KEY on Render."
-        )
+    Never leaks operational details (env var names, hosting provider, raw upstream
+    error text) to the client — those are logged server-side only via the callers
+    of this function (see chat_with_assistant / probe_assistant_llm).
+    """
     if _is_gemini_capacity_error(status_code, body):
         return (
-            "Gemini free-tier quota is used up for now. "
-            "Wait a few minutes and try again."
+            "The assistant is getting a lot of requests right now. "
+            "Please wait a moment and try again."
         )
-    if status_code == 404 or "not found" in detail_lower:
+    if status_code in {401, 403, 404, 400}:
         return (
-            "The configured Gemini model is no longer available. "
-            "Set ASSISTANT_MODEL=gemini-3.1-flash-lite on Render and redeploy."
-        )
-    if status_code == 400:
-        if "thought" in detail_lower and "signature" in detail_lower:
-            return (
-                "Gemini rejected the assistant tool follow-up (HTTP 400). "
-                "The server fix is deploying — try again in a minute."
-            )
-        if detail:
-            return (
-                f"Gemini rejected the request (HTTP 400): {detail} "
-                "Check ASSISTANT_MODEL and GEMINI_API_KEY on Render, then redeploy."
-            )
-        return (
-            "Gemini rejected the request (HTTP 400). "
-            "Check ASSISTANT_MODEL and redeploy with a valid GEMINI_API_KEY."
+            "The assistant is temporarily unavailable. "
+            "Please try again shortly, or contact support if this continues."
         )
     if status_code in {502, 503, 504}:
         return (
-            f"Gemini is temporarily unavailable (HTTP {status_code}). "
-            "Try again in a minute."
-        )
-    if status_code:
-        return (
-            f"I'm having trouble reaching Gemini (HTTP {status_code}). "
-            "Verify GEMINI_API_KEY at aistudio.google.com/apikey."
+            "The assistant is temporarily unavailable. Please try again in a minute."
         )
     return (
         "I'm having trouble reaching the AI service right now. "
@@ -647,7 +666,7 @@ async def _post_gemini(
     )
 
 
-async def _call_gemini_with_tools(
+async def _run_gemini_tool_loop(
     *,
     db: Session,
     user: User | None,
@@ -656,7 +675,17 @@ async def _call_gemini_with_tools(
     is_vendor: bool,
     store_id: str | None = None,
     store_name: str | None = None,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]], list[dict[str, Any]]]:
+    """Resolve any Gemini function calls non-streamed (tool results are small JSON,
+    so streaming them offers no benefit; only the final reply text needs to stream).
+
+    Returns (direct_result, latest_contents, tools):
+    - direct_result is not None when the model already produced a final parsed
+      {reply, suggested_actions, escalated_to_support} during the loop — no
+      further "final pass" call is needed by the caller.
+    - Otherwise latest_contents holds the tool-augmented conversation, ready for
+      a final reply-generation call (streamed or not, caller's choice).
+    """
     api_key = settings.gemini_api_key.strip()
     if not api_key:
         raise RuntimeError("Gemini API key is not configured.")
@@ -728,7 +757,7 @@ async def _call_gemini_with_tools(
                     continue
 
                 if text:
-                    return _parse_llm_json(text)
+                    return _parse_llm_json(text), latest_contents, tools
 
                 break
 
@@ -740,6 +769,31 @@ async def _call_gemini_with_tools(
 
     if latest_contents == base_contents:
         raise RuntimeError("Gemini tool loop completed without a response.")
+
+    return None, latest_contents, tools
+
+
+async def _call_gemini_with_tools(
+    *,
+    db: Session,
+    user: User | None,
+    model: str,
+    messages: list[dict[str, str]],
+    is_vendor: bool,
+    store_id: str | None = None,
+    store_name: str | None = None,
+) -> dict[str, Any]:
+    direct, latest_contents, tools = await _run_gemini_tool_loop(
+        db=db,
+        user=user,
+        model=model,
+        messages=messages,
+        is_vendor=is_vendor,
+        store_id=store_id,
+        store_name=store_name,
+    )
+    if direct is not None:
+        return direct
 
     # Final formatting pass — ask for JSON after tool loop (no responseMimeType with tool history).
     contents = list(latest_contents)
@@ -763,6 +817,143 @@ async def _call_gemini_with_tools(
         response.raise_for_status()
         text, _, _ = _parse_gemini_parts(response.json())
         return _parse_llm_json(text)
+
+
+def _chunk_text_for_replay(text: str) -> Iterator[str]:
+    """Yield cumulative (not incremental) text chunks — matches the streaming wire
+    contract, where each `token` event carries the full text so far."""
+    words = text.split()
+    accumulated = ""
+    for index, word in enumerate(words):
+        accumulated = word if index == 0 else f"{accumulated} {word}"
+        yield accumulated
+
+
+class AssistantStreamUnavailable(Exception):
+    """Raised whenever real token streaming can't proceed — callers should fall
+    back to the proven non-streaming chat_with_assistant() path."""
+
+
+async def stream_gemini_reply(
+    *,
+    db: Session,
+    user: User | None,
+    model: str,
+    messages: list[dict[str, str]],
+    is_vendor: bool,
+    store_id: str | None = None,
+    store_name: str | None = None,
+) -> AsyncIterator[tuple[str, Any]]:
+    """Yields ("token", cumulative_text) events as the final reply streams in, then
+    exactly one terminal ("result", parsed_dict) event with reply/suggested_actions/
+    escalated_to_support. Raises AssistantStreamUnavailable (or lets underlying
+    errors propagate) so the caller can fall back to the non-streaming path.
+    """
+    direct, latest_contents, _tools = await _run_gemini_tool_loop(
+        db=db,
+        user=user,
+        model=model,
+        messages=messages,
+        is_vendor=is_vendor,
+        store_id=store_id,
+        store_name=store_name,
+    )
+
+    if direct is not None:
+        # The tool loop already produced final text non-streamed (e.g. no tools were
+        # needed and the first turn answered directly). Replay it as a fast
+        # simulated stream rather than paying for a second live call.
+        reply_text = str(direct.get("reply", ""))
+        for chunk in _chunk_text_for_replay(reply_text):
+            yield ("token", chunk)
+            await asyncio.sleep(0.012)
+        yield ("result", direct)
+        return
+
+    contents = list(latest_contents)
+    contents.append(
+        {
+            "role": "user",
+            "parts": [
+                {
+                    "text": (
+                        "Using the tool results above, respond to the user now in plain, "
+                        "warm, natural conversational text only."
+                    )
+                }
+            ],
+        }
+    )
+
+    system_parts = [
+        ODOS_APP_GUIDE_NATURAL if message["content"] == ODOS_APP_GUIDE else message["content"]
+        for message in messages
+        if message["role"] == "system"
+    ]
+    request_body: dict[str, Any] = {
+        "contents": contents,
+        "generationConfig": {"temperature": 0.35, "maxOutputTokens": 768},
+    }
+    if system_parts:
+        request_body["systemInstruction"] = {"parts": [{"text": "\n\n".join(system_parts)}]}
+
+    accumulated = ""
+    url = f"{settings.gemini_api_base}/models/{model}:streamGenerateContent"
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        async with client.stream(
+            "POST",
+            url,
+            params={"key": settings.gemini_api_key.strip(), "alt": "sse"},
+            headers={"Content-Type": "application/json"},
+            json=request_body,
+        ) as response:
+            if response.status_code != 200:
+                error_body = (await response.aread()).decode("utf-8", errors="replace")
+                logger.warning(
+                    "Gemini stream HTTP %s for %s: %s",
+                    response.status_code,
+                    model,
+                    error_body[:500],
+                )
+                raise AssistantStreamUnavailable(f"Gemini stream HTTP {response.status_code}")
+
+            async for raw_line in response.aiter_lines():
+                line = raw_line.strip()
+                if not line.startswith("data:"):
+                    continue
+                data = line[len("data:") :].strip()
+                if not data:
+                    continue
+                try:
+                    chunk = json.loads(data)
+                except json.JSONDecodeError:
+                    continue
+                text, function_calls, _ = _parse_gemini_parts(chunk)
+                if function_calls:
+                    # Not expected on the final pass (tools already resolved) — bail
+                    # to the safe fallback rather than guessing how to handle it.
+                    raise AssistantStreamUnavailable(
+                        "Gemini requested a tool call during the streamed final pass."
+                    )
+                if text:
+                    accumulated += text
+                    yield ("token", accumulated)
+
+    if not accumulated.strip():
+        raise AssistantStreamUnavailable("Gemini stream produced no text.")
+
+    reply_text = _strip_leaked_json_from_reply(accumulated)
+    if not reply_text:
+        raise AssistantStreamUnavailable("Gemini stream produced no usable reply text.")
+
+    yield (
+        "result",
+        {
+            "reply": reply_text,
+            "suggested_actions": [],
+            "escalated_to_support": False,
+        },
+    )
 
 
 async def _call_gemini(
@@ -858,48 +1049,25 @@ async def _probe_gemini() -> tuple[bool, str | None]:
             return True, None
         return False, _gemini_error_message(response.status_code, response.text[:500])
     except httpx.RequestError as exc:
-        return False, f"Could not reach Gemini ({exc.__class__.__name__}). Check GEMINI_BASE_URL."
+        logger.warning("Assistant Gemini probe request error: %s", exc)
+        return False, "Could not reach the AI service. Please try again shortly."
     except Exception as exc:
         logger.warning("Assistant Gemini probe error: %s", exc)
-        return False, "Unexpected error while probing Gemini."
+        return False, "Unexpected error while checking the AI service."
 
 
 def _openrouter_error_message(status_code: int, body: str) -> str:
-    lowered = body.lower()
-    if status_code == 401:
-        return (
-            "The OpenRouter API key on the server is invalid or expired. "
-            "Update OPENROUTER_API_KEY in Render and redeploy."
-        )
-    if status_code == 402:
-        return (
-            "OpenRouter needs account credits even for some free models. "
-            "Open openrouter.ai/settings/credits, add a small balance, then try again."
-        )
+    """User-facing message for an OpenRouter failure — see _gemini_error_message
+    docstring for why operational detail is deliberately kept server-side only."""
     if status_code == 429:
-        return "OpenRouter rate limit reached. Wait a minute and try again."
-    if status_code == 404:
+        return "The assistant is getting a lot of requests right now. Please wait a moment and try again."
+    if status_code in {401, 402, 404, 400}:
         return (
-            "That OpenRouter model is unavailable right now. "
-            "Try ASSISTANT_MODEL=google/gemma-2-9b-it:free on Render."
-        )
-    if "response_format" in lowered or "json_object" in lowered:
-        return "The selected model does not support structured JSON mode. Redeploy the latest backend fix."
-    if status_code == 400:
-        return (
-            "OpenRouter rejected the request (HTTP 400). "
-            "Check ASSISTANT_MODEL on Render or try google/gemma-2-9b-it:free."
+            "The assistant is temporarily unavailable. "
+            "Please try again shortly, or contact support if this continues."
         )
     if status_code in {502, 503, 504}:
-        return (
-            f"OpenRouter is temporarily unavailable (HTTP {status_code}). "
-            "Try again in a minute."
-        )
-    if status_code:
-        return (
-            f"I'm having trouble reaching the AI service (HTTP {status_code}). "
-            "Check OPENROUTER_API_KEY and credits on openrouter.ai, then try again."
-        )
+        return "The assistant is temporarily unavailable. Please try again in a minute."
     return (
         "I'm having trouble reaching the AI service right now. "
         "Try again in a moment, or chat with our support team."
@@ -1072,19 +1240,31 @@ async def probe_assistant_llm() -> tuple[bool, str | None]:
                 return True, None
             return False, _openrouter_error_message(response.status_code, response.text[:500])
         except httpx.RequestError as exc:
-            return False, f"Could not reach OpenRouter ({exc.__class__.__name__}). Check OPENROUTER_BASE_URL."
+            logger.warning("Assistant OpenRouter probe request error: %s", exc)
+            return False, "Could not reach the AI service. Please try again shortly."
         except Exception as exc:
             logger.warning("Assistant probe error: %s", exc)
-            return False, "Unexpected error while probing OpenRouter."
+            return False, "Unexpected error while checking the AI service."
 
     return True, None
 
 
-async def chat_with_assistant(
+@dataclass
+class _AssistantTurnSetup:
+    user_context: str
+    snapshot: AssistantUserSnapshot | None
+    reference_context: dict[str, str] | None
+    catalog: CatalogSearchResult
+    conversation: Any | None
+    conversation_id: str | None
+    history: list[AssistantMessageInput]
+
+
+def _prepare_assistant_turn(
     db: Session,
     user: User | None,
     payload: AssistantChatRequest,
-) -> AssistantChatResponse:
+) -> _AssistantTurnSetup:
     user_context, snapshot = build_assistant_user_context(db, user)
     reference_context = resolve_store_reference(db, payload.context)
     catalog = build_catalog_search_context(
@@ -1121,46 +1301,74 @@ async def chat_with_assistant(
     else:
         history = payload.history
 
-    def _persist_assistant_response(response: AssistantChatResponse) -> AssistantChatResponse:
-        if conversation is None:
-            return response
-        append_conversation_message(
-            db,
-            conversation,
-            role="user",
-            content=payload.message,
-        )
-        assistant_message = append_conversation_message(
-            db,
-            conversation,
-            role="assistant",
-            content=response.reply,
-            metadata=_message_metadata(
-                actions=response.suggested_actions,
-                products=response.products,
-                stores=response.stores,
-                escalated=response.escalated_to_support,
-            ),
-        )
-        db.commit()
-        response.conversation_id = conversation_id
-        response.message_id = str(assistant_message.id)
+    return _AssistantTurnSetup(
+        user_context=user_context,
+        snapshot=snapshot,
+        reference_context=reference_context,
+        catalog=catalog,
+        conversation=conversation,
+        conversation_id=conversation_id,
+        history=history,
+    )
+
+
+def _persist_turn(
+    db: Session,
+    conversation: Any | None,
+    conversation_id: str | None,
+    payload: AssistantChatRequest,
+    response: AssistantChatResponse,
+) -> AssistantChatResponse:
+    if conversation is None:
         return response
+    append_conversation_message(
+        db,
+        conversation,
+        role="user",
+        content=payload.message,
+    )
+    assistant_message = append_conversation_message(
+        db,
+        conversation,
+        role="assistant",
+        content=response.reply,
+        metadata=_message_metadata(
+            actions=response.suggested_actions,
+            products=response.products,
+            stores=response.stores,
+            escalated=response.escalated_to_support,
+        ),
+    )
+    db.commit()
+    response.conversation_id = conversation_id
+    response.message_id = str(assistant_message.id)
+    return response
+
+
+async def chat_with_assistant(
+    db: Session,
+    user: User | None,
+    payload: AssistantChatRequest,
+) -> AssistantChatResponse:
+    setup = _prepare_assistant_turn(db, user, payload)
+
+    def _finish(response: AssistantChatResponse) -> AssistantChatResponse:
+        return _persist_turn(db, setup.conversation, setup.conversation_id, payload, response)
 
     if not assistant_is_enabled():
-        return _persist_assistant_response(_fallback_reply(payload, user, snapshot, catalog))
+        return _finish(_fallback_reply(payload, user, setup.snapshot, setup.catalog))
 
     try:
         parsed = await _call_llm(
             db=db,
             user=user,
-            user_context=user_context,
-            catalog_context=catalog.context_text,
+            user_context=setup.user_context,
+            catalog_context=setup.catalog.context_text,
             screen=payload.screen,
-            history=history,
+            history=setup.history,
             message=payload.message,
-            is_vendor=bool(snapshot and snapshot.is_vendor),
-            reference_context=reference_context,
+            is_vendor=bool(setup.snapshot and setup.snapshot.is_vendor),
+            reference_context=setup.reference_context,
         )
     except httpx.HTTPStatusError as exc:
         detail = ""
@@ -1177,41 +1385,159 @@ async def chat_with_assistant(
             status_code in {402, 404, 429, 502, 503, 504}
             or (provider == "gemini" and _is_gemini_capacity_error(status_code, detail))
         ):
-            return _persist_assistant_response(_fallback_reply(payload, user, snapshot, catalog))
+            return _finish(_fallback_reply(payload, user, setup.snapshot, setup.catalog))
         return _build_chat_response(
             reply=_provider_error_message(provider, status_code, detail),
             actions=[
                 AssistantActionRead(label="Contact support", route="/screens/support/chat"),
             ],
-            conversation_id=conversation_id,
+            conversation_id=setup.conversation_id,
         )
     except Exception as exc:
         logger.warning("Assistant error: %s", exc)
-        return _persist_assistant_response(_fallback_reply(payload, user, snapshot, catalog))
+        return _finish(_fallback_reply(payload, user, setup.snapshot, setup.catalog))
 
     actions = _serialize_assistant_actions(parsed.get("suggested_actions", []))
     reply = _strip_leaked_json_from_reply(str(parsed.get("reply", "")).strip())
     if not reply:
-        return _persist_assistant_response(_fallback_reply(payload, user, snapshot, catalog))
+        return _finish(_fallback_reply(payload, user, setup.snapshot, setup.catalog))
+
+    # Independent safety net: never rely solely on the LLM to flag escalation.
+    escalated = bool(parsed.get("escalated_to_support")) or detect_escalation(payload.message, reply)
 
     attach_products = (
         not is_store_fact_intent(payload.message)
         and (
             is_product_recommendation_intent(
                 payload.message,
-                store_scoped=bool(reference_context and reference_context.get("store_id")),
+                store_scoped=bool(setup.reference_context and setup.reference_context.get("store_id")),
             )
             or is_flash_sale_intent(payload.message)
         )
     )
 
-    return _persist_assistant_response(
+    return _finish(
         _build_chat_response(
             reply=reply,
             actions=actions,
-            escalated=bool(parsed.get("escalated_to_support")),
-            products=catalog.products if attach_products else [],
-            stores=[] if is_store_fact_intent(payload.message) else catalog.stores,
-            conversation_id=conversation_id,
+            escalated=escalated,
+            products=setup.catalog.products if attach_products else [],
+            stores=[] if is_store_fact_intent(payload.message) else setup.catalog.stores,
+            conversation_id=setup.conversation_id,
         )
     )
+
+
+async def stream_assistant_reply(
+    db: Session,
+    user: User | None,
+    payload: AssistantChatRequest,
+) -> AsyncIterator[tuple[str, Any]]:
+    """High-level real-streaming orchestration (Gemini only). Yields ("token", str)
+    cumulative-text events, then exactly one ("done", AssistantChatResponse) event.
+
+    Raises AssistantStreamUnavailable / any other exception if real streaming isn't
+    possible right now — the caller (assistant_stream.py) falls back to
+    chat_with_assistant() + simulated word-by-word replay on any failure, so this
+    function never needs to be "safe" on its own; it can fail loudly.
+    """
+    provider = settings.assistant_provider_normalized
+    if provider != "gemini" or not assistant_is_enabled():
+        raise AssistantStreamUnavailable("Real streaming is only available for the gemini provider.")
+
+    setup = _prepare_assistant_turn(db, user, payload)
+    reference_block = format_reference_context_block(setup.reference_context)
+    store_id = setup.reference_context.get("store_id") if setup.reference_context else None
+    store_name = setup.reference_context.get("store_name") if setup.reference_context else None
+
+    messages: list[dict[str, str]] = [
+        {"role": "system", "content": ODOS_APP_GUIDE},
+        {
+            "role": "system",
+            "content": (
+                f"Current user context:\n{setup.user_context}\n\n"
+                f"Current screen: {payload.screen or 'unknown'}"
+            ),
+        },
+    ]
+    if reference_block:
+        messages.append({"role": "system", "content": reference_block})
+    if setup.catalog.context_text.strip():
+        messages.append(
+            {
+                "role": "system",
+                "content": f"Catalog search results:\n{setup.catalog.context_text}",
+            }
+        )
+    for item in setup.history[-10:]:
+        messages.append({"role": item.role, "content": item.content})
+    messages.append({"role": "user", "content": payload.message})
+
+    is_vendor = bool(setup.snapshot and setup.snapshot.is_vendor)
+    model = settings.assistant_model_name
+
+    parsed: dict[str, Any] | None = None
+    async for kind, value in stream_gemini_reply(
+        db=db,
+        user=user,
+        model=model,
+        messages=messages,
+        is_vendor=is_vendor,
+        store_id=store_id,
+        store_name=store_name,
+    ):
+        if kind == "token":
+            yield ("token", value)
+        elif kind == "result":
+            parsed = value
+
+    if parsed is None:
+        raise AssistantStreamUnavailable("Gemini stream ended without a final result.")
+
+    reply = _strip_leaked_json_from_reply(str(parsed.get("reply", "")).strip())
+    if not reply:
+        raise AssistantStreamUnavailable("Gemini stream produced an empty final reply.")
+
+    escalated = bool(parsed.get("escalated_to_support")) or detect_escalation(payload.message, reply)
+
+    raw_actions = parsed.get("suggested_actions") or []
+    if raw_actions:
+        serialized_actions = _serialize_assistant_actions(raw_actions)
+    else:
+        serialized_actions = derive_suggested_actions(
+            message=payload.message,
+            reply=reply,
+            screen=payload.screen,
+            reference_context=setup.reference_context,
+            is_vendor=is_vendor,
+            user=user,
+            snapshot=setup.snapshot,
+        )
+
+    if escalated and not any(action.route == "/screens/support/chat" for action in serialized_actions):
+        serialized_actions = [
+            AssistantActionRead(label="Chat with support", route="/screens/support/chat"),
+            *serialized_actions,
+        ][:3]
+
+    attach_products = (
+        not is_store_fact_intent(payload.message)
+        and (
+            is_product_recommendation_intent(
+                payload.message,
+                store_scoped=bool(store_id),
+            )
+            or is_flash_sale_intent(payload.message)
+        )
+    )
+
+    response = _build_chat_response(
+        reply=reply,
+        actions=serialized_actions,
+        escalated=escalated,
+        products=setup.catalog.products if attach_products else [],
+        stores=[] if is_store_fact_intent(payload.message) else setup.catalog.stores,
+        conversation_id=setup.conversation_id,
+    )
+    response = _persist_turn(db, setup.conversation, setup.conversation_id, payload, response)
+    yield ("done", response)

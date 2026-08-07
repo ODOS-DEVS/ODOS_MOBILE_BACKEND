@@ -133,6 +133,16 @@ def admin_has_feature(user: User, feature: str) -> bool:
     return "*" in allowed or feature in allowed
 
 
+def list_admins_with_feature(db: Session, feature: str) -> list[User]:
+    """Admin users whose permission band covers `feature` — the recipient
+    list for feature-scoped alert emails (e.g. only finance-capable admins
+    hear about withdrawal requests)."""
+    from sqlalchemy import select
+
+    all_admins = list(db.scalars(select(User).where(User.role == UserRole.ADMIN)).all())
+    return [admin for admin in all_admins if admin_has_feature(admin, feature)]
+
+
 def require_admin(user: User) -> User:
     if user.role != UserRole.ADMIN:
         raise HTTPException(

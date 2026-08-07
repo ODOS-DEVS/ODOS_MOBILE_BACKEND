@@ -40,9 +40,11 @@ from app.controllers.vendor_controller import (
     list_vendor_reviews,
     list_vendor_voucher_redemptions,
     list_vendor_vouchers,
+    notify_vendor_order_departure,
     patch_vendor_product_stock,
     patch_vendor_return_request,
     reply_to_vendor_review,
+    set_vendor_order_dispatch_photo,
     submit_vendor_application,
     update_vendor_order_status,
     update_vendor_product,
@@ -643,6 +645,25 @@ def patch_vendor_order_status(
     db: Session = Depends(get_db),
 ):
     return update_vendor_order_status(db, current_user, order_id, payload)
+
+
+@router.post("/orders/{order_id}/dispatch-photo", response_model=VendorOrderRead)
+async def post_vendor_order_dispatch_photo(
+    order_id: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+    photo: UploadFile = File(...),
+):
+    return await set_vendor_order_dispatch_photo(db, current_user, order_id, photo)
+
+
+@router.post("/orders/{order_id}/notify-departure", response_model=VendorOrderRead)
+def post_vendor_order_notify_departure(
+    order_id: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return notify_vendor_order_departure(db, current_user, order_id)
 
 
 @router.get("/store", response_model=VendorStoreRead)

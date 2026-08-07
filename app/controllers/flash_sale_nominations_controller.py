@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
@@ -20,12 +19,34 @@ from app.schemas.vendor import VendorFlashSaleNominationCreate, VendorFlashSaleN
 from app.services.push_service import build_push_data, send_expo_push_notification
 
 
+def _get_flash_allocation(
+    db: Session,
+    nomination: FlashSaleNomination,
+) -> FlashSaleEventProduct | None:
+    if nomination.status != "approved" or not nomination.event_id:
+        return None
+    return db.scalar(
+        select(FlashSaleEventProduct).where(
+            FlashSaleEventProduct.event_id == nomination.event_id,
+            FlashSaleEventProduct.product_id == nomination.product_id,
+        )
+    )
+
+
 def _serialize_vendor_nomination(
     db: Session,
     nomination: FlashSaleNomination,
 ) -> VendorFlashSaleNominationRead:
     product = db.get(Product, nomination.product_id)
     event = db.get(FlashSaleEvent, nomination.event_id) if nomination.event_id else None
+    allocation = _get_flash_allocation(db, nomination)
+    stock_limit = allocation.stock_limit if allocation else nomination.stock_limit
+    units_sold = allocation.units_sold if allocation else None
+    units_remaining = (
+        max(stock_limit - units_sold, 0)
+        if allocation and stock_limit is not None and units_sold is not None
+        else None
+    )
     return VendorFlashSaleNominationRead(
         id=nomination.id,
         event_id=nomination.event_id,
@@ -35,7 +56,9 @@ def _serialize_vendor_nomination(
         product_image_url=product.image_url if product else None,
         proposed_price=nomination.proposed_price,
         proposed_old_price=nomination.proposed_old_price,
-        stock_limit=nomination.stock_limit,
+        stock_limit=stock_limit,
+        units_sold=units_sold,
+        units_remaining=units_remaining,
         max_per_user=nomination.max_per_user,
         vendor_note=nomination.vendor_note,
         status=nomination.status,
@@ -51,6 +74,15 @@ def _serialize_admin_nomination(
 ) -> AdminFlashSaleNominationRead:
     product = db.get(Product, nomination.product_id)
     event = db.get(FlashSaleEvent, nomination.event_id) if nomination.event_id else None
+    vendor = db.get(User, nomination.vendor_user_id)
+    allocation = _get_flash_allocation(db, nomination)
+    stock_limit = allocation.stock_limit if allocation else nomination.stock_limit
+    units_sold = allocation.units_sold if allocation else None
+    units_remaining = (
+        max(stock_limit - units_sold, 0)
+        if allocation and stock_limit is not None and units_sold is not None
+        else None
+    )
     return AdminFlashSaleNominationRead(
         id=nomination.id,
         event_id=nomination.event_id,
@@ -58,9 +90,12 @@ def _serialize_admin_nomination(
         product_id=nomination.product_id,
         product_title=product.title if product else None,
         vendor_user_id=nomination.vendor_user_id,
+        vendor_name=(vendor.full_name or vendor.email) if vendor else None,
         proposed_price=nomination.proposed_price,
         proposed_old_price=nomination.proposed_old_price,
-        stock_limit=nomination.stock_limit,
+        stock_limit=stock_limit,
+        units_sold=units_sold,
+        units_remaining=units_remaining,
         max_per_user=nomination.max_per_user,
         vendor_note=nomination.vendor_note,
         status=nomination.status,
@@ -212,6 +247,12 @@ def review_admin_flash_sale_nomination(
                 detail="Flash sale price is required for approval.",
             )
 
+        # An explicit stock_limit on the review payload always wins (admin override);
+        # otherwise fall back to what the vendor originally proposed.
+        stock_limit = (
+            payload.stock_limit if payload.stock_limit is not None else nomination.stock_limit
+        )
+
         existing = db.scalar(
             select(FlashSaleEventProduct).where(
                 FlashSaleEventProduct.event_id == event.id,
@@ -221,6 +262,10 @@ def review_admin_flash_sale_nomination(
         if existing:
             existing.flash_sale_price = flash_price
             existing.flash_sale_old_price = flash_old_price
+            # Only adjust the cap here — units_sold already reflects real sales
+            # against this allocation and must never be reset by a re-review.
+            if payload.stock_limit is not None:
+                existing.stock_limit = payload.stock_limit
         else:
             max_sort = db.scalar(
                 select(FlashSaleEventProduct.sort_order)
@@ -234,6 +279,7 @@ def review_admin_flash_sale_nomination(
                     sort_order=int(max_sort or 0) + 1,
                     flash_sale_price=flash_price,
                     flash_sale_old_price=flash_old_price,
+                    stock_limit=stock_limit,
                 )
             )
 

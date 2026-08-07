@@ -49,6 +49,7 @@ class OrderCreate(BaseModel):
     address_street: str = Field(min_length=1, max_length=255)
     address_city: str = Field(min_length=1, max_length=120)
     address_region: str = Field(min_length=1, max_length=120)
+    delivery_instructions: str | None = Field(default=None, max_length=280)
 
     payment_type: str = Field(min_length=1, max_length=30)
     payment_label: str = Field(min_length=1, max_length=120)
@@ -62,6 +63,7 @@ class OrderCreate(BaseModel):
         "address_street",
         "address_city",
         "address_region",
+        "delivery_instructions",
         "payment_type",
         "payment_label",
         "payment_network",
@@ -135,11 +137,38 @@ class ReturnRequestRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class OrderStatusEventRead(BaseModel):
+    id: uuid.UUID
+    status: str
+    actor_role: str
+    note: str | None
+    occurred_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class OrderDeliveryRatingUpdate(BaseModel):
+    rating: int = Field(ge=1, le=5)
+
+
+class OrderRescheduleRequest(BaseModel):
+    note: str | None = Field(default=None, max_length=280)
+
+    @field_validator("note", mode="before")
+    @classmethod
+    def strip_reschedule_note(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        cleaned = value.strip()
+        return cleaned or None
+
+
 class OrderRead(BaseModel):
     id: uuid.UUID
     order_number: str
     source: str
     status: str
+    vendor_status: str
     payment_status: str
     payment_provider: str
     payment_reference: str | None
@@ -150,6 +179,14 @@ class OrderRead(BaseModel):
     progress: float | None
     tracking_eta: str | None
     cancellation_reason: str | None
+    delivery_code: str | None
+    delivery_instructions: str | None
+    delivery_rating: int | None
+    delivery_rated_at: datetime | None
+    reschedule_requested_at: datetime | None
+    reschedule_note: str | None
+    dispatch_photo_url: str | None
+    departure_notified_at: datetime | None
     address_full_name: str
     address_phone: str
     address_street: str
@@ -172,5 +209,6 @@ class OrderRead(BaseModel):
     updated_at: datetime
     items: list[OrderItemRead]
     return_requests: list[ReturnRequestRead] = []
+    timeline: list[OrderStatusEventRead] = []
 
     model_config = ConfigDict(from_attributes=True)

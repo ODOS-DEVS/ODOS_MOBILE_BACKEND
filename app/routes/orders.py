@@ -11,13 +11,22 @@ from app.controllers.order_controller import (
     delete_order,
     get_order,
     list_orders,
+    request_order_reschedule,
+    submit_order_delivery_rating,
 )
 from app.core.auth import get_current_user
 from app.core.database import get_db
 from app.models import User
 from app.services.media_service import save_image_uploads
 from app.schemas.user import MessageResponse
-from app.schemas.order import OrderCreate, OrderRead, ReturnRequestCreate, ReturnRequestRead
+from app.schemas.order import (
+    OrderCreate,
+    OrderDeliveryRatingUpdate,
+    OrderRead,
+    OrderRescheduleRequest,
+    ReturnRequestCreate,
+    ReturnRequestRead,
+)
 
 router = APIRouter(prefix="/orders", tags=["orders"])
 
@@ -64,6 +73,26 @@ def confirm_existing_order_delivery(
     db: Session = Depends(get_db),
 ):
     return confirm_order_delivery(db, current_user, order_id)
+
+
+@router.patch("/{order_id}/delivery-rating", response_model=OrderRead)
+def submit_delivery_rating(
+    order_id: str,
+    payload: OrderDeliveryRatingUpdate,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return submit_order_delivery_rating(db, current_user, order_id, payload.rating)
+
+
+@router.post("/{order_id}/reschedule", response_model=OrderRead)
+def request_delivery_reschedule(
+    order_id: str,
+    payload: OrderRescheduleRequest,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return request_order_reschedule(db, current_user, order_id, payload.note)
 
 
 @router.post("/{order_id}/returns", response_model=ReturnRequestRead, status_code=status.HTTP_201_CREATED)

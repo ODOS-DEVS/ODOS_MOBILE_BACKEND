@@ -454,6 +454,8 @@ def serialize_catalog_products(db: Session, products: list[Product]) -> list[Pro
             payload["flash_sale_ends_at"] = pricing.flash_sale_ends_at
             payload["flash_sale_event_slug"] = pricing.flash_event_slug
             payload["flash_sale_event_title"] = pricing.flash_event_title
+            payload["flash_sale_stock_limit"] = pricing.flash_stock_limit
+            payload["flash_sale_units_remaining"] = pricing.flash_units_remaining
         serialized.append(ProductRead.model_validate(payload))
     return serialized
 

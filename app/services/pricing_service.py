@@ -21,9 +21,12 @@ class EffectiveProductPrice:
     compare_at_price: float | None
     is_on_sale: bool
     is_flash_sale: bool
+    flash_event_id: str | None
     flash_event_slug: str | None
     flash_event_title: str | None
     flash_sale_ends_at: datetime | None
+    flash_stock_limit: int | None
+    flash_units_remaining: int | None
     savings_amount: float
     discount_label: str | None
 
@@ -65,6 +68,9 @@ def get_flash_sale_context_map(
             FlashSaleEventProduct.product_id,
             FlashSaleEventProduct.flash_sale_price,
             FlashSaleEventProduct.flash_sale_old_price,
+            FlashSaleEventProduct.stock_limit,
+            FlashSaleEventProduct.units_sold,
+            FlashSaleEvent.id,
             FlashSaleEvent.ends_at,
             FlashSaleEvent.slug,
             FlashSaleEvent.title,
@@ -79,15 +85,24 @@ def get_flash_sale_context_map(
     ).all()
 
     context: dict[str, dict[str, object]] = {}
-    for product_id, flash_price, flash_old_price, ends_at, slug, title in rows:
+    for product_id, flash_price, flash_old_price, stock_limit, units_sold, event_id, ends_at, slug, title in rows:
         if product_id in context:
             continue
+        # A stock-limited flash item that has sold through its allocation is no
+        # longer a flash deal — fall back to regular pricing for it rather than
+        # exposing a price nobody can actually get.
+        if stock_limit is not None and units_sold >= stock_limit:
+            continue
+        remaining = (stock_limit - units_sold) if stock_limit is not None else None
         context[product_id] = {
             "flash_sale_price": flash_price,
             "flash_sale_old_price": flash_old_price,
+            "event_id": str(event_id),
             "ends_at": ends_at,
             "slug": slug,
             "title": title,
+            "stock_limit": stock_limit,
+            "units_remaining": remaining,
         }
     return context
 
@@ -106,8 +121,11 @@ def resolve_effective_product_price(
     flash_price = None
     flash_old_price = None
     flash_ends_at = None
+    flash_event_id = None
     flash_slug = None
     flash_title = None
+    flash_stock_limit = None
+    flash_units_remaining = None
     is_flash_sale = False
 
     if flash_context:
@@ -120,8 +138,11 @@ def resolve_effective_product_price(
                 else compare_at or regular
             )
             flash_ends_at = flash_context.get("ends_at")  # type: ignore[assignment]
+            flash_event_id = flash_context.get("event_id")  # type: ignore[assignment]
             flash_slug = str(flash_context.get("slug") or "")
             flash_title = str(flash_context.get("title") or "")
+            flash_stock_limit = flash_context.get("stock_limit")  # type: ignore[assignment]
+            flash_units_remaining = flash_context.get("units_remaining")  # type: ignore[assignment]
             is_flash_sale = True
             catalog_price = flash_price
             compare_at = flash_old_price
@@ -157,9 +178,12 @@ def resolve_effective_product_price(
         compare_at_price=compare_at,
         is_on_sale=is_on_sale or is_flash_sale,
         is_flash_sale=is_flash_sale,
+        flash_event_id=flash_event_id,  # type: ignore[arg-type]
         flash_event_slug=flash_slug,
         flash_event_title=flash_title,
         flash_sale_ends_at=flash_ends_at,  # type: ignore[arg-type]
+        flash_stock_limit=flash_stock_limit,  # type: ignore[arg-type]
+        flash_units_remaining=flash_units_remaining,  # type: ignore[arg-type]
         savings_amount=savings,
         discount_label=label,
     )

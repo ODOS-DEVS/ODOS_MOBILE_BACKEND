@@ -4,6 +4,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.models import VendorStatus
+from app.schemas.order import OrderStatusEventRead
 
 
 class VendorApplicationRead(BaseModel):
@@ -268,6 +269,8 @@ class VendorFlashSaleNominationRead(BaseModel):
     proposed_price: int | None = None
     proposed_old_price: int | None = None
     stock_limit: int | None = None
+    units_sold: int | None = None
+    units_remaining: int | None = None
     max_per_user: int | None = None
     vendor_note: str | None = None
     status: str
@@ -337,6 +340,7 @@ class VendorWalletRead(BaseModel):
     lifetime_earnings: float
     total_withdrawn: float
     total_commission: float
+    commission_rate: float
     payout_method_type: str | None = None
     payout_account_name: str | None = None
     payout_account_number_masked: str | None = None
@@ -507,6 +511,18 @@ class VendorProductUpdate(BaseModel):
 
 class VendorOrderStatusUpdate(BaseModel):
     status: str = Field(min_length=1, max_length=30)
+    # No min_length: a too-short/mistyped code should fail with the friendly
+    # "doesn't match" business-logic message in the controller, not a raw
+    # Pydantic 422.
+    delivery_code: str | None = Field(default=None, max_length=8)
+
+    @field_validator("delivery_code", mode="before")
+    @classmethod
+    def strip_delivery_code(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        cleaned = value.strip()
+        return cleaned or None
 
 
 class VendorProductStatusUpdate(BaseModel):
@@ -602,10 +618,17 @@ class VendorOrderRead(BaseModel):
     is_settled: bool = False
     currency: str = "GHS"
     status: str
+    delivery_code: str | None = None
+    delivery_instructions: str | None = None
+    reschedule_requested_at: datetime | None = None
+    reschedule_note: str | None = None
+    dispatch_photo_url: str | None = None
+    departure_notified_at: datetime | None = None
     placed_at: datetime | None = None
     paid_at: datetime | None = None
     created_at: datetime
     items: list[VendorOrderItemRead]
+    timeline: list[OrderStatusEventRead] = []
 
 
 class VendorReturnRequestRead(BaseModel):

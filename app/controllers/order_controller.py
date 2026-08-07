@@ -43,6 +43,7 @@ from app.services.delivery_service import (
     validate_delivery_checkout,
 )
 from app.services.finance_math import round_money
+from app.services.order_timeline_service import record_order_status_event
 from app.services.realtime_service import realtime_manager
 from app.services.push_service import (
     dispatch_customer_order_push,
@@ -278,6 +279,7 @@ def _validate_checkout_items(db: Session, items: list[OrderItemCreate]) -> None:
 
 def _decrement_order_inventory(db: Session, order: Order) -> None:
     from app.controllers.vendor_controller import broadcast_catalog_product_change
+    from app.models import FlashSaleEventProduct
     from app.services.inventory_service import record_stock_change
 
     product_ids = [item.product_id for item in order.items if item.product_id]
@@ -290,6 +292,20 @@ def _decrement_order_inventory(db: Session, order: Order) -> None:
             select(Product).where(Product.id.in_(product_ids)).with_for_update()
         ).all()
     }
+
+    flash_items = [item for item in order.items if item.is_flash_sale and item.flash_sale_event_id]
+    flash_allocations: dict[tuple, FlashSaleEventProduct] = {}
+    if flash_items:
+        keys = {(item.flash_sale_event_id, item.product_id) for item in flash_items}
+        rows = db.scalars(
+            select(FlashSaleEventProduct)
+            .where(
+                FlashSaleEventProduct.event_id.in_({key[0] for key in keys}),
+                FlashSaleEventProduct.product_id.in_({key[1] for key in keys}),
+            )
+            .with_for_update()
+        ).all()
+        flash_allocations = {(row.event_id, row.product_id): row for row in rows}
 
     for item in order.items:
         if not item.product_id:
@@ -305,6 +321,17 @@ def _decrement_order_inventory(db: Session, order: Order) -> None:
                 status_code=status.HTTP_409_CONFLICT,
                 detail=f"Not enough stock left for {item.title}.",
             )
+
+        if item.is_flash_sale and item.flash_sale_event_id:
+            allocation = flash_allocations.get((item.flash_sale_event_id, item.product_id))
+            if allocation and allocation.stock_limit is not None:
+                if allocation.units_sold + item.quantity > allocation.stock_limit:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail=f"This flash sale price for {item.title} just sold out.",
+                    )
+                allocation.units_sold += item.quantity
+
         previous_stock = int(product.stock)
         visibility_changed = record_stock_change(
             db,
@@ -445,6 +472,7 @@ def prepare_order_for_checkout(
         address_street=payload.address_street,
         address_city=payload.address_city,
         address_region=payload.address_region,
+        delivery_instructions=payload.delivery_instructions,
         payment_type=payload.payment_type,
         payment_label=payload.payment_label,
         payment_status="pending",
@@ -470,11 +498,18 @@ def prepare_order_for_checkout(
         product_snapshot = product_snapshot_map.get(item.product_id, {})
         image_url = item.image_url or product_snapshot.get("image_url")
         image_key = item.image_key or product_snapshot.get("image_key")
+        item_pricing = resolved_prices.get(item.product_id)
         order.items.append(
             OrderItem(
                 product_id=item.product_id,
                 title=item.title,
                 category=item.category,
+                is_flash_sale=bool(item_pricing and item_pricing.is_flash_sale),
+                flash_sale_event_id=(
+                    item_pricing.flash_event_id
+                    if item_pricing and item_pricing.is_flash_sale
+                    else None
+                ),
                 image_url=image_url,
                 image_key=image_key,
                 quantity=item.quantity,
@@ -512,6 +547,13 @@ def prepare_order_for_checkout(
 
     db.add(order)
     db.flush()
+    record_order_status_event(
+        db,
+        order,
+        status="pending_payment",
+        actor_role="customer",
+        note="Order placed, awaiting payment confirmation",
+    )
     return order
 
 
@@ -560,6 +602,13 @@ def activate_order_after_payment(
     order.paid_at = datetime.now(timezone.utc)
     order.cancelled_at = None
     order.cancellation_reason = None
+    record_order_status_event(
+        db,
+        order,
+        status="payment_confirmed",
+        actor_role="system",
+        note="Payment confirmed — the seller has been notified",
+    )
 
     _decrement_order_inventory(db, order)
 
@@ -682,7 +731,7 @@ def create_order(db: Session, user: User, payload: OrderCreate) -> Order:
 
     created_order = db.scalar(
         select(Order)
-        .options(selectinload(Order.items), selectinload(Order.return_requests))
+        .options(selectinload(Order.items), selectinload(Order.return_requests), selectinload(Order.timeline))
         .where(Order.id == order.id, Order.user_id == user.id)
     )
     if not created_order:
@@ -725,7 +774,7 @@ def list_orders(db: Session, user: User) -> list[Order]:
     return list(
         db.scalars(
             select(Order)
-            .options(selectinload(Order.items), selectinload(Order.return_requests))
+            .options(selectinload(Order.items), selectinload(Order.return_requests), selectinload(Order.timeline))
             .where(Order.user_id == user.id)
             .order_by(Order.placed_at.desc(), Order.created_at.desc())
         ).all()
@@ -735,7 +784,7 @@ def list_orders(db: Session, user: User) -> list[Order]:
 def get_order(db: Session, user: User, order_id: str) -> Order:
     order = db.scalar(
         select(Order)
-        .options(selectinload(Order.items), selectinload(Order.return_requests))
+        .options(selectinload(Order.items), selectinload(Order.return_requests), selectinload(Order.timeline))
         .where(Order.id == order_id, Order.user_id == user.id)
     )
     if not order:
@@ -884,6 +933,13 @@ def cancel_order(
     order.tracking_eta = None
     order.cancellation_reason = reason
     order.cancelled_at = datetime.now(timezone.utc)
+    record_order_status_event(
+        db,
+        order,
+        status="cancelled",
+        actor_role="customer",
+        note=reason,
+    )
     db.commit()
     db.refresh(order)
     preview = order_notification_image(order)
@@ -924,11 +980,19 @@ def confirm_order_delivery(db: Session, user: User, order_id: str) -> Order:
         )
 
     order.status = "delivered"
+    order.vendor_status = "delivered"
     order.progress = 1
     order.tracking_eta = None
     order.cancellation_reason = None
     order.cancelled_at = None
     order.delivered_at = datetime.now(timezone.utc)
+    record_order_status_event(
+        db,
+        order,
+        status="delivered",
+        actor_role="customer",
+        note="Customer confirmed receipt",
+    )
     db.commit()
     db.refresh(order)
     preview = order_notification_image(order)
@@ -955,6 +1019,105 @@ def confirm_order_delivery(db: Session, user: User, order_id: str) -> Order:
     )
     db.commit()
     db.refresh(order)
+    _broadcast_order_realtime(db, order)
+    return order
+
+
+def submit_order_delivery_rating(
+    db: Session,
+    user: User,
+    order_id: str,
+    rating: int,
+) -> Order:
+    order = get_order(db, user, order_id)
+
+    if order.status != "delivered":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You can only rate delivery after the order has arrived.",
+        )
+
+    order.delivery_rating = rating
+    order.delivery_rated_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(order)
+    return order
+
+
+def request_order_reschedule(
+    db: Session,
+    user: User,
+    order_id: str,
+    note: str | None,
+) -> Order:
+    order = get_order(db, user, order_id)
+
+    if order.vendor_status != "out_for_delivery":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Reschedule requests are only available while an order is out for delivery.",
+        )
+
+    if order.reschedule_requested_at:
+        last_requested_at = order.reschedule_requested_at
+        if last_requested_at.tzinfo is None:
+            last_requested_at = last_requested_at.replace(tzinfo=timezone.utc)
+        already_notified_minutes = (
+            datetime.now(timezone.utc) - last_requested_at
+        ).total_seconds() / 60
+        if already_notified_minutes < 10:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="You already let the seller know a few minutes ago — no need to send it again.",
+            )
+
+    order.reschedule_requested_at = datetime.now(timezone.utc)
+    order.reschedule_note = note
+    db.commit()
+    db.refresh(order)
+
+    preview = order_notification_image(order)
+    for vendor_user in _order_vendor_users(db, order):
+        try:
+            vendor_event = create_notification_event(
+                db,
+                vendor_user,
+                kind="order_reschedule_requested",
+                title="Customer isn't home",
+                body=(
+                    f"Order #{order.order_number}: "
+                    f"{note or 'the customer asked to hold or reschedule delivery.'}"
+                ),
+                icon="time-outline",
+                accent="warning",
+                action_label="View order",
+                route_type="vendor_order",
+                route_target_id=str(order.id),
+                image_key=preview["image_key"],
+                image_url=preview["image_url"],
+            )
+            send_vendor_order_push(
+                user=vendor_user,
+                title="Customer isn't home",
+                body=(
+                    f"Order #{order.order_number} — "
+                    f"{note or 'they asked you to hold or reschedule delivery.'}"
+                ),
+                data=build_push_data(
+                    push_type="vendor_order",
+                    route_type="vendor_order",
+                    route_target_id=str(order.id),
+                    notification_event=vendor_event,
+                    extra={"orderId": str(order.id), "alertKind": "reschedule"},
+                ),
+            )
+        except Exception:
+            logger.exception(
+                "Failed to send reschedule alert for order %s to vendor %s",
+                order.id,
+                vendor_user.id,
+            )
+    db.commit()
     _broadcast_order_realtime(db, order)
     return order
 

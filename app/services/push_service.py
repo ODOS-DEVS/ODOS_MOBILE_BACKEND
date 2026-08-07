@@ -36,8 +36,8 @@ def customer_order_status_push_copy(
             f"Order #{order_number} is ready.",
         ),
         "out_for_delivery": (
-            "Out for delivery",
-            f"Order #{order_number} is on the way to you.",
+            "Out for delivery 🚚",
+            f"Order #{order_number} is on the way! Tap to view your delivery code.",
         ),
         "delivered": (
             "Order delivered",
@@ -55,7 +55,7 @@ def customer_order_status_push_copy(
             f"Order #{order_number} is now {vendor_status.replace('_', ' ')}.",
         ),
     )
-    if tracking_eta and vendor_status not in {"delivered", "cancelled"}:
+    if tracking_eta and vendor_status not in {"delivered", "cancelled", "out_for_delivery"}:
         body = f"{body.rstrip('.')} · {tracking_eta}"
     return title, body
 

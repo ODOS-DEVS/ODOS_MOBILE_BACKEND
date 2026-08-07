@@ -1,6 +1,7 @@
 import hashlib
 import logging
 import secrets
+import time
 from datetime import UTC, datetime, timedelta
 
 from fastapi import HTTPException, Request, status
@@ -65,6 +66,27 @@ from app.services.email_service import (
 
 logger = logging.getLogger(__name__)
 EMAIL_VERIFICATION_CODE_LENGTH = 6
+# Minimum gap between two OTP/reset-code sends to the same channel — the mobile UI has
+# no cooldown of its own today, so a fast double-tap (or a script) could otherwise spam
+# email/SMS sends with no server-side limit at all.
+OTP_RESEND_COOLDOWN_SECONDS = 45
+
+
+def _enforce_resend_cooldown(sent_at: datetime | None) -> None:
+    if not sent_at:
+        return
+
+    sent_at_utc = sent_at if sent_at.tzinfo else sent_at.replace(tzinfo=UTC)
+    elapsed_seconds = (datetime.now(UTC) - sent_at_utc).total_seconds()
+    if elapsed_seconds >= OTP_RESEND_COOLDOWN_SECONDS:
+        return
+
+    retry_after = int(OTP_RESEND_COOLDOWN_SECONDS - elapsed_seconds) + 1
+    raise HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail=f"Please wait {retry_after}s before requesting another code.",
+        headers={"Retry-After": str(retry_after)},
+    )
 
 
 def _generate_email_verification_code() -> str:
@@ -281,15 +303,61 @@ def signup_user(
     return user
 
 
+_LOGIN_MAX_ATTEMPTS = 5
+_LOGIN_ATTEMPT_WINDOW_SECONDS = 15 * 60
+_LOGIN_LOCKOUT_SECONDS = 15 * 60
+
+# In-memory only — the login endpoint had zero brute-force protection (unlimited
+# password guessing). This resets on restart/redeploy and doesn't share state across
+# multiple server instances, but closes the actual risk for a single-instance deploy.
+# Revisit with a DB- or Redis-backed store if this ever scales horizontally.
+_login_attempt_state: dict[str, dict[str, float]] = {}
+
+
+def _check_login_lockout(email: str) -> None:
+    state = _login_attempt_state.get(email)
+    if not state:
+        return
+    locked_until = state.get("locked_until", 0)
+    now = time.time()
+    if locked_until and now < locked_until:
+        retry_after = int(locked_until - now) + 1
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=(
+                "Too many failed sign-in attempts. Try again in "
+                f"{max(1, retry_after // 60)} minute(s)."
+            ),
+            headers={"Retry-After": str(retry_after)},
+        )
+
+
+def _register_failed_login(email: str) -> None:
+    now = time.time()
+    state = _login_attempt_state.get(email)
+    if not state or now - state.get("window_started_at", 0) > _LOGIN_ATTEMPT_WINDOW_SECONDS:
+        state = {"count": 0, "window_started_at": now, "locked_until": 0}
+    state["count"] += 1
+    if state["count"] >= _LOGIN_MAX_ATTEMPTS:
+        state["locked_until"] = now + _LOGIN_LOCKOUT_SECONDS
+    _login_attempt_state[email] = state
+
+
+def _clear_login_attempts(email: str) -> None:
+    _login_attempt_state.pop(email, None)
+
+
 def login_user(
     db: Session,
     credentials: UserLogin,
     request: Request | None = None,
 ) -> AuthToken:
     email = credentials.email.lower()
+    _check_login_lockout(email)
     user = db.scalar(select(User).where(User.email == email))
 
     if not user:
+        _register_failed_login(email)
         record_anonymous_security_event(
             db,
             event_type=USER_LOGIN_FAILED,
@@ -311,6 +379,7 @@ def login_user(
         )
 
     if not verify_password(credentials.password, user.hashed_password):
+        _register_failed_login(email)
         record_anonymous_security_event(
             db,
             event_type=USER_LOGIN_FAILED,
@@ -327,6 +396,8 @@ def login_user(
 
     if not user.is_active:
         raise_account_blocked()
+
+    _clear_login_attempts(email)
 
     login_event_type = USER_LOGIN
     if user.role == UserRole.ADMIN:
@@ -589,6 +660,8 @@ def resend_verification_code(db: Session, user: User) -> MessageResponse:
     if user.is_verified:
         return MessageResponse(message="This email address is already verified.")
 
+    _enforce_resend_cooldown(user.email_verification_sent_at)
+
     code = _set_email_verification_code(user)
     db.commit()
     db.refresh(user)
@@ -610,6 +683,17 @@ def request_password_reset(
         return MessageResponse(
             message="If that email is registered, a reset code is on the way."
         )
+
+    # Same generic response either way — a 429 here would let a caller distinguish
+    # "this email exists and is on cooldown" from "this email doesn't exist," which
+    # defeats the point of the identical response above. Just don't re-send.
+    if user.password_reset_sent_at:
+        sent_at = user.password_reset_sent_at
+        sent_at_utc = sent_at if sent_at.tzinfo else sent_at.replace(tzinfo=UTC)
+        if (datetime.now(UTC) - sent_at_utc).total_seconds() < OTP_RESEND_COOLDOWN_SECONDS:
+            return MessageResponse(
+                message="If that email is registered, a reset code is on the way."
+            )
 
     code = _set_password_reset_code(user)
     db.commit()
@@ -743,6 +827,8 @@ def send_phone_verification_code_for_user(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="This phone number is already linked to another account.",
             )
+
+    _enforce_resend_cooldown(user.phone_verification_sent_at)
 
     if settings.arkesel_is_configured:
         _set_phone_verification_pending(user, phone_number)

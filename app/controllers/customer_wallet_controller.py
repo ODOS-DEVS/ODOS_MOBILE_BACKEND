@@ -16,7 +16,14 @@ from app.controllers.order_controller import (
     activate_order_after_payment,
     prepare_order_for_checkout,
 )
-from app.models import CustomerWallet, CustomerWalletTopUp, CustomerWalletTransaction, ReturnRequest, User
+from app.models import (
+    CustomerWallet,
+    CustomerWalletTopUp,
+    CustomerWalletTransaction,
+    Order,
+    ReturnRequest,
+    User,
+)
 from app.schemas.customer_wallet import (
     CustomerWalletRead,
     CustomerWalletTopUpCreate,
@@ -244,6 +251,79 @@ def credit_customer_wallet_for_return(
         )
     except Exception:
         logger.exception("Failed to send wallet refund push for user %s", user.id)
+    return wallet
+
+
+DELIVERY_DELAY_GOODWILL_CREDIT = 5.0
+
+
+def credit_customer_wallet_for_delivery_delay(db: Session, order: Order) -> CustomerWallet | None:
+    """A small, automatic apology credit the first time an order is flagged
+    delayed past its stage SLA — see delivery_ops_monitor_service. Idempotent
+    per order: safe to call repeatedly, only ever credits once."""
+    user = order.user
+    if not user:
+        return None
+
+    already_credited = db.scalar(
+        select(CustomerWalletTransaction.id).where(
+            CustomerWalletTransaction.user_id == user.id,
+            CustomerWalletTransaction.kind == "credit_delivery_delay",
+            CustomerWalletTransaction.order_id == order.id,
+        )
+    )
+    if already_credited:
+        return get_or_create_customer_wallet(db, user.id)
+
+    credit_amount = round_money(DELIVERY_DELAY_GOODWILL_CREDIT)
+    wallet = get_or_create_customer_wallet_for_update(db, user.id)
+    wallet.available_balance = round_money(wallet.available_balance + credit_amount)
+
+    db.add(
+        CustomerWalletTransaction(
+            wallet_id=wallet.id,
+            user_id=user.id,
+            order_id=order.id,
+            kind="credit_delivery_delay",
+            title=f"Delivery delay apology · order #{order.order_number}",
+            amount=credit_amount,
+            balance_after=wallet.available_balance,
+            metadata_json={"order_id": str(order.id)},
+        )
+    )
+
+    apology_event = create_notification_event(
+        db,
+        user,
+        kind="delivery_delay_apology",
+        title="Sorry for the wait 🙏",
+        body=(
+            f"Order #{order.order_number} is taking longer than expected. "
+            f"We've added GHS {credit_amount:.2f} to your ODOS wallet, and our team "
+            "is on it — you can also reach support anytime from this order."
+        ),
+        icon="heart-outline",
+        accent="warning",
+        action_label="View order",
+        route_type="order",
+        route_target_id=str(order.id),
+    )
+    try:
+        send_expo_push_notification(
+            user=user,
+            title="Sorry for the wait 🙏",
+            body=f"We've added GHS {credit_amount:.2f} to your wallet while we chase down order #{order.order_number}.",
+            data=build_push_data(
+                push_type="delivery_delay_apology",
+                route_type="order",
+                route_target_id=str(order.id),
+                notification_event=apology_event,
+                extra={"orderId": str(order.id), "amount": credit_amount},
+            ),
+        )
+    except Exception:
+        logger.exception("Failed to send delivery-delay apology push for user %s", user.id)
+
     return wallet
 
 

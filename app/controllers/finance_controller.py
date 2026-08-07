@@ -77,10 +77,14 @@ def get_or_create_platform_treasury_account(
         account.gross_collected_total = round_money(account.current_balance)
         return account
 
+    # Locked: every caller of this function goes on to read-modify-write the
+    # account's balances, and there's exactly one row per currency, so an
+    # unlocked read here would let two concurrent webhook/payout events race
+    # on the same treasury balance and silently drop one of the updates.
     account = db.scalar(
-        select(PlatformTreasuryAccount).where(
-            PlatformTreasuryAccount.currency == currency
-        )
+        select(PlatformTreasuryAccount)
+        .where(PlatformTreasuryAccount.currency == currency)
+        .with_for_update()
     )
     if account:
         if (

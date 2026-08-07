@@ -151,6 +151,41 @@ def send_phone_verification_code(*, phone_number: str, code: str) -> None:
     )
 
 
+def build_delivery_out_for_delivery_message(
+    *,
+    order_number: str,
+    delivery_code: str,
+) -> str:
+    return (
+        f"ODOS: Your order #{order_number} is on its way! "
+        f"Your delivery code is {delivery_code} — give this to the seller only once your "
+        "package is actually in your hands. Don't share it before that."
+    )
+
+
+def send_delivery_out_for_delivery_sms(
+    *,
+    phone_number: str,
+    order_number: str,
+    delivery_code: str,
+) -> None:
+    message = build_delivery_out_for_delivery_message(
+        order_number=order_number,
+        delivery_code=delivery_code,
+    )
+
+    if settings.arkesel_is_configured:
+        try:
+            send_sms(phone_number=phone_number, message=message)
+        except Exception:
+            logger.exception(
+                "Failed to send out-for-delivery SMS for order %s", order_number
+            )
+        return
+
+    logger.info("ODOS out-for-delivery SMS for %s: %s", phone_number, message)
+
+
 def send_order_payment_confirmation_sms(
     *,
     phone_number: str,

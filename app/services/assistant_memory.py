@@ -30,10 +30,28 @@ from app.services.assistant_reference import normalize_reference_context, resolv
 MAX_STORED_MESSAGES = 20
 
 
-def _conversation_store_id(conversation: AssistantConversation) -> str | None:
+def _conversation_scope_key(conversation: AssistantConversation) -> str | None:
     context = conversation.context_json or {}
+    return _scope_key(context)
+
+
+def _scope_key(context: dict[str, str] | None) -> str | None:
+    if not context:
+        return None
+    if context.get("type") == "product" and context.get("product_id"):
+        return f"product:{context['product_id']}"
     store_id = context.get("store_id")
-    return str(store_id).strip() if store_id else None
+    if store_id:
+        return f"store:{store_id}"
+    return None
+
+
+def _default_screen_for(context: dict[str, str] | None) -> str | None:
+    if context and context.get("type") == "product":
+        return "product"
+    if context and context.get("type") == "store":
+        return "store"
+    return None
 
 
 def _apply_conversation_metadata(
@@ -57,7 +75,7 @@ def get_or_create_conversation(
     context: AssistantReferenceContext | dict | None = None,
 ) -> AssistantConversation:
     resolved_context = resolve_store_reference(db, context) or normalize_reference_context(context)
-    target_store_id = resolved_context.get("store_id") if resolved_context else None
+    target_scope_key = _scope_key(resolved_context)
 
     if conversation_id is not None:
         existing = db.scalar(
@@ -67,9 +85,9 @@ def get_or_create_conversation(
             )
         )
         if existing is not None:
-            # Keep store-scoped threads isolated from general chat.
-            existing_store_id = _conversation_store_id(existing)
-            if target_store_id and existing_store_id and existing_store_id != target_store_id:
+            # Keep store/product-scoped threads isolated from general chat.
+            existing_scope_key = _conversation_scope_key(existing)
+            if target_scope_key and existing_scope_key and existing_scope_key != target_scope_key:
                 pass
             else:
                 _apply_conversation_metadata(
@@ -88,18 +106,18 @@ def get_or_create_conversation(
         ).all()
     )
 
-    if target_store_id:
+    if target_scope_key:
         for candidate in recent:
-            if _conversation_store_id(candidate) == target_store_id:
+            if _conversation_scope_key(candidate) == target_scope_key:
                 _apply_conversation_metadata(
                     candidate,
-                    screen=screen or "store",
+                    screen=screen or _default_screen_for(resolved_context),
                     context=resolved_context,
                 )
                 return candidate
         conversation = AssistantConversation(
             user_id=user.id,
-            screen=screen or "store",
+            screen=screen or _default_screen_for(resolved_context),
             context_json=resolved_context,
         )
         db.add(conversation)
@@ -107,7 +125,7 @@ def get_or_create_conversation(
         return conversation
 
     for candidate in recent:
-        if not _conversation_store_id(candidate):
+        if not _conversation_scope_key(candidate):
             _apply_conversation_metadata(
                 candidate,
                 screen=screen,

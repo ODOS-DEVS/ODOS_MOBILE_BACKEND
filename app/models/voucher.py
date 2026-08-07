@@ -161,6 +161,10 @@ class Voucher(Base):
     bogo_get_quantity: Mapped[int | None] = mapped_column(Integer, nullable=True)
     bogo_get_discount_percent: Mapped[float | None] = mapped_column(Float, nullable=True)
     rules_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    vendor_expiry_reminder_sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -243,6 +247,10 @@ class VoucherAssignment(Base):
         index=True,
     )
     note: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    expiry_reminder_sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

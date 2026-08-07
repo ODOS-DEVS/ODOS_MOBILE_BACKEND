@@ -1,6 +1,7 @@
 import hashlib
 import logging
 import re
+import time
 from dataclasses import dataclass
 
 from fastapi import HTTPException, Request, status
@@ -73,6 +74,49 @@ def enforce_rate_limits(rules: list[RateLimitRule]) -> None:
         raise
     except Exception as exc:
         logger.warning("Rate limit skipped due to Redis error: %s", exc)
+
+
+# In-process fallback limiter — used only where explicitly opted in (currently
+# just the assistant chat endpoint) for deployments without REDIS_URL configured.
+# NOTE: this state is per-process, so it does not coordinate across multiple
+# worker processes the way the Redis-backed limiter above does. It exists purely
+# as a better-than-nothing safety net, not a replacement for configuring Redis.
+_memory_hits: dict[str, list[float]] = {}
+
+
+def _enforce_in_memory(rule: RateLimitRule) -> None:
+    if rule.limit <= 0 or rule.window_seconds <= 0:
+        return
+
+    now = time.monotonic()
+    key = f"{rule.scope}:{rule.identifier.strip().lower()}"
+    window_start = now - rule.window_seconds
+    hits = [ts for ts in _memory_hits.get(key, []) if ts > window_start]
+
+    if len(hits) >= rule.limit:
+        retry_after = int(rule.window_seconds - (now - hits[0])) + 1
+        _memory_hits[key] = hits
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many requests. Please wait before trying again.",
+            headers={"Retry-After": str(max(retry_after, 1))},
+        )
+
+    hits.append(now)
+    _memory_hits[key] = hits
+
+
+def enforce_rate_limits_with_memory_fallback(rules: list[RateLimitRule]) -> None:
+    """Same as enforce_rate_limits, but falls back to an in-process limiter
+    instead of silently skipping when Redis isn't configured/reachable."""
+    if not rules:
+        return
+    if redis_is_enabled():
+        enforce_rate_limits(rules)
+        return
+
+    for rule in rules:
+        _enforce_in_memory(rule)
 
 
 def limit_signup(request: Request) -> None:
@@ -237,7 +281,7 @@ def limit_wallet_checkout(user: User) -> None:
 def limit_assistant_chat(request: Request, user: User | None) -> None:
     identifier = str(user.id) if user else client_ip(request)
     scope = "assistant:chat:user" if user else "assistant:chat:ip"
-    enforce_rate_limits(
+    enforce_rate_limits_with_memory_fallback(
         [
             RateLimitRule(
                 scope=scope,

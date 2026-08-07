@@ -35,11 +35,17 @@ from app.routes import (
 )
 from app.core.redis_client import close_redis, get_redis
 from app.services.realtime_service import realtime_manager
+from app.services.delivery_ops_monitor_service import process_delivery_sla_alerts
+from app.services.payment_reconciliation_service import process_stuck_payment_reconciliation
+from app.services.promo_reminder_service import process_promo_expiry_reminders
 from app.services.vendor_order_reminder_service import process_vendor_order_reminders
 
 app = FastAPI(title="ODOS Mobile Backend")
 
 VENDOR_REMINDER_INTERVAL_SECONDS = 180
+DELIVERY_SLA_MONITOR_INTERVAL_SECONDS = 120
+PROMO_REMINDER_INTERVAL_SECONDS = 1800
+PAYMENT_RECONCILIATION_INTERVAL_SECONDS = 300
 logger = logging.getLogger(__name__)
 
 
@@ -88,11 +94,41 @@ async def _vendor_order_reminder_loop() -> None:
         await asyncio.sleep(VENDOR_REMINDER_INTERVAL_SECONDS)
 
 
+async def _delivery_sla_monitor_loop() -> None:
+    while True:
+        try:
+            await asyncio.to_thread(process_delivery_sla_alerts)
+        except Exception:
+            logger.exception("Delivery SLA monitor loop failed")
+        await asyncio.sleep(DELIVERY_SLA_MONITOR_INTERVAL_SECONDS)
+
+
+async def _promo_reminder_loop() -> None:
+    while True:
+        try:
+            await asyncio.to_thread(process_promo_expiry_reminders)
+        except Exception:
+            logger.exception("Promo expiry reminder loop failed")
+        await asyncio.sleep(PROMO_REMINDER_INTERVAL_SECONDS)
+
+
+async def _payment_reconciliation_loop() -> None:
+    while True:
+        try:
+            await asyncio.to_thread(process_stuck_payment_reconciliation)
+        except Exception:
+            logger.exception("Payment reconciliation loop failed")
+        await asyncio.sleep(PAYMENT_RECONCILIATION_INTERVAL_SECONDS)
+
+
 @app.on_event("startup")
 async def on_startup() -> None:
     realtime_manager.bind_loop(asyncio.get_running_loop())
     asyncio.create_task(asyncio.to_thread(get_redis))
     asyncio.create_task(_vendor_order_reminder_loop())
+    asyncio.create_task(_delivery_sla_monitor_loop())
+    asyncio.create_task(_promo_reminder_loop())
+    asyncio.create_task(_payment_reconciliation_loop())
 
 
 @app.on_event("shutdown")

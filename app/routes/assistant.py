@@ -44,15 +44,31 @@ def assistant_session(
     store_name: str | None = None,
     market_title: str | None = None,
     vendor_user_id: str | None = None,
+    product_id: str | None = None,
+    product_title: str | None = None,
+    category: str | None = None,
+    context_type: str | None = None,
 ):
     context = None
-    if store_id:
+    if product_id:
+        context = AssistantReferenceContext(
+            type="product",
+            product_id=product_id,
+            product_title=product_title,
+            store_id=store_id,
+            store_name=store_name,
+            category=category,
+        )
+    elif context_type == "checkout":
+        context = AssistantReferenceContext(type="checkout")
+    elif store_id:
         context = AssistantReferenceContext(
             type="store",
             store_id=store_id,
             store_name=store_name,
             market_title=market_title,
             vendor_user_id=vendor_user_id,
+            category=category,
         )
     return get_assistant_session(
         db,

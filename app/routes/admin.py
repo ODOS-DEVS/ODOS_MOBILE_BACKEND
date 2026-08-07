@@ -41,6 +41,7 @@ from app.controllers.admin_controller import (
     list_admin_markets,
     list_admin_promo_banners,
     list_admin_flash_sale_events,
+    list_admin_delivery_ops,
     list_admin_notifications,
     list_admin_orders,
     list_admin_payment_transactions_payload,
@@ -66,6 +67,8 @@ from app.controllers.admin_controller import (
     update_admin_return_request,
     update_admin_store_status,
     update_admin_user_status,
+    create_admin_staff,
+    list_admin_staff,
     update_admin_user_permission,
     update_admin_vendor_status,
     update_admin_voucher,
@@ -147,6 +150,7 @@ from app.schemas.admin import (
     AdminMerchandisingCampaignOptInRead,
     AdminMerchandisingCampaignRead,
     AdminMerchandisingCampaignUpsert,
+    AdminDeliveryOpsRead,
     AdminOrderDetailRead,
     AdminOrderRead,
     AdminOrderStatusUpdate,
@@ -165,6 +169,7 @@ from app.schemas.admin import (
     AdminUserRead,
     AdminUserStatusUpdate,
     AdminPermissionUpdate,
+    AdminStaffCreate,
     AdminVendorWithdrawalRequestRead,
     AdminVendorWithdrawalUpdate,
     AdminVendorRead,
@@ -312,6 +317,25 @@ def patch_user_permission(
     db: Session = Depends(get_db),
 ):
     return update_admin_user_permission(db, current_user, user_id, payload)
+
+
+@router.get("/staff", response_model=AdminPageRead[AdminUserRead])
+def get_admin_staff(
+    current_user: Annotated[User, Depends(require_super_admin)],
+    list_params: AdminListParams,
+    db: Session = Depends(get_db),
+):
+    limit, offset = list_params
+    return list_admin_staff(db, current_user, limit=limit, offset=offset)
+
+
+@router.post("/staff", response_model=AdminUserRead, status_code=status.HTTP_201_CREATED)
+def post_admin_staff(
+    payload: AdminStaffCreate,
+    current_user: Annotated[User, Depends(require_super_admin)],
+    db: Session = Depends(get_db),
+):
+    return create_admin_staff(db, current_user, payload)
 
 
 @router.get("/vendors", response_model=AdminPageRead[AdminVendorRead])
@@ -1146,6 +1170,14 @@ def get_finance_ledger(
 ):
     limit, offset = list_params
     return list_admin_platform_ledger_entries_payload(db, current_user, limit=limit, offset=offset)
+
+
+@router.get("/orders/delivery-ops", response_model=AdminDeliveryOpsRead)
+def get_delivery_ops(
+    current_user: RequireOrdersAdmin,
+    db: Session = Depends(get_db),
+):
+    return list_admin_delivery_ops(db, current_user)
 
 
 @router.get("/orders/{order_id}", response_model=AdminOrderDetailRead)

@@ -3,9 +3,10 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator
 
 from app.models import VendorStatus
+from app.schemas.order import OrderStatusEventRead
 from app.schemas.payment import AdminPaymentTransactionRead
 
 
@@ -213,6 +214,34 @@ class AdminPermissionUpdate(BaseModel):
     @classmethod
     def normalize_permission(cls, value: str) -> str:
         return value.strip().lower()
+
+
+class AdminStaffCreate(BaseModel):
+    full_name: str = Field(min_length=2, max_length=120)
+    email: EmailStr
+    password: str = Field(min_length=8, max_length=72)
+    phone_number: str | None = Field(default=None, max_length=30)
+    admin_permission: str = Field(min_length=1, max_length=30)
+
+    @field_validator("full_name", "phone_number", mode="before")
+    @classmethod
+    def strip_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        cleaned_value = value.strip()
+        return cleaned_value or None
+
+    @field_validator("admin_permission", mode="before")
+    @classmethod
+    def normalize_staff_permission(cls, value: str) -> str:
+        return value.strip().lower()
+
+    @field_validator("password")
+    @classmethod
+    def validate_bcrypt_password_length(cls, value: str) -> str:
+        if len(value.encode("utf-8")) > 72:
+            raise ValueError("Password must be 72 bytes or fewer.")
+        return value
 
 
 class AdminVendorRead(BaseModel):
@@ -680,9 +709,12 @@ class AdminFlashSaleNominationRead(BaseModel):
     product_id: str
     product_title: str | None = None
     vendor_user_id: uuid.UUID
+    vendor_name: str | None = None
     proposed_price: int | None = None
     proposed_old_price: int | None = None
     stock_limit: int | None = None
+    units_sold: int | None = None
+    units_remaining: int | None = None
     max_per_user: int | None = None
     vendor_note: str | None = None
     status: str
@@ -697,6 +729,7 @@ class AdminFlashSaleNominationReview(BaseModel):
     event_id: uuid.UUID | None = None
     flash_sale_price: int | None = Field(default=None, ge=1)
     flash_sale_old_price: int | None = Field(default=None, ge=1)
+    stock_limit: int | None = Field(default=None, ge=1)
 
     @field_validator("status", mode="before")
     @classmethod
@@ -808,6 +841,7 @@ class AdminOrderDetailRead(AdminOrderRead):
     progress: float | None
     tracking_eta: str | None
     cancellation_reason: str | None
+    delivery_code: str | None = None
     address_full_name: str
     address_phone: str
     address_street: str
@@ -831,15 +865,52 @@ class AdminOrderDetailRead(AdminOrderRead):
     updated_at: datetime
     items: list[AdminOrderItemRead]
     return_requests: list[AdminReturnRequestRead]
+    timeline: list[OrderStatusEventRead] = []
+
+
+class AdminDeliveryOpsOrderRead(BaseModel):
+    id: uuid.UUID
+    order_number: str
+    customer_name: str
+    store_name: str
+    vendor_status: str
+    delivery_method: str
+    address_city: str
+    address_region: str
+    product_count: int
+    total_amount: float
+    delivery_code: str | None
+    stage_started_at: datetime
+    minutes_in_stage: int
+    is_delayed: bool
+    placed_at: datetime
+
+
+class AdminDeliveryOpsRead(BaseModel):
+    orders: list[AdminDeliveryOpsOrderRead]
+    stage_counts: dict[str, int]
+    delayed_count: int
+    total_active: int
 
 
 class AdminOrderStatusUpdate(BaseModel):
     status: str = Field(min_length=1, max_length=30)
+    # No min_length: let the controller's business-logic mismatch message own
+    # this, rather than a raw Pydantic 422 for a too-short code.
+    delivery_code: str | None = Field(default=None, max_length=8)
 
     @field_validator("status", mode="before")
     @classmethod
     def normalize_status(cls, value: str) -> str:
         return value.strip().lower()
+
+    @field_validator("delivery_code", mode="before")
+    @classmethod
+    def strip_delivery_code(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        cleaned = value.strip()
+        return cleaned or None
 
 
 class AdminReturnRequestUpdate(BaseModel):
@@ -1129,7 +1200,9 @@ class AdminMerchandisingCampaignOptInRead(BaseModel):
     product_id: str
     product_title: str
     vendor_user_id: uuid.UUID
+    vendor_name: str | None = None
     status: str
     review_notes: str | None = None
+    units_sold_since_approval: int | None = None
     created_at: datetime
     updated_at: datetime

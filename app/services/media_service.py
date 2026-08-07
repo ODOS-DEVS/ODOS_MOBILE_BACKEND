@@ -14,6 +14,11 @@ ALLOWED_IMAGE_CONTENT_TYPES = {
     "image/webp": ".webp",
 }
 
+# Server-side backstop — the mobile client already caps picks at 8MB, but that's a
+# client-side convenience only. Without this, a direct API call (bypassing the app)
+# could upload an arbitrarily large file with nothing to stop it.
+MAX_IMAGE_UPLOAD_BYTES = 10 * 1024 * 1024
+
 UPLOAD_TARGETS = {
     "products": {"asset_folder": "odos/products"},
     "stores/logo": {"asset_folder": "odos/stores/logos"},
@@ -138,6 +143,11 @@ async def save_image_upload(upload: UploadFile, folder: str) -> str:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="The uploaded image was empty.",
+        )
+    if len(file_bytes) > MAX_IMAGE_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Images must be {MAX_IMAGE_UPLOAD_BYTES // (1024 * 1024)}MB or smaller.",
         )
 
     target = _resolve_target(folder)

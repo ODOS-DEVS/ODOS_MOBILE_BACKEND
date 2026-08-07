@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 import uuid
 from collections import defaultdict
@@ -16,6 +17,7 @@ from app.controllers.notification_controller import (
     order_notification_image,
 )
 from app.controllers.finance_controller import record_vendor_payout_paid
+from app.core.admin_permissions import list_admins_with_feature
 from app.core.config import settings
 from app.models import (
     Order,
@@ -27,7 +29,10 @@ from app.models import (
     VendorWalletTransaction,
     VendorWithdrawalRequest,
 )
+from app.services.email_service import send_admin_withdrawal_request_email
 from app.services.push_service import vendor_wants_payout_notify
+
+logger = logging.getLogger(__name__)
 from app.schemas.admin import (
     AdminVendorWithdrawalRequestRead,
     AdminVendorWithdrawalUpdate,
@@ -228,6 +233,7 @@ def _serialize_vendor_wallet(wallet: VendorWallet) -> VendorWalletRead:
         lifetime_earnings=_round_money(wallet.lifetime_earnings),
         total_withdrawn=_round_money(wallet.total_withdrawn),
         total_commission=_round_money(wallet.total_commission),
+        commission_rate=float(settings.vendor_commission_rate),
         payout_method_type=wallet.payout_method_type,
         payout_account_name=wallet.payout_account_name,
         payout_account_number_masked=_mask_account_number(wallet.payout_account_number),
@@ -256,6 +262,37 @@ def get_or_create_vendor_wallet(db: Session, vendor_user_id: uuid.UUID) -> Vendo
     )
     db.add(wallet)
     db.flush()
+    return wallet
+
+
+def _lock_vendor_wallet(db: Session, vendor_user_id: uuid.UUID) -> VendorWallet:
+    """Row-lock the vendor wallet before reading/mutating its balances.
+
+    Must be called inside an open transaction — the lock is held until
+    commit/rollback, which serializes concurrent balance changes for this
+    vendor (e.g. two withdrawal requests fired back-to-back, or a withdrawal
+    request racing a settlement) so `available_balance` can never be read,
+    checked, and overwritten from two stale copies at once.
+    """
+    wallet = db.scalar(
+        select(VendorWallet)
+        .where(VendorWallet.vendor_user_id == vendor_user_id)
+        .with_for_update()
+    )
+    if wallet:
+        return wallet
+    return get_or_create_vendor_wallet(db, vendor_user_id)
+
+
+def _lock_wallet_by_id(db: Session, wallet_id: uuid.UUID) -> VendorWallet:
+    wallet = db.scalar(
+        select(VendorWallet).where(VendorWallet.id == wallet_id).with_for_update()
+    )
+    if not wallet:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="We couldn't load the vendor wallet for this transaction.",
+        )
     return wallet
 
 
@@ -338,7 +375,7 @@ def settle_vendor_wallets_for_order(
         if existing_transaction:
             continue
 
-        wallet = get_or_create_vendor_wallet(db, vendor_user_id)
+        wallet = _lock_vendor_wallet(db, vendor_user_id)
         wallet.available_balance = _round_money(
             wallet.available_balance + allocation["net_amount"]
         )
@@ -426,7 +463,7 @@ def reverse_vendor_wallet_for_return_request(
     refund_commission_amount = reversal["commission_amount"]
     refund_net_amount = reversal["net_amount"]
 
-    wallet = get_or_create_vendor_wallet(db, order_item.vendor_user_id)
+    wallet = _lock_vendor_wallet(db, order_item.vendor_user_id)
     wallet.available_balance = _round_money(
         wallet.available_balance - refund_net_amount
     )
@@ -556,13 +593,58 @@ def update_vendor_payout_details(
     return _serialize_vendor_wallet(refreshed_wallet)
 
 
+def _dispatch_admin_withdrawal_alert(
+    db: Session,
+    *,
+    vendor: User,
+    withdrawal_request: VendorWithdrawalRequest,
+    amount: float,
+    currency: str,
+) -> None:
+    admins = list_admins_with_feature(db, "payouts")
+    if not admins:
+        return
+
+    store = db.scalar(select(Store).where(Store.vendor_user_id == vendor.id))
+    store_title = store.title if store else "Unnamed store"
+    payout_method = (
+        f"{withdrawal_request.payout_method_type or 'Not set'} · "
+        f"{withdrawal_request.payout_account_name or 'N/A'}"
+    )
+
+    for admin in admins:
+        if not admin.email:
+            continue
+        try:
+            send_admin_withdrawal_request_email(
+                to_email=admin.email,
+                to_name=admin.full_name,
+                vendor_name=vendor.full_name or vendor.email,
+                store_name=store_title,
+                amount_label=f"{currency} {amount:.2f}",
+                payout_method=payout_method,
+                submitted_at_label=datetime.now(UTC).strftime("%d %b %Y, %I:%M %p UTC"),
+                withdrawal_id=str(withdrawal_request.id),
+                admin_panel_url=settings.admin_panel_url,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to send admin withdrawal alert to %s",
+                admin.email,
+            )
+
+
 def create_vendor_withdrawal_request(
     db: Session,
     current_user: User,
     payload: VendorWithdrawalCreate,
 ) -> VendorWithdrawalRequestRead:
     _require_approved_vendor(current_user)
-    wallet = _load_vendor_wallet(db, current_user.id)
+    # Locked (not the eager-loaded read helper) — this function checks the
+    # balance and then mutates it, so the row must stay locked across both
+    # steps to prevent two concurrent withdrawal requests from both reading
+    # the same pre-mutation balance and overdrawing the wallet.
+    wallet = _lock_vendor_wallet(db, current_user.id)
     amount = _round_money(payload.amount)
 
     if amount < float(settings.vendor_withdrawal_minimum):
@@ -648,6 +730,13 @@ def create_vendor_withdrawal_request(
             route_target_id=str(wallet.id),
         )
     db.commit()
+    _dispatch_admin_withdrawal_alert(
+        db,
+        vendor=current_user,
+        withdrawal_request=withdrawal_request,
+        amount=amount,
+        currency=wallet.currency,
+    )
     refreshed_wallet = _load_vendor_wallet(db, current_user.id)
     publish_vendor_wallet_updates(current_user.id)
     matching_request = next(
@@ -673,7 +762,7 @@ def _release_withdrawal_back_to_available_balance(
     transaction_kind: str,
     transaction_title: str,
 ) -> None:
-    wallet = request.wallet
+    wallet = _lock_wallet_by_id(db, request.wallet_id)
     existing_reversal = db.scalar(
         select(VendorWalletTransaction.id).where(
             VendorWalletTransaction.vendor_user_id == request.vendor_user_id,
@@ -707,7 +796,7 @@ def _mark_withdrawal_paid(
     *,
     payout_channel: str = "paystack",
 ) -> None:
-    wallet = request.wallet
+    wallet = _lock_wallet_by_id(db, request.wallet_id)
     if request.status == "paid":
         return
     record_vendor_payout_paid(db, request, payout_channel=payout_channel)

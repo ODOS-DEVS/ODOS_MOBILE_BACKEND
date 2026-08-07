@@ -18,14 +18,29 @@ FastAPI API for the ODOS marketplace — powers the mobile shopper app, vendor t
 **Shopper**
 
 - Auth (email/password, Google, verification, password reset, phone OTP)
-- Catalog: categories, markets, stores, products, deals hub, promo banners, flash sales
+- Catalog: categories, markets, stores (with business hours + vacation mode), products, deals hub, promo banners, flash sales
 - Cart, wishlist, orders, returns, reviews, vouchers, customer wallet, payments
+- Delivery: unified order timeline, proof-of-delivery code, reschedule requests, delivery ratings, SLA monitoring with automatic customer goodwill credit
 - Delivery quotes at checkout, configurable delivery settings, order payment SMS
 - Push notifications (Expo) with tap-to-navigate payloads
 - **Notification read-state** sync and paginated activity feed for the mobile client
 - **Recommendations**: `/api/recommendations/for-you`, `/api/recommendations/similar/{product_id}`
 - **Behavior tracking**: product views, clicks, search taps (feeds the recommendation engine)
-- **In-app AI assistant**: `/api/assistant/chat` with order/cart context when signed in
+- **In-app AI assistant**: `/api/assistant/chat` and `/api/assistant/chat/stream` with order/cart context when signed in
+
+**Payments**
+
+- Paystack checkout (card/MoMo) and in-app wallet checkout, with server-side recomputation of every order total (the client-submitted amount is never trusted)
+- Webhook signature verification, idempotent payment/webhook handling, and a background job that automatically re-verifies payments stuck `pending`
+- Row-locked wallet and treasury balance updates — no double-spend / overdraw window on concurrent withdrawal or settlement requests
+- Vendor withdrawal requests with Paystack Transfers support, manual payout confirmation, and a visible commission rate
+
+**Promotions**
+
+- Voucher engine: percent/fixed/BOGO/free-shipping, store or platform scope, stacking, priority, auto-apply, and claim-only availability
+- Flash sales with real per-item stock caps (auto-reverts to regular price once sold out) and admin nomination review
+- Merchandising campaigns with vendor opt-in review, plus admin alert emails for vendor applications, withdrawal requests, and voucher submissions
+- Background reminders: shoppers get nudged before a saved voucher expires; vendors get nudged if their own voucher is about to expire unused
 
 **Vendor / Seller Center**
 
@@ -38,7 +53,9 @@ FastAPI API for the ODOS marketplace — powers the mobile shopper app, vendor t
 **Admin**
 
 - Full CRUD across users, vendors, stores, catalog, orders, finance, notifications
+- Review queues for vendor flash-sale nominations and merchandising campaign opt-ins
 - **Vendor payouts** with Paystack transfer support and manual payout confirmation for Starter accounts
+- Feature-scoped admin alert emails (only admins with the relevant permission band are notified)
 - **Paginated admin lists**: `{ items, has_more }` on list endpoints
 - Promo banners with `placement`, `link_type`, `campaign_tag`
 - Single-record fetch for studio editors (`GET /admin/promo-banners/{id}`)
@@ -108,6 +125,19 @@ Recent additions (run `alembic upgrade head` after pull):
 - Seller Center Wave 1: store vacation fields, review reply columns
 - Seller Center Wave 2: inventory movements, vendor notification preference columns
 - Merchandising campaigns and related catalog flags
+- Order status timeline, delivery code, and delivery experience fields (instructions, rating, reschedule, dispatch photo)
+- Flash-sale stock caps, flash-attributed order items, and voucher expiry-reminder tracking columns
+
+## Background jobs
+
+The API runs a few lightweight polling loops in-process on startup (no separate worker needed):
+
+| Loop | Interval | Purpose |
+|------|----------|---------|
+| Vendor order reminders | 3 min | Nudges vendors about unfulfilled orders |
+| Delivery SLA monitor | 2 min | Flags late deliveries and credits customer goodwill on breach |
+| Promo expiry reminders | 30 min | Nudges shoppers/vendors before a voucher expires |
+| Payment reconciliation | 5 min | Re-verifies payments/wallet top-ups stuck `pending` directly against Paystack |
 
 ## Deployment (Render)
 
@@ -147,8 +177,8 @@ Add admin and any web client origins to `CORS_ORIGINS`.
 |------|--------|
 | Auth & dashboard | `/api/admin/auth/*`, `/api/admin/dashboard` |
 | Directory lists | `/api/admin/users*`, `/api/admin/vendors*`, `/api/admin/stores*`, … |
-| Merchandising | `/api/admin/promo-banners*`, `/api/admin/flash-sale-events*` |
-| Operations | `/api/admin/orders*`, `/api/admin/notifications*`, `/api/admin/finance*` |
+| Merchandising | `/api/admin/promo-banners*`, `/api/admin/flash-sale-events*`, `/api/admin/flash-sale-nominations*`, `/api/admin/merchandising-campaign-opt-ins*` |
+| Operations | `/api/admin/orders*`, `/api/admin/notifications*`, `/api/admin/finance*`, `/api/admin/delivery-ops*` |
 
 Admin list responses use `{ "items": [...], "has_more": true|false }`.
 
