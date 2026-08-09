@@ -656,6 +656,49 @@ def send_admin_withdrawal_request_email(
     )
 
 
+def send_admin_delivery_problem_email(
+    *,
+    to_email: str,
+    to_name: str | None,
+    order_number: str,
+    customer_name: str,
+    store_name: str,
+    reason_label: str,
+    details: str | None,
+    reported_at_label: str,
+    order_id: str,
+    admin_panel_url: str,
+) -> None:
+    subject = f"Delivery problem reported: order #{order_number}"
+    html_content, text_content = _render_admin_alert_email(
+        eyebrow="Delivery problem",
+        heading=(
+            f"<strong>{escape(customer_name)}</strong> reported a delivery problem on order "
+            f"<strong>#{escape(order_number)}</strong> — settlement is on hold until this is resolved."
+        ),
+        summary_title="Report summary",
+        summary_rows=[
+            ("Order", f"#{order_number}"),
+            ("Store", store_name),
+            ("Customer", customer_name),
+            ("Reason", reason_label),
+            ("Details", details or "—"),
+            ("Reported", reported_at_label),
+        ],
+        cta_label="Open Delivery Ops",
+        cta_url=(
+            f"{admin_panel_url.rstrip('/')}/orders/full/{order_id}" if admin_panel_url else None
+        ),
+    )
+    send_transactional_email(
+        to_email=to_email,
+        to_name=to_name,
+        subject=subject,
+        html_content=html_content,
+        text_content=text_content,
+    )
+
+
 def send_admin_voucher_review_email(
     *,
     to_email: str,

@@ -141,7 +141,9 @@ class OrderStatusEventRead(BaseModel):
     id: uuid.UUID
     status: str
     actor_role: str
+    actor_id: uuid.UUID | None = None
     note: str | None
+    event_metadata: dict | None = None
     occurred_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
@@ -157,6 +159,24 @@ class OrderRescheduleRequest(BaseModel):
     @field_validator("note", mode="before")
     @classmethod
     def strip_reschedule_note(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        cleaned = value.strip()
+        return cleaned or None
+
+
+class OrderDeliveryProblemRequest(BaseModel):
+    reason: str = Field(min_length=1, max_length=40)
+    details: str | None = Field(default=None, max_length=500)
+
+    @field_validator("reason", mode="before")
+    @classmethod
+    def normalize_reason(cls, value: str) -> str:
+        return value.strip().lower()
+
+    @field_validator("details", mode="before")
+    @classmethod
+    def strip_details(cls, value: str | None) -> str | None:
         if value is None:
             return value
         cleaned = value.strip()
@@ -179,10 +199,16 @@ class OrderRead(BaseModel):
     progress: float | None
     tracking_eta: str | None
     cancellation_reason: str | None
-    delivery_code: str | None
     delivery_instructions: str | None
     delivery_rating: int | None
     delivery_rated_at: datetime | None
+    delivery_status: str
+    dispatched_at: datetime | None
+    confirmation_method: str | None
+    delivery_problem_reason: str | None
+    delivery_problem_reported_at: datetime | None
+    auto_release_at: datetime | None
+    settlement_status: str
     reschedule_requested_at: datetime | None
     reschedule_note: str | None
     dispatch_photo_url: str | None

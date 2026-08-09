@@ -21,10 +21,7 @@ from app.controllers.voucher_controller import (
     validate_voucher_configuration,
     voucher_status,
 )
-from app.controllers.wallet_controller import (
-    publish_vendor_wallet_updates,
-    settle_vendor_wallets_for_order,
-)
+from app.controllers.wallet_controller import publish_vendor_wallet_updates
 from app.models import (
     Market,
     NotificationEvent,
@@ -85,11 +82,8 @@ from app.services.delivery_service import (
     get_delivery_config,
     tracking_eta_for_vendor_status,
 )
-from app.services.order_timeline_service import (
-    ensure_delivery_code,
-    record_order_status_event,
-)
-from app.services.sms_service import send_delivery_out_for_delivery_sms
+from app.services.delivery_lifecycle_service import dispatch_order
+from app.services.order_timeline_service import record_order_status_event
 
 logger = logging.getLogger(__name__)
 VENDOR_ACTIVE_ORDER_STATUSES = {"pending", "confirmed", "processing", "ready", "out_for_delivery"}
@@ -110,18 +104,20 @@ VENDOR_ALLOWED_STATUSES = {
     "processing",
     "ready",
     "out_for_delivery",
-    "delivered",
     "cancelled",
 }
 # Mirrors the mobile client's VENDOR_ORDER_NEXT_STATUS (utils/vendorOrderFulfillment.ts) —
 # the app only ever offers a single "mark next stage" button, so the API should refuse
 # anything the UI itself would never send (skips, reversals, or PATCHing a stale state).
+# "delivered" is deliberately not reachable here: the vendor can already see any code
+# stored on the order, so a vendor-entered code never actually proved a handoff. Only
+# the customer (or the auto-release job, once the grace window passes) can mark an
+# order delivered — see confirm_order_delivery / delivery_auto_release_service.
 VENDOR_STATUS_FORWARD_TRANSITIONS = {
     "pending": "confirmed",
     "confirmed": "processing",
     "processing": "ready",
     "ready": "out_for_delivery",
-    "out_for_delivery": "delivered",
 }
 # Mirrors canCancelVendorOrder on mobile — cancellation is only offered before prep starts.
 VENDOR_STATUS_CANCELLABLE_FROM = {"pending", "confirmed"}
@@ -536,7 +532,8 @@ def _serialize_vendor_order(db: Session, user: User, order: Order) -> VendorOrde
         is_settled=bool(earnings["is_settled"]),
         currency=str(earnings["currency"]),
         status=order.vendor_status,
-        delivery_code=order.delivery_code,
+        delivery_status=order.delivery_status,
+        delivery_problem_reason=order.delivery_problem_reason,
         delivery_instructions=order.delivery_instructions,
         reschedule_requested_at=order.reschedule_requested_at,
         reschedule_note=order.reschedule_note,
@@ -2021,6 +2018,7 @@ def update_vendor_order_status(
         select(Order)
         .options(selectinload(Order.items), selectinload(Order.user), selectinload(Order.timeline))
         .where(Order.id == order_id)
+        .with_for_update()
     )
     if not order:
         raise HTTPException(
@@ -2074,63 +2072,10 @@ def update_vendor_order_status(
                 ),
             )
 
-    if next_status == "delivered":
-        # Proof of delivery: the vendor must key in the code the customer was
-        # shown once the order went out for delivery. No rider/GPS involved —
-        # this is the cheapest reliable handoff confirmation for a
-        # vendor-fulfilled marketplace.
-        entered_code = (payload.delivery_code or "").strip()
-        if not order.delivery_code:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="This order hasn't been marked out for delivery yet.",
-            )
-        if not entered_code:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Enter the delivery code the customer gives you to confirm handoff.",
-            )
-        if entered_code != order.delivery_code:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="That delivery code doesn't match. Ask the customer to double-check it.",
-            )
-
     # Always track this vendor's fulfillment view.
     order.vendor_status = next_status
-    record_order_status_event(
-        db,
-        order,
-        status=next_status,
-        actor_role="vendor",
-        note="Cancelled by store" if next_status == "cancelled" else None,
-    )
     changed_wallet_vendor_ids: set[uuid.UUID] = set()
-    if next_status == "delivered":
-        # Settle this vendor's earnings even on shared carts.
-        changed_wallet_vendor_ids = settle_vendor_wallets_for_order(
-            db,
-            order,
-            vendor_scope={user.id},
-        )
-        if is_sole_vendor:
-            order.status = "delivered"
-            order.progress = 1
-            order.tracking_eta = None
-            order.delivered_at = datetime.now(UTC)
-            order.cancelled_at = None
-            order.cancellation_reason = None
-        else:
-            # Do not mark the whole customer order delivered when other sellers
-            # still have line items on the cart.
-            if order.status not in {"delivered", "cancelled", "refunded"}:
-                order.status = "processing"
-                order.progress = max(float(order.progress or 0), 0.9)
-                order.tracking_eta = (
-                    order.tracking_eta
-                    or "Partially fulfilled · remaining sellers still preparing"
-                )
-    elif next_status == "cancelled":
+    if next_status == "cancelled":
         if not is_sole_vendor:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -2139,26 +2084,27 @@ def update_vendor_order_status(
                     "Contact ODOS support to cancel a shared cart."
                 ),
             )
+        record_order_status_event(
+            db, order, status=next_status, actor_role="vendor", actor_id=user.id, note="Cancelled by store"
+        )
         order.status = "cancelled"
         order.progress = 0
         order.tracking_eta = None
         order.cancelled_at = datetime.now(UTC)
         order.cancellation_reason = "Cancelled by store"
     elif next_status == "out_for_delivery":
+        # Delivery sub-state (delivery_status, dispatched_at, auto-release
+        # scheduling, SMS, the DISPATCHED/REDISPATCHED audit event) is fully
+        # owned by delivery_lifecycle_service — this only owns the vendor's
+        # own fulfillment-view fields.
+        dispatch_order(db, order, actor=user)
         order.status = "processing"
         order.progress = 0.9
         order.tracking_eta = "Out for delivery · on the way to you"
         order.cancelled_at = None
         order.cancellation_reason = None
-        is_new_dispatch = not order.delivery_code
-        ensure_delivery_code(order)
-        if is_new_dispatch and order.address_phone:
-            send_delivery_out_for_delivery_sms(
-                phone_number=order.address_phone,
-                order_number=order.order_number,
-                delivery_code=order.delivery_code,
-            )
     else:
+        record_order_status_event(db, order, status=next_status, actor_role="vendor", actor_id=user.id)
         order.status = "processing"
         progress_map = {
             "pending": 0.1,

@@ -17,6 +17,8 @@ from app.controllers.vendor_controller import (
 )
 from app.services.promotion_engine import calculate_best_discount
 from app.helpers.promo_audit import log_promo_applied, log_promo_rejections
+from app.core.admin_permissions import list_admins_with_feature
+from app.core.config import settings
 from app.core.event_types import ORDER_CREATED
 from app.models import (
     CartItem,
@@ -42,6 +44,12 @@ from app.services.delivery_service import (
     tracking_eta_after_payment,
     validate_delivery_checkout,
 )
+from app.services.delivery_lifecycle_service import (
+    confirm_delivery_by_customer,
+    mark_rescheduled,
+    report_delivery_problem,
+)
+from app.services.email_service import send_admin_delivery_problem_email
 from app.services.finance_math import round_money
 from app.services.order_timeline_service import record_order_status_event
 from app.services.realtime_service import realtime_manager
@@ -971,54 +979,74 @@ def cancel_order(
 
 
 def confirm_order_delivery(db: Session, user: User, order_id: str) -> Order:
-    order = get_order(db, user, order_id)
+    """Thin wrapper: all delivery-completion business logic (state
+    validation, settlement, notifications) lives in
+    delivery_lifecycle_service so this can't drift from the vendor/admin/
+    auto-release completion paths."""
+    order, _changed_wallet_vendor_ids = confirm_delivery_by_customer(db, user, order_id)
+    _broadcast_order_realtime(db, order)
+    return order
 
-    if order.status != "processing" or order.payment_status != "paid":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only paid processing orders can be marked as delivered.",
-        )
 
-    order.status = "delivered"
-    order.vendor_status = "delivered"
-    order.progress = 1
-    order.tracking_eta = None
-    order.cancellation_reason = None
-    order.cancelled_at = None
-    order.delivered_at = datetime.now(timezone.utc)
-    record_order_status_event(
-        db,
-        order,
-        status="delivered",
-        actor_role="customer",
-        note="Customer confirmed receipt",
-    )
-    db.commit()
-    db.refresh(order)
-    preview = order_notification_image(order)
-    delivered_event = create_notification_event(
-        db,
-        user,
-        kind="order_delivered",
-        title="Order delivered",
-        body=f"Order #{order.order_number} has arrived successfully.",
-        icon="checkmark-done-outline",
-        accent="success",
-        action_label="View receipt",
-        route_type="order",
-        route_target_id=str(order.id),
-        image_key=preview["image_key"],
-        image_url=preview["image_url"],
-    )
-    _dispatch_order_push(
-        user=user,
-        title="Order delivered",
-        body=f"Order #{order.order_number} has arrived successfully.",
-        order=order,
-        notification_event=delivered_event,
-    )
-    db.commit()
-    db.refresh(order)
+def _dispatch_admin_delivery_problem_alert(db: Session, *, order: Order, reason: str) -> None:
+    admins = list_admins_with_feature(db, "delivery")
+    item_label = order.items[0].title if order.items else "this order"
+    for admin in admins:
+        if not admin.email:
+            continue
+        try:
+            send_admin_delivery_problem_email(
+                to_email=admin.email,
+                to_name=admin.full_name,
+                order_number=order.order_number,
+                customer_name=order.address_full_name,
+                store_name=item_label,
+                reason_label=reason.replace("_", " "),
+                details=order.delivery_problem_reason,
+                reported_at_label=(order.delivery_problem_reported_at or datetime.now(timezone.utc)).strftime(
+                    "%d %b %Y, %I:%M %p UTC"
+                ),
+                order_id=str(order.id),
+                admin_panel_url=settings.admin_panel_url,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to send admin delivery-problem alert to %s for order %s", admin.email, order.id
+            )
+
+
+def report_order_delivery_problem(
+    db: Session,
+    user: User,
+    order_id: str,
+    *,
+    reason: str,
+    details: str | None,
+) -> Order:
+    order = report_delivery_problem(db, user, order_id, reason=reason, details=details)
+
+    admins = list_admins_with_feature(db, "delivery")
+    for admin in admins:
+        try:
+            create_notification_event(
+                db,
+                admin,
+                kind="delivery_problem_reported",
+                title="Customer reported a delivery problem",
+                body=f"Order #{order.order_number}: {order.delivery_problem_reason or reason}",
+                icon="alert-circle-outline",
+                accent="danger",
+                action_label="Open Delivery Ops",
+                route_type="order",
+                route_target_id=str(order.id),
+            )
+        except Exception:
+            logger.exception("Failed to notify admin %s of delivery problem for order %s", admin.id, order.id)
+    if admins:
+        db.commit()
+        db.refresh(order)
+
+    _dispatch_admin_delivery_problem_alert(db, order=order, reason=reason)
     _broadcast_order_realtime(db, order)
     return order
 
@@ -1071,8 +1099,7 @@ def request_order_reschedule(
                 detail="You already let the seller know a few minutes ago — no need to send it again.",
             )
 
-    order.reschedule_requested_at = datetime.now(timezone.utc)
-    order.reschedule_note = note
+    mark_rescheduled(db, order, note=note)
     db.commit()
     db.refresh(order)
 

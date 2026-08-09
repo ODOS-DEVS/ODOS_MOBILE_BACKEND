@@ -11,6 +11,7 @@ from app.controllers.order_controller import (
     delete_order,
     get_order,
     list_orders,
+    report_order_delivery_problem,
     request_order_reschedule,
     submit_order_delivery_rating,
 )
@@ -21,6 +22,7 @@ from app.services.media_service import save_image_uploads
 from app.schemas.user import MessageResponse
 from app.schemas.order import (
     OrderCreate,
+    OrderDeliveryProblemRequest,
     OrderDeliveryRatingUpdate,
     OrderRead,
     OrderRescheduleRequest,
@@ -73,6 +75,18 @@ def confirm_existing_order_delivery(
     db: Session = Depends(get_db),
 ):
     return confirm_order_delivery(db, current_user, order_id)
+
+
+@router.post("/{order_id}/delivery-problem", response_model=OrderRead)
+def report_delivery_problem_route(
+    order_id: str,
+    payload: OrderDeliveryProblemRequest,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return report_order_delivery_problem(
+        db, current_user, order_id, reason=payload.reason, details=payload.details
+    )
 
 
 @router.patch("/{order_id}/delivery-rating", response_model=OrderRead)

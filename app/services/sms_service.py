@@ -151,15 +151,10 @@ def send_phone_verification_code(*, phone_number: str, code: str) -> None:
     )
 
 
-def build_delivery_out_for_delivery_message(
-    *,
-    order_number: str,
-    delivery_code: str,
-) -> str:
+def build_delivery_out_for_delivery_message(*, order_number: str) -> str:
     return (
         f"ODOS: Your order #{order_number} is on its way! "
-        f"Your delivery code is {delivery_code} — give this to the seller only once your "
-        "package is actually in your hands. Don't share it before that."
+        "Open the ODOS app and tap Confirm Delivery once it arrives."
     )
 
 
@@ -167,12 +162,8 @@ def send_delivery_out_for_delivery_sms(
     *,
     phone_number: str,
     order_number: str,
-    delivery_code: str,
 ) -> None:
-    message = build_delivery_out_for_delivery_message(
-        order_number=order_number,
-        delivery_code=delivery_code,
-    )
+    message = build_delivery_out_for_delivery_message(order_number=order_number)
 
     if settings.arkesel_is_configured:
         try:

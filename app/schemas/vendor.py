@@ -511,18 +511,6 @@ class VendorProductUpdate(BaseModel):
 
 class VendorOrderStatusUpdate(BaseModel):
     status: str = Field(min_length=1, max_length=30)
-    # No min_length: a too-short/mistyped code should fail with the friendly
-    # "doesn't match" business-logic message in the controller, not a raw
-    # Pydantic 422.
-    delivery_code: str | None = Field(default=None, max_length=8)
-
-    @field_validator("delivery_code", mode="before")
-    @classmethod
-    def strip_delivery_code(cls, value: str | None) -> str | None:
-        if value is None:
-            return value
-        cleaned = value.strip()
-        return cleaned or None
 
 
 class VendorProductStatusUpdate(BaseModel):
@@ -618,7 +606,8 @@ class VendorOrderRead(BaseModel):
     is_settled: bool = False
     currency: str = "GHS"
     status: str
-    delivery_code: str | None = None
+    delivery_status: str = "not_dispatched"
+    delivery_problem_reason: str | None = None
     delivery_instructions: str | None = None
     reschedule_requested_at: datetime | None = None
     reschedule_note: str | None = None

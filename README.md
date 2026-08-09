@@ -20,7 +20,8 @@ FastAPI API for the ODOS marketplace — powers the mobile shopper app, vendor t
 - Auth (email/password, Google, verification, password reset, phone OTP)
 - Catalog: categories, markets, stores (with business hours + vacation mode), products, deals hub, promo banners, flash sales
 - Cart, wishlist, orders, returns, reviews, vouchers, customer wallet, payments
-- Delivery: unified order timeline, proof-of-delivery code, reschedule requests, delivery ratings, SLA monitoring with automatic customer goodwill credit
+- Delivery: customer-confirmed handoff (vendor dispatches, only the customer can confirm receipt — never the vendor), "I haven't received it" problem reporting, reschedule requests, delivery ratings, SLA monitoring with automatic customer goodwill credit
+- 48-hour auto-release safety net (36h reminder) if a customer never confirms, with active problems/reschedules excluded
 - Delivery quotes at checkout, configurable delivery settings, order payment SMS
 - Push notifications (Expo) with tap-to-navigate payloads
 - **Notification read-state** sync and paginated activity feed for the mobile client
@@ -34,6 +35,7 @@ FastAPI API for the ODOS marketplace — powers the mobile shopper app, vendor t
 - Webhook signature verification, idempotent payment/webhook handling, and a background job that automatically re-verifies payments stuck `pending`
 - Row-locked wallet and treasury balance updates — no double-spend / overdraw window on concurrent withdrawal or settlement requests
 - Vendor withdrawal requests with Paystack Transfers support, manual payout confirmation, and a visible commission rate
+- **Vendor settlement** triggers only on customer-confirmed delivery, auto-release, or an audited admin override with a mandatory reason — a vendor can never self-certify their own payout, and a DB-level constraint blocks double settlement even under concurrent requests
 
 **Promotions**
 
@@ -49,13 +51,15 @@ FastAPI API for the ODOS marketplace — powers the mobile shopper app, vendor t
 - Customers aggregate, reviews list + seller reply, analytics with `7d|30d|90d` periods
 - Merchandising campaign opt-ins, wallet / payouts (dual-role approved vendors)
 - Vendor notification preference gates (orders, inventory, payouts)
+- Dispatch is the vendor's last delivery action — no "mark delivered" exists on this side anymore
 
 **Admin**
 
 - Full CRUD across users, vendors, stores, catalog, orders, finance, notifications
 - Review queues for vendor flash-sale nominations and merchandising campaign opt-ins
+- **Delivery Ops**: live delivery/settlement status per order, exceptions (customer-reported problems) surfaced first, full delivery event timeline, completion method (customer / auto-release / admin override)
 - **Vendor payouts** with Paystack transfer support and manual payout confirmation for Starter accounts
-- Feature-scoped admin alert emails (only admins with the relevant permission band are notified)
+- Feature-scoped admin alert emails (only admins with the relevant permission band are notified) — includes a new alert when a customer reports a delivery problem
 - **Paginated admin lists**: `{ items, has_more }` on list endpoints
 - Promo banners with `placement`, `link_type`, `campaign_tag`
 - Single-record fetch for studio editors (`GET /admin/promo-banners/{id}`)
@@ -125,8 +129,10 @@ Recent additions (run `alembic upgrade head` after pull):
 - Seller Center Wave 1: store vacation fields, review reply columns
 - Seller Center Wave 2: inventory movements, vendor notification preference columns
 - Merchandising campaigns and related catalog flags
-- Order status timeline, delivery code, and delivery experience fields (instructions, rating, reschedule, dispatch photo)
+- Order status timeline and delivery experience fields (instructions, rating, reschedule, dispatch photo)
 - Flash-sale stock caps, flash-attributed order items, and voucher expiry-reminder tracking columns
+- Removed the vendor-facing delivery code (superseded by customer-confirmed delivery)
+- Delivery/settlement sub-state columns (`delivery_status`, `settlement_status`, `confirmation_method`, auto-release scheduling), richer timeline event metadata, and a DB-level uniqueness guard against double-settling a vendor for the same order
 
 ## Background jobs
 
@@ -138,6 +144,7 @@ The API runs a few lightweight polling loops in-process on startup (no separate 
 | Delivery SLA monitor | 2 min | Flags late deliveries and credits customer goodwill on breach |
 | Promo expiry reminders | 30 min | Nudges shoppers/vendors before a voucher expires |
 | Payment reconciliation | 5 min | Re-verifies payments/wallet top-ups stuck `pending` directly against Paystack |
+| Delivery auto-release | 30 min | Reminds the customer at 36h, then auto-confirms + settles the vendor at 48h if there's no active problem/reschedule |
 
 ## Deployment (Render)
 
@@ -170,6 +177,8 @@ Add admin and any web client origins to `CORS_ORIGINS`.
 | Commerce | `/api/cart*`, `/api/wishlist*`, `/api/orders*` |
 | Payments & vouchers | `/api/payments/*`, `/api/vouchers/*` |
 | Health | `/api/health` |
+
+Delivery specifics: `PATCH /api/orders/{id}/deliver` (customer confirms), `POST /api/orders/{id}/delivery-problem` (customer reports an issue), `POST /api/orders/{id}/reschedule` (not home).
 
 **Admin**
 

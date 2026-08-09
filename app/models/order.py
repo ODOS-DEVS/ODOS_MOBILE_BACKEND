@@ -50,12 +50,39 @@ class Order(Base):
     progress: Mapped[float | None] = mapped_column(Float, nullable=True)
     tracking_eta: Mapped[str | None] = mapped_column(String(120), nullable=True)
     cancellation_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    # Shown to the customer once the order is out for delivery; the vendor enters it
-    # back to confirm the handoff actually happened (proof of delivery without a rider).
-    delivery_code: Mapped[str | None] = mapped_column(String(8), nullable=True)
     delivery_instructions: Mapped[str | None] = mapped_column(String(280), nullable=True)
     delivery_rating: Mapped[int | None] = mapped_column(Integer, nullable=True)
     delivery_rated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # --- Delivery lifecycle (see app/services/delivery_lifecycle_service.py) ---
+    # A dedicated sub-state machine, independent of vendor_status: vendor_status
+    # is the vendor's own fulfillment view (prep stages + dispatched/delivered)
+    # and only ever moves forward one stage at a time, whereas delivery_status
+    # can branch into rescheduled / customer_problem while the vendor's own
+    # view stays parked at "out_for_delivery".
+    # not_dispatched | out_for_delivery | rescheduled | customer_problem | delivered | failed
+    delivery_status: Mapped[str] = mapped_column(
+        String(30), nullable=False, default="not_dispatched", server_default="not_dispatched", index=True
+    )
+    dispatched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    dispatch_attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    # customer | auto_release | admin_override
+    confirmation_method: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    delivery_problem_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    delivery_problem_reported_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Scheduled the moment an order is dispatched (dispatched_at + grace window)
+    # so the auto-release loop can do a simple indexed range scan instead of
+    # re-deriving "how long has this been out for delivery" on every pass.
+    auto_release_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    auto_released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Set once the "confirm in ~12h or we auto-complete" reminder push has gone
+    # out, so the auto-release loop doesn't re-notify on every pass.
+    delivery_reminder_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # not_eligible | eligible | settled | held — denormalized for fast admin
+    # querying; the source of truth for "was the vendor actually paid" remains
+    # the VendorWalletTransaction row (see settle_vendor_wallets_for_order).
+    settlement_status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="not_eligible", server_default="not_eligible", index=True
+    )
     reschedule_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     reschedule_note: Mapped[str | None] = mapped_column(String(280), nullable=True)
     dispatch_photo_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
@@ -169,7 +196,18 @@ class OrderStatusEvent(Base):
     )
     status: Mapped[str] = mapped_column(String(30), nullable=False)
     actor_role: Mapped[str] = mapped_column(String(20), nullable=False)
+    # Nullable: "system" events (auto-release) have no specific account behind
+    # them. Populated wherever the caller has an authenticated user in hand.
+    actor_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     note: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Structured detail beyond the free-text note — e.g. {"reason": "...",
+    # "previous_delivery_status": "...", "evidence_url": "..."}.
+    event_metadata: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     occurred_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

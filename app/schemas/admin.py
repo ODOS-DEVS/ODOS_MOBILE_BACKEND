@@ -841,7 +841,13 @@ class AdminOrderDetailRead(AdminOrderRead):
     progress: float | None
     tracking_eta: str | None
     cancellation_reason: str | None
-    delivery_code: str | None = None
+    delivery_status: str
+    dispatched_at: datetime | None
+    confirmation_method: str | None
+    delivery_problem_reason: str | None
+    delivery_problem_reported_at: datetime | None
+    auto_release_at: datetime | None
+    settlement_status: str
     address_full_name: str
     address_phone: str
     address_street: str
@@ -874,15 +880,17 @@ class AdminDeliveryOpsOrderRead(BaseModel):
     customer_name: str
     store_name: str
     vendor_status: str
+    delivery_status: str
+    settlement_status: str
     delivery_method: str
     address_city: str
     address_region: str
     product_count: int
     total_amount: float
-    delivery_code: str | None
     stage_started_at: datetime
     minutes_in_stage: int
     is_delayed: bool
+    is_exception: bool
     placed_at: datetime
 
 
@@ -890,23 +898,25 @@ class AdminDeliveryOpsRead(BaseModel):
     orders: list[AdminDeliveryOpsOrderRead]
     stage_counts: dict[str, int]
     delayed_count: int
+    exceptions_count: int
     total_active: int
 
 
 class AdminOrderStatusUpdate(BaseModel):
     status: str = Field(min_length=1, max_length=30)
-    # No min_length: let the controller's business-logic mismatch message own
-    # this, rather than a raw Pydantic 422 for a too-short code.
-    delivery_code: str | None = Field(default=None, max_length=8)
+    # Required when force-completing an order that was never legitimately
+    # dispatched (see update_admin_order_status) — support overrides need a
+    # reason on the record, not a silent status flip.
+    note: str | None = Field(default=None, max_length=500)
 
     @field_validator("status", mode="before")
     @classmethod
     def normalize_status(cls, value: str) -> str:
         return value.strip().lower()
 
-    @field_validator("delivery_code", mode="before")
+    @field_validator("note", mode="before")
     @classmethod
-    def strip_delivery_code(cls, value: str | None) -> str | None:
+    def strip_note(cls, value: str | None) -> str | None:
         if value is None:
             return value
         cleaned = value.strip()

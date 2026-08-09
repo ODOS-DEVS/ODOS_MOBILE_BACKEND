@@ -1,4 +1,4 @@
-import secrets
+import uuid
 
 from sqlalchemy.orm import Session
 
@@ -27,6 +27,8 @@ def record_order_status_event(
     status: str,
     actor_role: str,
     note: str | None = None,
+    actor_id: uuid.UUID | None = None,
+    event_metadata: dict | None = None,
 ) -> OrderStatusEvent:
     """Append one immutable timeline entry. Callers still own the commit."""
     event = OrderStatusEvent(
@@ -34,21 +36,9 @@ def record_order_status_event(
         status=status,
         actor_role=actor_role,
         note=note,
+        actor_id=actor_id,
+        event_metadata=event_metadata,
     )
     db.add(event)
     db.flush()
     return event
-
-
-def generate_delivery_code() -> str:
-    """A short numeric code the customer reads aloud to the vendor/courier at
-    handoff — cheap, no-hardware proof of delivery for a vendor-fulfilled
-    marketplace (no GPS-tracked rider fleet)."""
-    return str(secrets.randbelow(9000) + 1000)
-
-
-def ensure_delivery_code(order: Order) -> str:
-    """Idempotent: an order keeps the same code across retries/re-dispatch."""
-    if not order.delivery_code:
-        order.delivery_code = generate_delivery_code()
-    return order.delivery_code

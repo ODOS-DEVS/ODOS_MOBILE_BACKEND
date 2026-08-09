@@ -57,7 +57,6 @@ from app.controllers.wallet_controller import (
     list_admin_vendor_withdrawal_requests,
     publish_vendor_wallet_updates,
     reverse_vendor_wallet_for_return_request,
-    settle_vendor_wallets_for_order,
     update_admin_vendor_withdrawal_request,
 )
 from app.controllers.voucher_controller import (
@@ -163,11 +162,8 @@ from app.schemas.payment import (
 )
 from app.schemas.user import AuthToken, UserCreate, UserLogin
 from app.services.delivery_service import delivery_method_label, get_delivery_config
-from app.services.order_timeline_service import (
-    ensure_delivery_code,
-    record_order_status_event,
-)
-from app.services.sms_service import send_delivery_out_for_delivery_sms
+from app.services.delivery_lifecycle_service import admin_override_deliver, dispatch_order
+from app.services.order_timeline_service import record_order_status_event
 from app.services.finance_math import amount_from_subunit, round_money
 
 SUPPORTED_ACCOUNT_STATUSES = {"active", "blocked", "inactive"}
@@ -969,7 +965,13 @@ def _serialize_order_detail(db: Session, order: Order) -> AdminOrderDetailRead:
         progress=order.progress,
         tracking_eta=order.tracking_eta,
         cancellation_reason=order.cancellation_reason,
-        delivery_code=order.delivery_code,
+        delivery_status=order.delivery_status,
+        dispatched_at=order.dispatched_at,
+        confirmation_method=order.confirmation_method,
+        delivery_problem_reason=order.delivery_problem_reason,
+        delivery_problem_reported_at=order.delivery_problem_reported_at,
+        auto_release_at=order.auto_release_at,
+        settlement_status=order.settlement_status,
         address_full_name=order.address_full_name,
         address_phone=order.address_phone,
         address_street=order.address_street,
@@ -3367,6 +3369,7 @@ def compute_delivery_ops_snapshot(db: Session) -> AdminDeliveryOpsRead:
     now = datetime.now(UTC)
     stage_counts: dict[str, int] = {stage: 0 for stage in DELIVERY_OPS_ACTIVE_STATUSES}
     delayed_count = 0
+    exceptions_count = 0
     rows: list[AdminDeliveryOpsOrderRead] = []
 
     for order in orders:
@@ -3375,8 +3378,11 @@ def compute_delivery_ops_snapshot(db: Session) -> AdminDeliveryOpsRead:
         minutes_in_stage = max(0, int((now - stage_started_at).total_seconds() // 60))
         sla = DELIVERY_OPS_STAGE_SLA_MINUTES.get(order.vendor_status)
         is_delayed = bool(sla and minutes_in_stage > sla)
+        is_exception = order.delivery_status == "customer_problem"
         if is_delayed:
             delayed_count += 1
+        if is_exception:
+            exceptions_count += 1
 
         rows.append(
             AdminDeliveryOpsOrderRead(
@@ -3385,24 +3391,29 @@ def compute_delivery_ops_snapshot(db: Session) -> AdminDeliveryOpsRead:
                 customer_name=order.address_full_name,
                 store_name=_store_name_lookup(db, order),
                 vendor_status=order.vendor_status,
+                delivery_status=order.delivery_status,
+                settlement_status=order.settlement_status,
                 delivery_method=order.delivery_method,
                 address_city=order.address_city,
                 address_region=order.address_region,
                 product_count=sum(item.quantity for item in order.items),
                 total_amount=round(order.total_amount, 2),
-                delivery_code=order.delivery_code,
                 stage_started_at=stage_started_at,
                 minutes_in_stage=minutes_in_stage,
                 is_delayed=is_delayed,
+                is_exception=is_exception,
                 placed_at=order.placed_at,
             )
         )
 
-    rows.sort(key=lambda row: row.minutes_in_stage, reverse=True)
+    # Exceptions first, then delayed, then by longest-in-stage — the orders
+    # that need a human are always what admins see first.
+    rows.sort(key=lambda row: (not row.is_exception, not row.is_delayed, -row.minutes_in_stage))
     return AdminDeliveryOpsRead(
         orders=rows,
         stage_counts=stage_counts,
         delayed_count=delayed_count,
+        exceptions_count=exceptions_count,
         total_active=len(rows),
     )
 
@@ -3591,52 +3602,49 @@ def update_admin_order_status(
         select(Order)
         .options(selectinload(Order.items), selectinload(Order.user), selectinload(Order.timeline))
         .where(Order.id == order_id)
+        .with_for_update()
     )
     if not order:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found.")
 
     before_status = order.vendor_status
-    order.vendor_status = payload.status
-    changed_wallet_vendor_ids: set[uuid.UUID] = set()
+
     if payload.status == "delivered":
-        if order.payment_status != "paid":
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Only paid orders can be marked as delivered.",
-            )
-        # Admin can force-complete without the code (support overrides), but if
-        # a code was supplied it still has to match — no silent typo overrides.
-        entered_code = (payload.delivery_code or "").strip()
-        if entered_code and order.delivery_code and entered_code != order.delivery_code:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="That delivery code doesn't match this order's code.",
-            )
-        order.status = "delivered"
-        order.delivered_at = datetime.now(UTC)
-        order.cancelled_at = None
-        order.cancellation_reason = None
-        order.progress = 1
-        order.tracking_eta = None
-        changed_wallet_vendor_ids = settle_vendor_wallets_for_order(db, order)
-    elif payload.status == "cancelled":
+        # Delegated in full: state validation, the mandatory-reason rule,
+        # settlement, and the customer notification all live in
+        # delivery_lifecycle_service so this admin path can't drift from the
+        # customer-confirm / auto-release completion paths.
+        order, _changed_wallet_vendor_ids = admin_override_deliver(
+            db, current_user, order_id, reason=payload.note or ""
+        )
+        db.commit()
+        db.refresh(order)
+
+        from app.controllers.order_controller import _broadcast_order_realtime
+
+        _broadcast_order_realtime(db, order)
+        log_admin_order_status_change(
+            db,
+            admin_user=current_user,
+            order_id=str(order.id),
+            order_number=order.order_number,
+            before_status=before_status,
+            after_status=payload.status,
+        )
+        return _serialize_order(db, order)
+
+    order.vendor_status = payload.status
+    if payload.status == "cancelled":
         order.status = "cancelled"
         order.cancelled_at = datetime.now(UTC)
         order.cancellation_reason = "Cancelled by admin"
         order.progress = 0
         order.tracking_eta = None
     elif payload.status == "out_for_delivery":
+        dispatch_order(db, order, actor=current_user)
         order.status = "processing"
         order.progress = 0.9
         order.tracking_eta = "Out for delivery"
-        is_new_dispatch = not order.delivery_code
-        ensure_delivery_code(order)
-        if is_new_dispatch and order.address_phone:
-            send_delivery_out_for_delivery_sms(
-                phone_number=order.address_phone,
-                order_number=order.order_number,
-                delivery_code=order.delivery_code,
-            )
     else:
         order.status = "processing"
         progress_map = {
@@ -3648,13 +3656,17 @@ def update_admin_order_status(
         order.progress = progress_map.get(payload.status, order.progress)
         order.tracking_eta = payload.status.replace("_", " ").title()
 
-    record_order_status_event(
-        db,
-        order,
-        status=payload.status,
-        actor_role="admin",
-        note="Cancelled by admin" if payload.status == "cancelled" else None,
-    )
+    if payload.status != "out_for_delivery":
+        # dispatch_order already recorded its own (richer) DISPATCHED/
+        # REDISPATCHED event above — don't double up.
+        record_order_status_event(
+            db,
+            order,
+            status=payload.status,
+            actor_role="admin",
+            actor_id=current_user.id,
+            note=payload.note or ("Cancelled by admin" if payload.status == "cancelled" else None),
+        )
 
     push_title, push_body = customer_order_status_push_copy(
         order_number=order.order_number,
@@ -3685,8 +3697,6 @@ def update_admin_order_status(
     )
     db.commit()
     db.refresh(order)
-    for vendor_user_id in changed_wallet_vendor_ids:
-        publish_vendor_wallet_updates(vendor_user_id)
 
     from app.controllers.order_controller import _broadcast_order_realtime
 
