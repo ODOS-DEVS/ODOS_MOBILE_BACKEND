@@ -134,6 +134,14 @@ RequireFinanceAdmin = Annotated[User, Depends(require_admin_feature("finance"))]
 RequirePayoutsAdmin = Annotated[User, Depends(require_admin_feature("payouts"))]
 RequireOrdersAdmin = Annotated[User, Depends(require_admin_feature("orders"))]
 RequireDashboardAdmin = Annotated[User, Depends(require_admin_feature("dashboard"))]
+RequireReturnsAdmin = Annotated[User, Depends(require_admin_feature("returns"))]
+RequireProductsAdmin = Annotated[User, Depends(require_admin_feature("products"))]
+RequireStoresAdmin = Annotated[User, Depends(require_admin_feature("stores"))]
+RequireMarketsAdmin = Annotated[User, Depends(require_admin_feature("markets"))]
+RequireCategoriesAdmin = Annotated[User, Depends(require_admin_feature("categories"))]
+RequireReviewsAdmin = Annotated[User, Depends(require_admin_feature("reviews"))]
+RequireNotificationsAdmin = Annotated[User, Depends(require_admin_feature("notifications"))]
+RequireDeliveryAdmin = Annotated[User, Depends(require_admin_feature("delivery"))]
 
 from app.schemas.admin import (
     AdminBootstrapStatusRead,
@@ -340,7 +348,7 @@ def post_admin_staff(
 
 @router.get("/vendors", response_model=AdminPageRead[AdminVendorRead])
 def get_vendors(
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequireVendorsAdmin,
     list_params: AdminListParams,
     db: Session = Depends(get_db),
 ):
@@ -351,7 +359,7 @@ def get_vendors(
 @router.get("/vendors/{vendor_id}", response_model=AdminVendorRead)
 def get_vendor(
     vendor_id: str,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequireVendorsAdmin,
     db: Session = Depends(get_db),
 ):
     return get_admin_vendor(db, current_user, vendor_id)
@@ -403,7 +411,7 @@ def reject_application(
 
 @router.get("/stores", response_model=AdminPageRead[AdminStoreRead])
 def get_stores(
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequireStoresAdmin,
     list_params: AdminListParams,
     db: Session = Depends(get_db),
 ):
@@ -414,7 +422,7 @@ def get_stores(
 @router.get("/stores/{store_id}", response_model=AdminStoreDetailRead)
 def get_store(
     store_id: str,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequireStoresAdmin,
     db: Session = Depends(get_db),
 ):
     return get_admin_store(db, current_user, store_id)
@@ -424,7 +432,7 @@ def get_store(
 def patch_store_status(
     store_id: str,
     payload: AdminStoreStatusUpdate,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequireStoresAdmin,
     db: Session = Depends(get_db),
 ):
     return update_admin_store_status(db, current_user, store_id, payload)
@@ -436,7 +444,7 @@ async def post_store(
     category: Annotated[str, Form(min_length=2, max_length=120)],
     region: Annotated[str, Form(min_length=2, max_length=120)],
     city: Annotated[str, Form(min_length=2, max_length=120)],
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequireStoresAdmin,
     db: Session = Depends(get_db),
     description: Annotated[str | None, Form(max_length=255)] = None,
     slug: Annotated[str | None, Form(max_length=80)] = None,
@@ -464,7 +472,7 @@ async def post_store(
 
 @router.get("/markets", response_model=AdminPageRead[AdminMarketRead])
 def get_markets(
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequireMarketsAdmin,
     list_params: AdminListParams,
     db: Session = Depends(get_db),
 ):
@@ -475,7 +483,7 @@ def get_markets(
 @router.post("/markets", response_model=AdminMarketRead, status_code=status.HTTP_201_CREATED)
 async def post_market(
     name: Annotated[str, Form(min_length=1, max_length=120)],
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequireMarketsAdmin,
     db: Session = Depends(get_db),
     slug: Annotated[str | None, Form(max_length=50)] = None,
     image_key: Annotated[str | None, Form(alias="image", max_length=200)] = None,
@@ -495,7 +503,7 @@ async def post_market(
 async def patch_market(
     market_id: str,
     name: Annotated[str, Form(min_length=1, max_length=120)],
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequireMarketsAdmin,
     db: Session = Depends(get_db),
     slug: Annotated[str | None, Form(max_length=50)] = None,
     image_key: Annotated[str | None, Form(alias="image", max_length=200)] = None,
@@ -514,7 +522,7 @@ async def patch_market(
 @router.delete("/markets/{market_id}")
 def remove_market(
     market_id: str,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequireMarketsAdmin,
     db: Session = Depends(get_db),
 ):
     delete_admin_market(db, current_user, market_id)
@@ -523,7 +531,7 @@ def remove_market(
 
 @router.get("/promo-banners", response_model=AdminPageRead[AdminPromoBannerRead])
 def get_promo_banners(
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequirePromotionsAdmin,
     list_params: AdminListParams,
     db: Session = Depends(get_db),
 ):
@@ -534,7 +542,7 @@ def get_promo_banners(
 @router.get("/promo-banners/{banner_id}", response_model=AdminPromoBannerRead)
 def get_promo_banner(
     banner_id: str,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequirePromotionsAdmin,
     db: Session = Depends(get_db),
 ):
     return get_admin_promo_banner(db, current_user, banner_id)
@@ -543,7 +551,7 @@ def get_promo_banner(
 @router.post("/promo-banners", response_model=AdminPromoBannerRead, status_code=status.HTTP_201_CREATED)
 async def post_promo_banner(
     title: Annotated[str, Form(min_length=2, max_length=120)],
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequirePromotionsAdmin,
     db: Session = Depends(get_db),
     subtitle: Annotated[str | None, Form(max_length=255)] = None,
     cta_label: Annotated[str, Form(min_length=2, max_length=80)] = "Shop now",
@@ -579,7 +587,7 @@ async def post_promo_banner(
 async def patch_promo_banner(
     banner_id: str,
     title: Annotated[str, Form(min_length=2, max_length=120)],
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequirePromotionsAdmin,
     db: Session = Depends(get_db),
     subtitle: Annotated[str | None, Form(max_length=255)] = None,
     cta_label: Annotated[str, Form(min_length=2, max_length=80)] = "Shop now",
@@ -614,7 +622,7 @@ async def patch_promo_banner(
 @router.delete("/promo-banners/{banner_id}")
 def remove_promo_banner(
     banner_id: str,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequirePromotionsAdmin,
     db: Session = Depends(get_db),
 ):
     archive_admin_promo_banner(db, current_user, banner_id)
@@ -623,7 +631,7 @@ def remove_promo_banner(
 
 @router.get("/flash-sale-events", response_model=AdminPageRead[AdminFlashSaleEventRead])
 def get_flash_sale_events(
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequirePromotionsAdmin,
     list_params: AdminListParams,
     db: Session = Depends(get_db),
 ):
@@ -634,7 +642,7 @@ def get_flash_sale_events(
 @router.post("/flash-sale-events", response_model=AdminFlashSaleEventRead, status_code=status.HTTP_201_CREATED)
 def post_flash_sale_event(
     payload: AdminFlashSaleEventUpsert,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequirePromotionsAdmin,
     db: Session = Depends(get_db),
 ):
     return create_admin_flash_sale_event(db, current_user, payload)
@@ -644,7 +652,7 @@ def post_flash_sale_event(
 def patch_flash_sale_event(
     event_id: str,
     payload: AdminFlashSaleEventUpsert,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequirePromotionsAdmin,
     db: Session = Depends(get_db),
 ):
     return update_admin_flash_sale_event(db, current_user, event_id, payload)
@@ -653,7 +661,7 @@ def patch_flash_sale_event(
 @router.delete("/flash-sale-events/{event_id}")
 def remove_flash_sale_event(
     event_id: str,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequirePromotionsAdmin,
     db: Session = Depends(get_db),
 ):
     archive_admin_flash_sale_event(db, current_user, event_id)
@@ -787,7 +795,7 @@ def post_review_merchandising_campaign_opt_in(
 
 @router.get("/categories", response_model=AdminPageRead[AdminCategoryRead])
 def get_categories(
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequireCategoriesAdmin,
     list_params: AdminListParams,
     db: Session = Depends(get_db),
 ):
@@ -798,7 +806,7 @@ def get_categories(
 @router.post("/categories", response_model=AdminCategoryRead, status_code=status.HTTP_201_CREATED)
 async def post_category(
     name: Annotated[str, Form(min_length=1, max_length=120)],
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequireCategoriesAdmin,
     db: Session = Depends(get_db),
     slug: Annotated[str | None, Form(max_length=50)] = None,
     description: Annotated[str | None, Form(max_length=160)] = None,
@@ -821,7 +829,7 @@ async def post_category(
 @router.patch("/categories/{category_id}", response_model=AdminCategoryRead)
 async def patch_category(
     category_id: str,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequireCategoriesAdmin,
     db: Session = Depends(get_db),
     name: Annotated[str, Form(min_length=1, max_length=120)] = "",
     slug: Annotated[str | None, Form(max_length=50)] = None,
@@ -845,7 +853,7 @@ async def patch_category(
 @router.delete("/categories/{category_id}")
 def remove_category(
     category_id: str,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequireCategoriesAdmin,
     db: Session = Depends(get_db),
     permanent: bool = False,
 ):
@@ -855,7 +863,7 @@ def remove_category(
 
 @router.get("/products", response_model=AdminPageRead[AdminProductRead])
 def get_products(
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequireProductsAdmin,
     list_params: AdminListParams,
     db: Session = Depends(get_db),
 ):
@@ -870,7 +878,7 @@ async def post_product(
     category: Annotated[str, Form(min_length=2, max_length=120)],
     price: Annotated[int, Form(ge=0)],
     stock: Annotated[int, Form(ge=0)],
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequireProductsAdmin,
     db: Session = Depends(get_db),
     store_id: Annotated[str | None, Form(max_length=50)] = None,
     audience_slug: Annotated[str | None, Form(max_length=50)] = None,
@@ -917,7 +925,7 @@ async def post_product(
 @router.get("/products/{product_id}", response_model=AdminProductRead)
 def get_product(
     product_id: str,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequireProductsAdmin,
     db: Session = Depends(get_db),
 ):
     return get_admin_product(db, current_user, product_id)
@@ -931,7 +939,7 @@ async def patch_product(
     category: Annotated[str, Form(min_length=2, max_length=120)],
     price: Annotated[int, Form(ge=0)],
     stock: Annotated[int, Form(ge=0)],
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequireProductsAdmin,
     db: Session = Depends(get_db),
     store_id: Annotated[str | None, Form(max_length=50)] = None,
     audience_slug: Annotated[str | None, Form(max_length=50)] = None,
@@ -979,7 +987,7 @@ async def patch_product(
 def patch_product_status(
     product_id: str,
     payload: AdminProductStatusUpdate,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequireProductsAdmin,
     db: Session = Depends(get_db),
 ):
     return update_admin_product_status(db, current_user, product_id, payload)
@@ -1093,7 +1101,7 @@ def post_bulk_vouchers(
 
 @router.get("/flash-sale-nominations", response_model=AdminPageRead[AdminFlashSaleNominationRead])
 def get_flash_sale_nominations(
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequirePromotionsAdmin,
     list_params: AdminListParams,
     db: Session = Depends(get_db),
 ):
@@ -1108,7 +1116,7 @@ def get_flash_sale_nominations(
 def post_flash_sale_nomination_review(
     nomination_id: str,
     payload: AdminFlashSaleNominationReview,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequirePromotionsAdmin,
     db: Session = Depends(get_db),
 ):
     return review_admin_flash_sale_nomination(db, current_user, nomination_id, payload)
@@ -1116,7 +1124,7 @@ def post_flash_sale_nomination_review(
 
 @router.get("/reviews", response_model=AdminPageRead[AdminReviewRead])
 def get_reviews(
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequireReviewsAdmin,
     list_params: AdminListParams,
     db: Session = Depends(get_db),
 ):
@@ -1128,7 +1136,7 @@ def get_reviews(
 def patch_review_moderation(
     review_id: str,
     payload: AdminReviewModerationUpdate,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequireReviewsAdmin,
     db: Session = Depends(get_db),
 ):
     return moderate_admin_review(db, current_user, review_id, payload)
@@ -1183,7 +1191,7 @@ def get_delivery_ops(
 @router.get("/orders/{order_id}", response_model=AdminOrderDetailRead)
 def get_order(
     order_id: str,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequireOrdersAdmin,
     db: Session = Depends(get_db),
 ):
     return get_admin_order(db, current_user, order_id)
@@ -1193,7 +1201,7 @@ def get_order(
 def patch_order_status(
     order_id: str,
     payload: AdminOrderStatusUpdate,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequireOrdersAdmin,
     db: Session = Depends(get_db),
 ):
     return update_admin_order_status(db, current_user, order_id, payload)
@@ -1201,7 +1209,7 @@ def patch_order_status(
 
 @router.get("/returns", response_model=AdminPageRead[AdminReturnRequestRead])
 def get_return_requests(
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequireReturnsAdmin,
     list_params: AdminListParams,
     db: Session = Depends(get_db),
 ):
@@ -1212,7 +1220,7 @@ def get_return_requests(
 @router.get("/returns/{request_id}", response_model=AdminReturnRequestRead)
 def get_return_request(
     request_id: str,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequireReturnsAdmin,
     db: Session = Depends(get_db),
 ):
     return get_admin_return_request(db, current_user, request_id)
@@ -1222,7 +1230,7 @@ def get_return_request(
 def patch_return_request(
     request_id: str,
     payload: AdminReturnRequestUpdate,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequireReturnsAdmin,
     db: Session = Depends(get_db),
 ):
     return update_admin_return_request(db, current_user, request_id, payload)
@@ -1261,7 +1269,7 @@ def patch_vendor_withdrawal_request(
 
 @router.get("/notifications", response_model=AdminPageRead[AdminNotificationRead])
 def get_notifications(
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequireNotificationsAdmin,
     list_params: AdminListParams,
     db: Session = Depends(get_db),
 ):
@@ -1275,7 +1283,7 @@ def get_notifications(
 )
 def patch_notification_read(
     notification_id: str,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequireNotificationsAdmin,
     db: Session = Depends(get_db),
 ):
     return mark_admin_notification_read(db, current_user, notification_id)
@@ -1283,7 +1291,7 @@ def patch_notification_read(
 
 @router.get("/delivery-settings", response_model=AdminDeliverySettingsRead)
 def admin_get_delivery_settings(
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequireDeliveryAdmin,
     db: Session = Depends(get_db),
 ):
     return get_admin_delivery_settings(db, current_user)
@@ -1292,7 +1300,7 @@ def admin_get_delivery_settings(
 @router.patch("/delivery-settings", response_model=AdminDeliverySettingsRead)
 def admin_update_delivery_settings(
     payload: AdminDeliverySettingsUpdate,
-    current_user: Annotated[User, Depends(get_current_user)],
+    current_user: RequireDeliveryAdmin,
     db: Session = Depends(get_db),
 ):
     return update_admin_delivery_settings(db, current_user, payload)

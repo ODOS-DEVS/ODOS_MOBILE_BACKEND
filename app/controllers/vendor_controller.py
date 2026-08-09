@@ -24,6 +24,7 @@ from app.controllers.voucher_controller import (
 from app.controllers.wallet_controller import publish_vendor_wallet_updates
 from app.models import (
     Market,
+    MerchandisingCampaign,
     NotificationEvent,
     Order,
     OrderItem,
@@ -152,6 +153,29 @@ def normalize_list(values: list[str] | None) -> list[str] | None:
         return None
     cleaned = [value.strip() for value in values if value and value.strip()]
     return cleaned or None
+
+
+def filter_reserved_placement_tags(
+    tags: list[str] | None, reserved: set[str]
+) -> list[str] | None:
+    """Pure filtering logic, unit-testable without a DB session — see
+    _strip_reserved_placement_tags for why this exists."""
+    if not tags:
+        return tags
+    filtered = [tag for tag in tags if tag not in reserved]
+    return filtered or None
+
+
+def _strip_reserved_placement_tags(db: Session, tags: list[str] | None) -> list[str] | None:
+    """Campaign/deal-hub membership is inferred from placement_tags matching a
+    campaign slug (see campaign_service._resolve_campaign_products and
+    deal_catalog_service) — without this, a vendor could self-insert into any
+    curated campaign or the deals hub just by tagging their own product,
+    bypassing the opt-in review flow entirely."""
+    if not tags:
+        return tags
+    reserved = set(db.scalars(select(MerchandisingCampaign.slug)).all())
+    return filter_reserved_placement_tags(tags, reserved)
 
 
 def build_discount(price: int, old_price: int | None) -> str | None:
@@ -1134,7 +1158,7 @@ async def create_vendor_product(
 
     image_urls = await save_image_uploads(images, folder="products")
     primary_image_url = image_urls[0] if image_urls else payload.image_url
-    normalized_placement_tags = normalize_list(payload.placement_tags)
+    normalized_placement_tags = _strip_reserved_placement_tags(db, normalize_list(payload.placement_tags))
     (
         resolved_category,
         resolved_subcategory,
@@ -1239,7 +1263,7 @@ async def update_vendor_product(
 
     next_placement_tags = data.pop("placement_tags", None)
     if next_placement_tags is not None:
-        product.placement_tags = normalize_list(next_placement_tags)
+        product.placement_tags = _strip_reserved_placement_tags(db, normalize_list(next_placement_tags))
 
     if "color_options" in data:
         product.color_options = normalize_list(data.pop("color_options"))

@@ -120,7 +120,7 @@ def enforce_rate_limits_with_memory_fallback(rules: list[RateLimitRule]) -> None
 
 
 def limit_signup(request: Request) -> None:
-    enforce_rate_limits(
+    enforce_rate_limits_with_memory_fallback(
         [
             RateLimitRule(
                 scope="auth:signup:ip",
@@ -135,7 +135,7 @@ def limit_signup(request: Request) -> None:
 def limit_login(request: Request, email: str) -> None:
     ip = client_ip(request)
     email_key = email.strip().lower()
-    enforce_rate_limits(
+    enforce_rate_limits_with_memory_fallback(
         [
             RateLimitRule("auth:login:ip", ip, 10, 900),
             RateLimitRule("auth:login:email", email_key, 10, 900),
@@ -144,7 +144,7 @@ def limit_login(request: Request, email: str) -> None:
 
 
 def limit_google_auth(request: Request) -> None:
-    enforce_rate_limits(
+    enforce_rate_limits_with_memory_fallback(
         [
             RateLimitRule(
                 scope="auth:google:ip",
@@ -159,7 +159,7 @@ def limit_google_auth(request: Request) -> None:
 def limit_forgot_password(request: Request, email: str) -> None:
     ip = client_ip(request)
     email_key = email.strip().lower()
-    enforce_rate_limits(
+    enforce_rate_limits_with_memory_fallback(
         [
             RateLimitRule("auth:forgot-password:ip", ip, 5, 3600),
             RateLimitRule("auth:forgot-password:email", email_key, 3, 3600),
@@ -170,7 +170,7 @@ def limit_forgot_password(request: Request, email: str) -> None:
 def limit_verify_reset_code(request: Request, email: str) -> None:
     ip = client_ip(request)
     email_key = email.strip().lower()
-    enforce_rate_limits(
+    enforce_rate_limits_with_memory_fallback(
         [
             RateLimitRule("auth:verify-reset:ip", ip, 10, 900),
             RateLimitRule("auth:verify-reset:email", email_key, 5, 900),
@@ -179,7 +179,7 @@ def limit_verify_reset_code(request: Request, email: str) -> None:
 
 
 def limit_reset_password(request: Request) -> None:
-    enforce_rate_limits(
+    enforce_rate_limits_with_memory_fallback(
         [
             RateLimitRule(
                 scope="auth:reset-password:ip",
@@ -192,7 +192,7 @@ def limit_reset_password(request: Request) -> None:
 
 
 def limit_verify_email(user: User) -> None:
-    enforce_rate_limits(
+    enforce_rate_limits_with_memory_fallback(
         [
             RateLimitRule(
                 scope="auth:verify-email:user",
@@ -206,7 +206,7 @@ def limit_verify_email(user: User) -> None:
 
 def limit_resend_email_verification(user: User) -> None:
     user_id = str(user.id)
-    enforce_rate_limits(
+    enforce_rate_limits_with_memory_fallback(
         [
             RateLimitRule("auth:resend-email:user:minute", user_id, 1, 60),
             RateLimitRule("auth:resend-email:user:day", user_id, 5, 86400),
@@ -217,7 +217,7 @@ def limit_resend_email_verification(user: User) -> None:
 def limit_send_phone_code(user: User, phone_number: str) -> None:
     user_id = str(user.id)
     phone_key = phone_number.strip()
-    enforce_rate_limits(
+    enforce_rate_limits_with_memory_fallback(
         [
             RateLimitRule("auth:phone-send:user:minute", user_id, 3, 60),
             RateLimitRule("auth:phone-send:user:day", user_id, 5, 86400),
@@ -227,7 +227,7 @@ def limit_send_phone_code(user: User, phone_number: str) -> None:
 
 
 def limit_verify_phone(user: User) -> None:
-    enforce_rate_limits(
+    enforce_rate_limits_with_memory_fallback(
         [
             RateLimitRule(
                 scope="auth:verify-phone:user",
@@ -240,7 +240,7 @@ def limit_verify_phone(user: User) -> None:
 
 
 def limit_payment_checkout(user: User) -> None:
-    enforce_rate_limits(
+    enforce_rate_limits_with_memory_fallback(
         [
             RateLimitRule(
                 scope="payments:checkout:user",
@@ -253,7 +253,7 @@ def limit_payment_checkout(user: User) -> None:
 
 
 def limit_wallet_topup_checkout(user: User) -> None:
-    enforce_rate_limits(
+    enforce_rate_limits_with_memory_fallback(
         [
             RateLimitRule(
                 scope="wallet:topup-checkout:user",
@@ -266,7 +266,7 @@ def limit_wallet_topup_checkout(user: User) -> None:
 
 
 def limit_wallet_checkout(user: User) -> None:
-    enforce_rate_limits(
+    enforce_rate_limits_with_memory_fallback(
         [
             RateLimitRule(
                 scope="wallet:checkout:user",

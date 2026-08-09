@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Depends
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -8,6 +10,7 @@ from app.core.database import get_db
 from app.core.redis_client import get_redis, redis_is_enabled, redis_last_error
 
 router = APIRouter(tags=["health"])
+logger = logging.getLogger(__name__)
 
 
 @router.get("/health")
@@ -41,12 +44,12 @@ def services_health_check(db: Session = Depends(get_db)):
                 payload["rate_limit"] = "unavailable"
             if cache_is_enabled():
                 payload["cache"] = "unavailable"
+            # Logged for operators, not returned — a connection-error string
+            # can carry hostnames/credentials fragments and this endpoint is
+            # intentionally unauthenticated (used for deploy/uptime checks).
             error = redis_last_error()
             if error:
-                if redis_is_enabled():
-                    payload["rate_limit_error"] = error[:160]
-                if cache_is_enabled():
-                    payload["cache_error"] = error[:160]
+                logger.warning("Redis health check failed: %s", error[:300])
 
     if not settings.cache_enabled:
         payload["cache"] = "disabled"
@@ -56,7 +59,7 @@ def services_health_check(db: Session = Depends(get_db)):
         payload["database"] = "connected"
     except Exception as exc:
         payload["database"] = "unavailable"
-        payload["database_error"] = str(exc)[:160]
+        logger.warning("Database health check failed: %s", str(exc)[:300])
 
     return payload
 

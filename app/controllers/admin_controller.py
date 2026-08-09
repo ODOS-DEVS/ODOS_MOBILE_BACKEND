@@ -4,7 +4,7 @@ import uuid
 from datetime import UTC, datetime
 
 from fastapi import HTTPException, UploadFile, status
-from sqlalchemy import case, func, select
+from sqlalchemy import case, func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
@@ -215,6 +215,13 @@ def require_admin(user: User) -> None:
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin access is required for this action.",
         )
+
+
+def max_refund_amount_for(unit_price: float, quantity: int) -> float:
+    """The most a return's refund_amount can legitimately be — the line
+    item's own value. Extracted as a pure function so the cap itself
+    (not just the surrounding endpoint) is directly unit-testable."""
+    return round(unit_price * quantity, 2)
 
 
 def _account_status(user: User) -> str:
@@ -1218,7 +1225,16 @@ def get_admin_bootstrap_status(db: Session) -> AdminBootstrapStatusRead:
     return AdminBootstrapStatusRead(bootstrap_enabled=admin_count == 0)
 
 
+_BOOTSTRAP_ADMIN_LOCK_KEY = 927_331_001  # arbitrary constant, scoped to this one lock
+
+
 def bootstrap_first_admin(db: Session, payload: UserCreate) -> AuthToken:
+    # Serialize concurrent bootstrap attempts: without this, two requests
+    # racing the admin_count==0 check during a fresh deploy could each pass
+    # it and both mint a super-admin account. Held for the transaction, so
+    # the second caller blocks here until the first commits (or rolls back).
+    db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": _BOOTSTRAP_ADMIN_LOCK_KEY})
+
     if not get_admin_bootstrap_status(db).bootstrap_enabled:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -3526,10 +3542,19 @@ def update_admin_return_request(
     request.reviewed_by_user_id = current_user.id
     request.reviewed_at = datetime.now(UTC)
 
+    # An admin-supplied refund_amount is still an untrusted input — cap it at
+    # what the line item is actually worth so a typo or a compromised support
+    # account can't drain a vendor's wallet via an inflated refund.
+    max_refund_amount = max_refund_amount_for(request.order_item.unit_price, request.quantity)
     if payload.refund_amount is not None:
+        if payload.refund_amount > max_refund_amount:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Refund amount can't exceed the item's value ({max_refund_amount}).",
+            )
         request.refund_amount = round(payload.refund_amount, 2)
     elif payload.status == "refunded" and request.refund_amount is None:
-        request.refund_amount = round(request.order_item.unit_price * request.quantity, 2)
+        request.refund_amount = max_refund_amount
 
     if payload.status in {"rejected", "refunded", "exchanged"}:
         request.resolved_at = datetime.now(UTC)

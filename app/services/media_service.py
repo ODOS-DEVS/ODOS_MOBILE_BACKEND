@@ -14,6 +14,27 @@ ALLOWED_IMAGE_CONTENT_TYPES = {
     "image/webp": ".webp",
 }
 
+# The client-supplied Content-Type header is just a label — a direct API call
+# (bypassing the mobile app entirely) can set it to whatever it likes. Check
+# the actual file signature so an upload claiming to be a JPEG can't smuggle
+# arbitrary bytes (HTML, SVG-with-script, etc.) past that check.
+_IMAGE_MAGIC_BYTES: dict[str, tuple[bytes, ...]] = {
+    "image/jpeg": (b"\xff\xd8\xff",),
+    "image/png": (b"\x89PNG\r\n\x1a\n",),
+    "image/webp": (b"RIFF",),  # WEBP is also checked at offset 8 below
+}
+
+
+def _matches_declared_image_type(content_type: str, file_bytes: bytes) -> bool:
+    signatures = _IMAGE_MAGIC_BYTES.get(content_type)
+    if not signatures:
+        return False
+    if not any(file_bytes.startswith(sig) for sig in signatures):
+        return False
+    if content_type == "image/webp":
+        return file_bytes[8:12] == b"WEBP"
+    return True
+
 # Server-side backstop — the mobile client already caps picks at 8MB, but that's a
 # client-side convenience only. Without this, a direct API call (bypassing the app)
 # could upload an arbitrarily large file with nothing to stop it.
@@ -148,6 +169,11 @@ async def save_image_upload(upload: UploadFile, folder: str) -> str:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Images must be {MAX_IMAGE_UPLOAD_BYTES // (1024 * 1024)}MB or smaller.",
+        )
+    if not _matches_declared_image_type(content_type, file_bytes):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="That file doesn't look like a valid image. Try a different file.",
         )
 
     target = _resolve_target(folder)

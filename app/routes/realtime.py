@@ -4,14 +4,18 @@ import jwt
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
 
+from app.core.database import SessionLocal
 from app.core.security import decode_access_token
+from app.models import User
 from app.services.realtime_service import realtime_manager
 
 router = APIRouter(tags=["realtime"])
 
 
 def _resolve_websocket_user_id(token: str | None) -> uuid.UUID | None:
-    """Validate the JWT only — avoid a DB round-trip per websocket connect."""
+    """Validate the JWT signature/purpose. One DB lookup happens separately,
+    once per connect (not per message), to catch a token that's since been
+    revoked — see _is_token_revoked below."""
     if not token:
         return None
 
@@ -26,9 +30,29 @@ def _resolve_websocket_user_id(token: str | None) -> uuid.UUID | None:
         if subject is None:
             return None
 
-        return uuid.UUID(subject)
+        user_id = uuid.UUID(subject)
     except (jwt.InvalidTokenError, ValueError):
         return None
+
+    if _is_token_revoked(user_id, payload):
+        return None
+    return user_id
+
+
+def _is_token_revoked(user_id: uuid.UUID, payload: dict) -> bool:
+    """Mirrors get_current_user's is_active/token_version check — a blocked
+    account or a password reset (which bumps token_version) must not keep
+    receiving realtime events on an old token, even though this connection
+    can't call any mutating API."""
+    db = SessionLocal()
+    try:
+        user = db.get(User, user_id)
+        if user is None or not user.is_active:
+            return True
+        token_version = int(payload.get("tv") or 0)
+        return int(getattr(user, "token_version", 0) or 0) != token_version
+    finally:
+        db.close()
 
 
 @router.websocket("/ws")
