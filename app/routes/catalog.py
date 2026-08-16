@@ -75,6 +75,7 @@ def get_products(
     category: str | None = Query(default=None, max_length=120),
     subcategory: str | None = Query(default=None, max_length=120),
     store_id: str | None = Query(default=None, max_length=100),
+    max_age_days: int | None = Query(default=None, ge=1, le=90),
     limit: int | None = Query(default=None, ge=1, le=100),
     offset: int | None = Query(default=None, ge=0),
     db: Session = Depends(get_db),
@@ -87,6 +88,7 @@ def get_products(
         category=category,
         subcategory=subcategory,
         store_id=store_id,
+        max_age_days=max_age_days,
         limit=limit,
         offset=offset,
     )
@@ -106,6 +108,7 @@ def get_products(
         category=category,
         subcategory=subcategory,
         store_id=store_id,
+        max_age_days=max_age_days,
         limit=limit,
         offset=offset,
     )

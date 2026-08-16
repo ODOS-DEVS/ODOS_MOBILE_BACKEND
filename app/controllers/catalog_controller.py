@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import TypedDict
 
 from sqlalchemy import Select, false, func, or_, select
@@ -135,6 +135,7 @@ def list_catalog_products(
     category: str | None = None,
     subcategory: str | None = None,
     store_id: str | None = None,
+    max_age_days: int | None = None,
     limit: int | None = None,
     offset: int | None = None,
 ) -> list[Product]:
@@ -226,8 +227,14 @@ def list_catalog_products(
     if store_id:
         statement = statement.where(Product.store_id == store_id)
 
+    if max_age_days is not None:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+        statement = statement.where(Product.created_at >= cutoff)
+
     if placement == "flash-sale":
         statement = statement.order_by(Product.sort_order.asc(), Product.updated_at.desc())
+    elif max_age_days is not None:
+        statement = statement.order_by(Product.created_at.desc())
     else:
         statement = statement.order_by(Product.sort_order.asc(), Product.title.asc())
 

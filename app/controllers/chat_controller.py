@@ -2,7 +2,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Literal
 
-from fastapi import HTTPException, status
+from fastapi import HTTPException, UploadFile, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
@@ -19,7 +19,6 @@ from app.models import (
 )
 from app.schemas.chat import (
     ChatCounterpartRead,
-    ChatMessageCreate,
     ChatMessageRead,
     ChatProductSummaryRead,
     ChatStoreSummaryRead,
@@ -28,6 +27,7 @@ from app.schemas.chat import (
     ChatThreadEnsurePayload,
     ChatThreadRead,
 )
+from app.services.media_service import save_chat_attachment_upload
 from app.controllers.notification_controller import create_notification_event
 from app.services.push_service import (
     build_push_data,
@@ -141,6 +141,16 @@ def _serialize_thread(
     )
 
 
+def _attachment_preview_text(attachment_type: str | None, attachment_name: str | None) -> str:
+    if attachment_type == "image":
+        return "📷 Photo"
+    if attachment_type == "audio":
+        return "🎤 Voice message"
+    if attachment_type == "file":
+        return f"📎 {attachment_name}" if attachment_name else "📎 File"
+    return ""
+
+
 def _serialize_message(message: ChatMessage, thread: ChatThread) -> ChatMessageRead:
     if thread.thread_type == ChatThreadType.SUPPORT:
         if message.sender_user_id == thread.vendor_user_id:
@@ -156,6 +166,10 @@ def _serialize_message(message: ChatMessage, thread: ChatThread) -> ChatMessageR
         recipient_user_id=message.recipient_user_id,
         sender_role=sender_role,
         body=message.body,
+        attachment_url=message.attachment_url,
+        attachment_type=message.attachment_type,
+        attachment_name=message.attachment_name,
+        attachment_duration_seconds=message.attachment_duration_seconds,
         is_read=message.is_read,
         read_at=message.read_at,
         created_at=message.created_at,
@@ -562,7 +576,9 @@ def _notify_vendor_shopper_message(
         return
 
     customer_name = (customer.full_name or customer.email or "A shopper").strip()
-    preview = (message.body or "").strip()
+    preview = (message.body or "").strip() or _attachment_preview_text(
+        message.attachment_type, message.attachment_name
+    )
     if len(preview) > 140:
         preview = f"{preview[:137]}..."
 
@@ -611,7 +627,9 @@ def _notify_customer_store_reply(
         return
 
     vendor_name = (vendor.full_name or vendor.email or "The store").strip()
-    preview = (message.body or "").strip()
+    preview = (message.body or "").strip() or _attachment_preview_text(
+        message.attachment_type, message.attachment_name
+    )
     if len(preview) > 140:
         preview = f"{preview[:137]}..."
 
@@ -648,12 +666,30 @@ def _notify_customer_store_reply(
     db.commit()
 
 
-def post_chat_message(
+async def post_chat_message(
     db: Session,
     user: User,
     thread_id: str,
-    payload: ChatMessageCreate,
+    *,
+    body: str | None,
+    attachment: UploadFile | None,
+    attachment_duration_seconds: int | None,
 ) -> ChatMessageRead:
+    cleaned_body = (body or "").strip()
+    if not cleaned_body and not attachment:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Add a message or an attachment before sending.",
+        )
+
+    attachment_url: str | None = None
+    attachment_type: str | None = None
+    attachment_name: str | None = None
+    if attachment is not None:
+        attachment_url, attachment_type, attachment_name = await save_chat_attachment_upload(
+            attachment
+        )
+
     thread = _load_thread(db, thread_id)
     if not thread:
         raise HTTPException(
@@ -682,12 +718,18 @@ def post_chat_message(
         thread_id=thread.id,
         sender_user_id=user.id,
         recipient_user_id=recipient_user_id,
-        body=payload.body,
+        body=cleaned_body,
+        attachment_url=attachment_url,
+        attachment_type=attachment_type,
+        attachment_name=attachment_name,
+        attachment_duration_seconds=attachment_duration_seconds,
     )
     db.add(message)
 
     now = datetime.now(UTC)
-    thread.last_message_text = payload.body
+    thread.last_message_text = cleaned_body or _attachment_preview_text(
+        attachment_type, attachment_name
+    )
     thread.last_message_at = now
     if thread.thread_type == ChatThreadType.SUPPORT:
         if user.role == UserRole.ADMIN:

@@ -1,6 +1,6 @@
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Form, Query, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.controllers.chat_controller import (
@@ -15,7 +15,6 @@ from app.core.auth import get_current_user
 from app.core.database import get_db
 from app.models import User
 from app.schemas.chat import (
-    ChatMessageCreate,
     ChatMessageRead,
     SupportChatStatusUpdate,
     SupportChatThreadEnsurePayload,
@@ -76,13 +75,22 @@ def get_thread_messages(
     response_model=ChatMessageRead,
     status_code=status.HTTP_201_CREATED,
 )
-def create_thread_message(
+async def create_thread_message(
     thread_id: str,
-    payload: ChatMessageCreate,
     current_user: Annotated[User, Depends(get_current_user)],
     db: Session = Depends(get_db),
+    body: Annotated[str | None, Form(max_length=2000)] = None,
+    attachment_duration_seconds: Annotated[int | None, Form(ge=0, le=3600)] = None,
+    attachment: UploadFile | None = None,
 ):
-    return post_chat_message(db, current_user, thread_id, payload)
+    return await post_chat_message(
+        db,
+        current_user,
+        thread_id,
+        body=body,
+        attachment=attachment,
+        attachment_duration_seconds=attachment_duration_seconds,
+    )
 
 
 @router.patch("/threads/{thread_id}/support-status", response_model=ChatThreadRead)

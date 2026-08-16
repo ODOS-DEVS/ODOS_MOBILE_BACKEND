@@ -160,6 +160,7 @@ def build_products_cache_key(
     category: str | None,
     subcategory: str | None,
     store_id: str | None,
+    max_age_days: int | None = None,
     limit: int | None,
     offset: int | None = None,
 ) -> str:
@@ -172,6 +173,7 @@ def build_products_cache_key(
         ("category", category),
         ("subcategory", subcategory),
         ("store_id", store_id),
+        ("max_age_days", max_age_days),
         ("limit", limit),
         ("offset", offset),
     ):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from html import escape
+import re
+from html import escape, unescape
 from textwrap import dedent
 
 import requests
@@ -8,6 +9,15 @@ import requests
 from app.core.config import settings
 
 BREVO_TRANSACT_ENDPOINT = "https://api.brevo.com/v3/smtp/email"
+
+_HTML_TAG_PATTERN = re.compile(r"<[^>]+>")
+
+
+def _strip_html_to_text(fragment: str) -> str:
+    """Reduce a caller-built HTML fragment (e.g. a heading with <strong>
+    around already-escaped values) to plain text for the text/plain part
+    of an email."""
+    return unescape(_HTML_TAG_PATTERN.sub("", fragment))
 
 
 def render_email_verification_email(
@@ -518,8 +528,12 @@ def _render_admin_alert_email(
 ) -> tuple[str, str]:
     """Shared shell for admin-facing "this needs your attention" alerts —
     vendor applications, withdrawal requests, voucher review, etc. Returns
-    (html_content, text_content); callers own their own subject line."""
-    safe_heading = escape(heading)
+    (html_content, text_content); callers own their own subject line.
+
+    `heading` is caller-built HTML (e.g. with <strong> around already-escaped
+    values), not a plain string — it must NOT be escaped again here, or the
+    emphasis tags render as literal text instead of bold."""
+    safe_heading = heading
     safe_eyebrow = escape(eyebrow)
     rows_html = "".join(
         f'<div style="margin-top:8px;"><strong>{escape(label)}:</strong> {escape(value)}</div>'
@@ -568,7 +582,7 @@ def _render_admin_alert_email(
         </html>
         """
     ).strip()
-    text_lines = [heading, "", summary_title + ":"]
+    text_lines = [_strip_html_to_text(heading), "", summary_title + ":"]
     text_lines.extend(f"{label}: {value}" for label, value in summary_rows)
     if cta_url:
         text_lines.extend(["", f"{cta_label}: {cta_url}"])
@@ -688,6 +702,127 @@ def send_admin_delivery_problem_email(
         cta_label="Open Delivery Ops",
         cta_url=(
             f"{admin_panel_url.rstrip('/')}/orders/full/{order_id}" if admin_panel_url else None
+        ),
+    )
+    send_transactional_email(
+        to_email=to_email,
+        to_name=to_name,
+        subject=subject,
+        html_content=html_content,
+        text_content=text_content,
+    )
+
+
+def send_admin_return_request_email(
+    *,
+    to_email: str,
+    to_name: str | None,
+    customer_name: str,
+    order_number: str,
+    item_title: str,
+    request_type: str,
+    quantity: int,
+    submitted_at_label: str,
+    return_request_id: str,
+    admin_panel_url: str,
+) -> None:
+    subject = f"Return request: order #{order_number}"
+    html_content, text_content = _render_admin_alert_email(
+        eyebrow="Return request",
+        heading=(
+            f"<strong>{escape(customer_name)}</strong> requested a {escape(request_type)} on order "
+            f"<strong>#{escape(order_number)}</strong> — it needs your review."
+        ),
+        summary_title="Request summary",
+        summary_rows=[
+            ("Order", f"#{order_number}"),
+            ("Item", item_title),
+            ("Type", request_type.capitalize()),
+            ("Quantity", str(quantity)),
+            ("Customer", customer_name),
+            ("Submitted", submitted_at_label),
+        ],
+        cta_label="Review request",
+        cta_url=(
+            f"{admin_panel_url.rstrip('/')}/returns/full/{return_request_id}"
+            if admin_panel_url
+            else None
+        ),
+    )
+    send_transactional_email(
+        to_email=to_email,
+        to_name=to_name,
+        subject=subject,
+        html_content=html_content,
+        text_content=text_content,
+    )
+
+
+def send_admin_flash_sale_nomination_email(
+    *,
+    to_email: str,
+    to_name: str | None,
+    store_name: str,
+    product_title: str,
+    submitted_at_label: str,
+    admin_panel_url: str,
+) -> None:
+    subject = f"Flash sale nomination: {product_title}"
+    html_content, text_content = _render_admin_alert_email(
+        eyebrow="Flash sale nomination",
+        heading=(
+            f"<strong>{escape(store_name)}</strong> nominated <strong>{escape(product_title)}</strong> "
+            "for a flash sale."
+        ),
+        summary_title="Nomination summary",
+        summary_rows=[
+            ("Store", store_name),
+            ("Product", product_title),
+            ("Submitted", submitted_at_label),
+        ],
+        cta_label="Review nominations",
+        cta_url=(
+            f"{admin_panel_url.rstrip('/')}/flash-sale-events/full" if admin_panel_url else None
+        ),
+    )
+    send_transactional_email(
+        to_email=to_email,
+        to_name=to_name,
+        subject=subject,
+        html_content=html_content,
+        text_content=text_content,
+    )
+
+
+def send_admin_campaign_opt_in_email(
+    *,
+    to_email: str,
+    to_name: str | None,
+    vendor_name: str,
+    campaign_title: str,
+    product_title: str,
+    submitted_at_label: str,
+    admin_panel_url: str,
+) -> None:
+    subject = f"Campaign opt-in: {campaign_title}"
+    html_content, text_content = _render_admin_alert_email(
+        eyebrow="Campaign opt-in",
+        heading=(
+            f"<strong>{escape(vendor_name)}</strong> submitted <strong>{escape(product_title)}</strong> "
+            f"for the <strong>{escape(campaign_title)}</strong> campaign."
+        ),
+        summary_title="Opt-in summary",
+        summary_rows=[
+            ("Campaign", campaign_title),
+            ("Product", product_title),
+            ("Vendor", vendor_name),
+            ("Submitted", submitted_at_label),
+        ],
+        cta_label="Review campaign",
+        cta_url=(
+            f"{admin_panel_url.rstrip('/')}/merchandising-campaigns/full"
+            if admin_panel_url
+            else None
         ),
     )
     send_transactional_email(

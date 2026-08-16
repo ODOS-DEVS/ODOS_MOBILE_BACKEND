@@ -31,6 +31,7 @@ from app.models import (
 )
 from app.services.email_service import send_admin_withdrawal_request_email
 from app.services.push_service import vendor_wants_payout_notify
+from app.services.sms_service import notify_admins_by_sms
 
 logger = logging.getLogger(__name__)
 from app.schemas.admin import (
@@ -632,6 +633,15 @@ def _dispatch_admin_withdrawal_alert(
                 "Failed to send admin withdrawal alert to %s",
                 admin.email,
             )
+
+    notify_admins_by_sms(
+        db,
+        feature="payouts",
+        message=(
+            f"ODOS: {vendor.full_name or vendor.email} ({store_title}) requested a "
+            f"withdrawal of {currency} {amount:.2f}. Review in the admin panel."
+        ),
+    )
 
 
 def create_vendor_withdrawal_request(

@@ -2,10 +2,30 @@ from __future__ import annotations
 
 import logging
 
+from sqlalchemy.orm import Session
+
+from app.core.admin_permissions import list_admins_with_feature
 from app.core.config import settings
 from app.services.arkesel_service import ArkeselSmsError, generate_otp, send_sms
 
 logger = logging.getLogger(__name__)
+
+
+def notify_admins_by_sms(db: Session, *, feature: str, message: str) -> None:
+    """Text every admin whose permission band covers `feature` — the SMS
+    counterpart to the admin alert emails, for requests that need approval
+    (returns, withdrawals, vendor applications, voucher/campaign review)."""
+    for admin in list_admins_with_feature(db, feature):
+        if not admin.phone_number:
+            continue
+        try:
+            send_sms(phone_number=admin.phone_number, message=message)
+        except ArkeselSmsError:
+            logger.exception(
+                "Failed to send admin alert SMS to %s for feature=%s",
+                admin.phone_number,
+                feature,
+            )
 
 
 def _format_ghs(amount: float) -> str:

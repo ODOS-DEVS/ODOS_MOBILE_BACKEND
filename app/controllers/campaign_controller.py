@@ -12,16 +12,57 @@ from sqlalchemy.orm import Session
 
 from app.controllers.catalog_controller import serialize_catalog_products
 from app.controllers.notification_controller import create_notification_event
+from app.core.admin_permissions import list_admins_with_feature
 from app.core.cache import cache_delete_matching
+from app.core.config import settings
 from app.models import Order, OrderItem, Product, User
 from app.models.catalog import (
     MerchandisingCampaign,
     MerchandisingCampaignOptIn,
     MerchandisingCampaignProduct,
 )
+from app.services.email_service import send_admin_campaign_opt_in_email
 from app.services.push_service import build_push_data, send_expo_push_notification
+from app.services.sms_service import notify_admins_by_sms
 
 logger = logging.getLogger(__name__)
+
+
+def _dispatch_admin_campaign_opt_in_alert(
+    db: Session,
+    *,
+    vendor: User,
+    campaign_title: str,
+    product_title: str,
+) -> None:
+    admins = list_admins_with_feature(db, "promotions")
+    for admin in admins:
+        if not admin.email:
+            continue
+        try:
+            send_admin_campaign_opt_in_email(
+                to_email=admin.email,
+                to_name=admin.full_name,
+                vendor_name=vendor.full_name or vendor.email,
+                campaign_title=campaign_title,
+                product_title=product_title,
+                submitted_at_label=datetime.now(timezone.utc).strftime("%d %b %Y, %I:%M %p UTC"),
+                admin_panel_url=settings.admin_panel_url,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to send admin campaign-opt-in alert to %s",
+                admin.email,
+            )
+
+    notify_admins_by_sms(
+        db,
+        feature="promotions",
+        message=(
+            f"ODOS: {vendor.full_name or vendor.email} submitted {product_title} for the "
+            f"'{campaign_title}' campaign. Review in the admin panel."
+        ),
+    )
 from app.schemas.admin import (
     AdminMerchandisingCampaignOptInRead,
     AdminMerchandisingCampaignRead,
@@ -725,6 +766,13 @@ def create_vendor_campaign_opt_in(
     db.add(row)
     db.commit()
     db.refresh(row)
+
+    _dispatch_admin_campaign_opt_in_alert(
+        db,
+        vendor=vendor_user,
+        campaign_title=campaign.title,
+        product_title=product.title,
+    )
 
     return AdminMerchandisingCampaignOptInRead(
         id=row.id,

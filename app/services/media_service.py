@@ -39,6 +39,26 @@ def _matches_declared_image_type(content_type: str, file_bytes: bytes) -> bool:
 # client-side convenience only. Without this, a direct API call (bypassing the app)
 # could upload an arbitrarily large file with nothing to stop it.
 MAX_IMAGE_UPLOAD_BYTES = 10 * 1024 * 1024
+MAX_CHAT_AUDIO_BYTES = 8 * 1024 * 1024
+MAX_CHAT_DOCUMENT_BYTES = 15 * 1024 * 1024
+
+ALLOWED_CHAT_AUDIO_CONTENT_TYPES = {
+    "audio/m4a",
+    "audio/mp4",
+    "audio/x-m4a",
+    "audio/aac",
+    "audio/wav",
+    "audio/webm",
+    "audio/mpeg",
+}
+ALLOWED_CHAT_DOCUMENT_CONTENT_TYPES = {
+    "application/pdf": (b"%PDF",),
+    "application/msword": (),
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": (),
+    "application/vnd.ms-excel": (),
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": (),
+    "text/plain": (),
+}
 
 UPLOAD_TARGETS = {
     "products": {"asset_folder": "odos/products"},
@@ -52,6 +72,7 @@ UPLOAD_TARGETS = {
     "vendors/applications/logo": {"asset_folder": "odos/vendors/applications/logo"},
     "vendors/applications/banner": {"asset_folder": "odos/vendors/applications/banner"},
     "vendors/applications/shop": {"asset_folder": "odos/vendors/applications/shop"},
+    "chat/attachments": {"asset_folder": "odos/chat/attachments"},
 }
 
 
@@ -222,6 +243,116 @@ async def save_image_uploads(uploads: list[UploadFile] | None, *, folder: str) -
     for upload in uploads:
         image_urls.append(await save_image_upload(upload, folder=folder))
     return image_urls
+
+
+async def _upload_raw_to_cloudinary(
+    file_bytes: bytes,
+    filename: str,
+    content_type: str,
+    *,
+    resource_type: str,
+    folder: str,
+) -> str:
+    _require_cloudinary_configuration()
+
+    target = _resolve_target(folder)
+    timestamp = str(int(time.time()))
+    upload_payload = {
+        "timestamp": timestamp,
+        "folder": target["asset_folder"],
+    }
+
+    response = requests.post(
+        f"https://api.cloudinary.com/v1_1/{settings.cloudinary_cloud_name.strip()}/{resource_type}/upload",
+        data={
+            **upload_payload,
+            "api_key": settings.cloudinary_api_key,
+            "signature": _sign_cloudinary_payload(upload_payload),
+        },
+        files={"file": (filename, file_bytes, content_type)},
+        timeout=30,
+    )
+
+    if not response.ok:
+        raise _cloudinary_request_error(response)
+
+    payload = response.json()
+    secure_url = payload.get("secure_url")
+    if not secure_url:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Cloudinary did not return a secure file URL.",
+        )
+    return str(secure_url)
+
+
+async def save_chat_attachment_upload(upload: UploadFile) -> tuple[str, str, str | None]:
+    """Upload a chat attachment (image, voice note, or document) and
+    classify it. Returns (secure_url, attachment_type, original_filename).
+
+    Images are routed through the already-audited image path (magic-byte
+    verified against the declared type). Audio and documents get a
+    declared-content-type allowlist, a size cap, and — for documents where a
+    signature is well known (PDF) — a magic-byte check too."""
+    content_type = (upload.content_type or "").lower()
+    folder = "chat/attachments"
+
+    if content_type in ALLOWED_IMAGE_CONTENT_TYPES:
+        url = await save_image_upload(upload, folder=folder)
+        return url, "image", None
+
+    if content_type in ALLOWED_CHAT_AUDIO_CONTENT_TYPES:
+        file_bytes = await upload.read()
+        if not file_bytes:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="That voice note was empty.",
+            )
+        if len(file_bytes) > MAX_CHAT_AUDIO_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Voice notes must be {MAX_CHAT_AUDIO_BYTES // (1024 * 1024)}MB or smaller.",
+            )
+        url = await _upload_raw_to_cloudinary(
+            file_bytes,
+            upload.filename or "voice-note.m4a",
+            content_type,
+            resource_type="video",
+            folder=folder,
+        )
+        return url, "audio", None
+
+    if content_type in ALLOWED_CHAT_DOCUMENT_CONTENT_TYPES:
+        signatures = ALLOWED_CHAT_DOCUMENT_CONTENT_TYPES[content_type]
+        file_bytes = await upload.read()
+        if not file_bytes:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="That file was empty.",
+            )
+        if len(file_bytes) > MAX_CHAT_DOCUMENT_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Files must be {MAX_CHAT_DOCUMENT_BYTES // (1024 * 1024)}MB or smaller.",
+            )
+        if signatures and not any(file_bytes.startswith(sig) for sig in signatures):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="That file doesn't look valid. Try a different file.",
+            )
+        url = await _upload_raw_to_cloudinary(
+            file_bytes,
+            upload.filename or "file",
+            content_type,
+            resource_type="raw",
+            folder=folder,
+        )
+        return url, "file", upload.filename
+
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="That file type isn't supported yet.",
+    )
 
 
 def normalize_remote_avatar_url(url: str | None) -> str | None:

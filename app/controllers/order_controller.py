@@ -49,7 +49,11 @@ from app.services.delivery_lifecycle_service import (
     mark_rescheduled,
     report_delivery_problem,
 )
-from app.services.email_service import send_admin_delivery_problem_email
+from app.services.email_service import (
+    send_admin_delivery_problem_email,
+    send_admin_return_request_email,
+)
+from app.services.sms_service import notify_admins_by_sms
 from app.services.finance_math import round_money
 from app.services.order_timeline_service import record_order_status_event
 from app.services.realtime_service import realtime_manager
@@ -908,6 +912,13 @@ def create_return_request(
     )
     db.commit()
     db.refresh(refreshed_request)
+    _dispatch_admin_return_request_alert(
+        db,
+        user=user,
+        order=order,
+        order_item=order_item,
+        return_request=refreshed_request,
+    )
     _broadcast_order_realtime(db, refreshed_request.order)
     return _serialize_return_request(refreshed_request)
 
@@ -1013,6 +1024,57 @@ def _dispatch_admin_delivery_problem_alert(db: Session, *, order: Order, reason:
             logger.exception(
                 "Failed to send admin delivery-problem alert to %s for order %s", admin.email, order.id
             )
+
+    notify_admins_by_sms(
+        db,
+        feature="delivery",
+        message=(
+            f"ODOS: {order.address_full_name} reported a delivery problem on order "
+            f"#{order.order_number}. Settlement is on hold until resolved."
+        ),
+    )
+
+
+def _dispatch_admin_return_request_alert(
+    db: Session,
+    *,
+    user: User,
+    order: Order,
+    order_item: OrderItem,
+    return_request: ReturnRequest,
+) -> None:
+    admins = list_admins_with_feature(db, "returns")
+    for admin in admins:
+        if not admin.email:
+            continue
+        try:
+            send_admin_return_request_email(
+                to_email=admin.email,
+                to_name=admin.full_name,
+                customer_name=user.full_name or user.email,
+                order_number=order.order_number,
+                item_title=order_item.title,
+                request_type=return_request.request_type,
+                quantity=return_request.quantity,
+                submitted_at_label=datetime.now(timezone.utc).strftime("%d %b %Y, %I:%M %p UTC"),
+                return_request_id=str(return_request.id),
+                admin_panel_url=settings.admin_panel_url,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to send admin return-request alert to %s for order %s",
+                admin.email,
+                order.id,
+            )
+
+    notify_admins_by_sms(
+        db,
+        feature="returns",
+        message=(
+            f"ODOS: {user.full_name or user.email} requested a {return_request.request_type} "
+            f"for order #{order.order_number} ({order_item.title}). Review in the admin panel."
+        ),
+    )
 
 
 def report_order_delivery_problem(

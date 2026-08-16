@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.admin_pagination import paginate_scalars
+from app.core.admin_permissions import list_admins_with_feature
+from app.core.config import settings
 from app.schemas.pagination import AdminPageRead
 from app.controllers.admin_controller import broadcast_catalog_flash_sale_event_change
 from app.controllers.notification_controller import create_notification_event
@@ -16,7 +20,48 @@ from app.controllers.vendor_controller import get_vendor_store, require_vendor_a
 from app.models import FlashSaleEvent, FlashSaleEventProduct, FlashSaleNomination, Product, User
 from app.schemas.admin import AdminFlashSaleNominationRead, AdminFlashSaleNominationReview
 from app.schemas.vendor import VendorFlashSaleNominationCreate, VendorFlashSaleNominationRead
+from app.services.email_service import send_admin_flash_sale_nomination_email
 from app.services.push_service import build_push_data, send_expo_push_notification
+from app.services.sms_service import notify_admins_by_sms
+
+logger = logging.getLogger(__name__)
+
+
+def _dispatch_admin_flash_sale_nomination_alert(
+    db: Session,
+    *,
+    vendor: User,
+    store_title: str,
+    product_title: str,
+    nomination: FlashSaleNomination,
+) -> None:
+    admins = list_admins_with_feature(db, "promotions")
+    for admin in admins:
+        if not admin.email:
+            continue
+        try:
+            send_admin_flash_sale_nomination_email(
+                to_email=admin.email,
+                to_name=admin.full_name,
+                store_name=store_title,
+                product_title=product_title,
+                submitted_at_label=datetime.now(timezone.utc).strftime("%d %b %Y, %I:%M %p UTC"),
+                admin_panel_url=settings.admin_panel_url,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to send admin flash-sale-nomination alert to %s",
+                admin.email,
+            )
+
+    notify_admins_by_sms(
+        db,
+        feature="promotions",
+        message=(
+            f"ODOS: {store_title} nominated {product_title} for a flash sale. "
+            "Review in the admin panel."
+        ),
+    )
 
 
 def _get_flash_allocation(
@@ -172,6 +217,13 @@ def create_vendor_flash_sale_nomination(
     db.add(nomination)
     db.commit()
     db.refresh(nomination)
+    _dispatch_admin_flash_sale_nomination_alert(
+        db,
+        vendor=user,
+        store_title=store.title,
+        product_title=product.title,
+        nomination=nomination,
+    )
     return _serialize_vendor_nomination(db, nomination)
 
 

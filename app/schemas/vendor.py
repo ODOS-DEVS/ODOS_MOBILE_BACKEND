@@ -586,6 +586,8 @@ class VendorOrderItemRead(BaseModel):
     quantity: int
     unit_price: float
     image_url: str | None = None
+    selected_color: str | None = None
+    selected_size: str | None = None
 
 
 class VendorOrderRead(BaseModel):

@@ -2,7 +2,16 @@ import uuid
 from datetime import datetime
 import enum
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, String, UniqueConstraint, func
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Integer,
+    String,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -159,6 +168,10 @@ class ChatMessage(Base):
         index=True,
     )
     body: Mapped[str] = mapped_column(String(2000), nullable=False)
+    attachment_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    attachment_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    attachment_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    attachment_duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     is_read: Mapped[bool] = mapped_column(
         Boolean,
         default=False,

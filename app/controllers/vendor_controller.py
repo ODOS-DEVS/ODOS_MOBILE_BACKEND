@@ -79,6 +79,7 @@ from app.services.email_service import (
 )
 from app.services.media_service import remove_media_file, save_image_upload, save_image_uploads
 from app.services.realtime_service import realtime_manager
+from app.services.sms_service import notify_admins_by_sms
 from app.services.delivery_service import (
     get_delivery_config,
     tracking_eta_for_vendor_status,
@@ -251,6 +252,15 @@ def _dispatch_admin_vendor_application_alert(
                 admin.email,
             )
 
+    notify_admins_by_sms(
+        db,
+        feature="vendors",
+        message=(
+            f"ODOS: {user.full_name or user.email} submitted a vendor application for "
+            f"{application.store_name}. Review in the admin panel."
+        ),
+    )
+
 
 def _dispatch_admin_voucher_review_alert(
     db: Session,
@@ -279,6 +289,15 @@ def _dispatch_admin_voucher_review_alert(
                 "Failed to send admin voucher-review alert to %s",
                 admin.email,
             )
+
+    notify_admins_by_sms(
+        db,
+        feature="promotions",
+        message=(
+            f"ODOS: {store_title} created voucher {voucher.code} that needs approval "
+            "before it can go live. Review in the admin panel."
+        ),
+    )
 
 
 def _dispatch_vendor_application_approved_email(
@@ -577,6 +596,8 @@ def _serialize_vendor_order(db: Session, user: User, order: Order) -> VendorOrde
                 quantity=item.quantity,
                 unit_price=item.unit_price,
                 image_url=item.image_url,
+                selected_color=item.selected_color,
+                selected_size=item.selected_size,
             )
             for item in matching_items
         ],

@@ -36,16 +36,6 @@ class SupportChatStatusUpdate(BaseModel):
     status: str = Field(pattern="^(waiting_on_admin|waiting_on_customer|resolved)$")
 
 
-class ChatMessageCreate(BaseModel):
-    body: str = Field(min_length=1, max_length=2000)
-
-    @field_validator("body", mode="before")
-    @classmethod
-    def strip_body(cls, value: str) -> str:
-        cleaned = value.strip()
-        return cleaned
-
-
 class ChatStoreSummaryRead(BaseModel):
     id: str
     title: str
@@ -96,6 +86,10 @@ class ChatMessageRead(BaseModel):
     recipient_user_id: uuid.UUID
     sender_role: str
     body: str
+    attachment_url: str | None = None
+    attachment_type: str | None = None
+    attachment_name: str | None = None
+    attachment_duration_seconds: int | None = None
     is_read: bool
     read_at: datetime | None = None
     created_at: datetime
