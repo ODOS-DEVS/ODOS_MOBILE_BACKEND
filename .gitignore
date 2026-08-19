@@ -17,6 +17,9 @@ ENV/
 # Local uploads (use Cloudinary in production)
 uploads/
 
+# Database dump files (contain full production data — never commit)
+*.dump
+
 # Test, coverage, and type-check caches
 .pytest_cache/
 .coverage
