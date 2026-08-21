@@ -20,8 +20,10 @@ from app.routes import (
     cart,
     catalog,
     chat,
+    customer_segmentation,
     customer_wallet,
     delivery,
+    email_marketing,
     health,
     home_feed,
     loyalty,
@@ -37,6 +39,7 @@ from app.routes import (
     vendor,
     vendor_analytics,
     vendor_campaigns,
+    vendor_inventory,
     wishlist,
 )
 from app.core.redis_client import close_redis, get_redis
@@ -199,6 +202,9 @@ app.include_router(vouchers.router, prefix="/api")
 app.include_router(vendor.router, prefix="/api")
 app.include_router(vendor_analytics.router, prefix="/api")
 app.include_router(vendor_campaigns.router, prefix="/api")
+app.include_router(vendor_inventory.router, prefix="/api")
+app.include_router(email_marketing.router, prefix="/api")
+app.include_router(customer_segmentation.router, prefix="/api")
 app.include_router(admin.router, prefix="/api")
 app.include_router(promo_analytics.router, prefix="/api")
 app.include_router(wishlist.router, prefix="/api")
