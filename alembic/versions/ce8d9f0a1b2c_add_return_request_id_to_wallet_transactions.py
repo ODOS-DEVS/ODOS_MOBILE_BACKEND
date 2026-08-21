@@ -17,12 +17,25 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
-def upgrade() -> None:
-    op.add_column(
-        "customer_wallet_transactions",
-        sa.Column("return_request_id", sa.UUID(), nullable=True),
+def _has_return_request_id() -> bool:
+    inspector = sa.inspect(op.get_bind())
+    return any(
+        col["name"] == "return_request_id"
+        for col in inspector.get_columns("customer_wallet_transactions")
     )
 
 
+def upgrade() -> None:
+    # 0a1b838e2b4a adds this column upstream. Databases stamped past that
+    # revision without having run it still need the column, so add it only
+    # when absent rather than assuming either history.
+    if not _has_return_request_id():
+        op.add_column(
+            "customer_wallet_transactions",
+            sa.Column("return_request_id", sa.UUID(), nullable=True),
+        )
+
+
 def downgrade() -> None:
-    op.drop_column("customer_wallet_transactions", "return_request_id")
+    if _has_return_request_id():
+        op.drop_column("customer_wallet_transactions", "return_request_id")
