@@ -23,6 +23,7 @@ from app.routes import (
     customer_wallet,
     delivery,
     health,
+    loyalty,
     notifications,
     orders,
     payment_methods,
@@ -188,6 +189,7 @@ app.include_router(notifications.router, prefix="/api")
 app.include_router(orders.router, prefix="/api")
 app.include_router(payments.router, prefix="/api")
 app.include_router(payment_methods.router, prefix="/api")
+app.include_router(loyalty.router, prefix="/api")
 app.include_router(customer_wallet.router, prefix="/api")
 app.include_router(realtime.router, prefix="/api")
 app.include_router(reviews.router, prefix="/api")

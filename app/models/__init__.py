@@ -33,6 +33,7 @@ from app.models.payment import (
 )
 from app.models.promo_analytics import PromoAnalyticsEvent
 from app.models.voucher import Voucher, VoucherAssignment, VoucherRedemption
+from app.models.loyalty import LoyaltyAccount, LoyaltyTransaction, LoyaltyTierBenefit
 from app.models.wallet import (
     CustomerWallet,
     CustomerWalletTopUp,
@@ -113,5 +114,8 @@ __all__ = [
     "VoucherAssignment",
     "Voucher",
     "VoucherRedemption",
+    "LoyaltyAccount",
+    "LoyaltyTransaction",
+    "LoyaltyTierBenefit",
     "WishlistItem",
 ]
