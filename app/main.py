@@ -26,11 +26,14 @@ from app.routes import (
     notifications,
     orders,
     payments,
+    promo_analytics,
     realtime,
     recommendations,
     reviews,
     vouchers,
     vendor,
+    vendor_analytics,
+    vendor_campaigns,
     wishlist,
 )
 from app.core.redis_client import close_redis, get_redis
@@ -184,7 +187,10 @@ app.include_router(realtime.router, prefix="/api")
 app.include_router(reviews.router, prefix="/api")
 app.include_router(vouchers.router, prefix="/api")
 app.include_router(vendor.router, prefix="/api")
+app.include_router(vendor_analytics.router, prefix="/api")
+app.include_router(vendor_campaigns.router, prefix="/api")
 app.include_router(admin.router, prefix="/api")
+app.include_router(promo_analytics.router, prefix="/api")
 app.include_router(wishlist.router, prefix="/api")
 
 app.mount("/uploads", StaticFiles(directory=uploads_directory), name="uploads")

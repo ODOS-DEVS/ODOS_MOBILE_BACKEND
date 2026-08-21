@@ -44,12 +44,12 @@ def _active_deal_products(db: Session, *, limit: int = 24) -> list:
     return serialize_catalog_products(db, deal_products)
 
 
-def get_deals_hub(db: Session) -> DealsHubRead:
+def get_deals_hub(db: Session, user_id: str | None = None) -> DealsHubRead:
     banners = list_promo_banners(db, placement="deals")
     flash_events = list_active_flash_sale_events(db)
-    promotions = list_public_promotions(db)
+    promotions = list_public_promotions(db, user_id=user_id)
     deal_products = _active_deal_products(db)
-    campaigns = list_public_campaigns(db, limit=24)
+    campaigns = list_public_campaigns(db, limit=24, user_id=user_id)
 
     sections: list[DealsHubSectionRead] = []
 

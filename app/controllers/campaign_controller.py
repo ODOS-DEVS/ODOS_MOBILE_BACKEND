@@ -191,8 +191,9 @@ def list_public_campaigns(
     *,
     featured_only: bool = False,
     limit: int = 40,
+    user_id: str | None = None,
 ) -> list[MerchandisingCampaignRead]:
-    campaigns = list_live_campaigns(db, featured_only=featured_only, limit=limit)
+    campaigns = list_live_campaigns(db, featured_only=featured_only, limit=limit, user_id=user_id)
     return [_serialize_public_campaign(db, campaign) for campaign in campaigns]
 
 

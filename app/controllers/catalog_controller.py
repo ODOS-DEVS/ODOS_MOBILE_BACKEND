@@ -525,3 +525,51 @@ def list_flash_sale_event_products(db: Session, slug: str) -> list[ProductRead]:
     product_map = {product.id: product for product in products}
     ordered = [product_map[product_id] for product_id in product_ids if product_id in product_map]
     return serialize_catalog_products(db, ordered)
+
+
+async def search_products(
+    db: Session,
+    query: str,
+    user_id: str | None = None,
+    limit: int = 30,
+) -> dict:
+    """Search products using enhanced search with multiple ranking signals."""
+    from app.services.enhanced_search_service import search_products as search_enhanced
+    from app.schemas.catalog import SearchResultRead, SearchResponseRead
+
+    if not query or not query.strip():
+        return {
+            "query": query,
+            "results": [],
+            "total_count": 0,
+            "has_more": False,
+        }
+
+    # Use enhanced search service
+    search_results = await search_enhanced(db, query, limit=limit, user_id=user_id)
+
+    # Convert to response format with full product details
+    result_list = []
+    for search_result in search_results:
+        product = db.scalar(
+            select(Product).where(
+                Product.id == search_result.product_id,
+                Product.status == "active",
+                Product.stock > 0,
+            )
+        )
+
+        if product:
+            serialized = serialize_catalog_product(db, product)
+            result_list.append({
+                "product": serialized,
+                "relevance_score": search_result.relevance_score,
+                "reason": search_result.reason,
+            })
+
+    return {
+        "query": query,
+        "results": result_list,
+        "total_count": len(result_list),
+        "has_more": False,
+    }

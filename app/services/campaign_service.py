@@ -75,11 +75,32 @@ def sync_campaign_schedule_status(db: Session, campaign: MerchandisingCampaign) 
     return campaign
 
 
+def campaign_is_eligible_for_user(
+    db: Session,
+    campaign: MerchandisingCampaign,
+    user_id: str | None,
+) -> bool:
+    """Check if a user meets campaign eligibility rules."""
+    if user_id is None:
+        return True
+    eligibility_rules_dict = getattr(campaign, "eligibility_rules", None)
+    if not eligibility_rules_dict:
+        return True
+    from app.services.eligibility_service import parse_eligibility_rules, compute_user_eligibility_stats, evaluate_eligibility
+    rules = parse_eligibility_rules(eligibility_rules_dict)
+    if not rules:
+        return True
+    stats = compute_user_eligibility_stats(db, user_id)
+    ok, _ = evaluate_eligibility(rules, stats, now=datetime.now(timezone.utc))
+    return ok
+
+
 def list_live_campaigns(
     db: Session,
     *,
     featured_only: bool = False,
     limit: int = 40,
+    user_id: str | None = None,
 ) -> list[MerchandisingCampaign]:
     now = datetime.now(timezone.utc)
     rows = list(
@@ -112,6 +133,8 @@ def list_live_campaigns(
         sync_campaign_schedule_status(db, campaign)
         if campaign_is_live(campaign, now=now):
             if featured_only and not campaign.is_featured:
+                continue
+            if not campaign_is_eligible_for_user(db, campaign, user_id):
                 continue
             live.append(campaign)
         if len(live) >= limit:

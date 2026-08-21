@@ -33,14 +33,12 @@ from app.controllers.finance_controller import (
     get_admin_finance_overview,
     list_admin_payment_transactions,
     list_admin_platform_ledger_entries,
-    record_refund_adjustments,
 )
 from app.controllers.notification_controller import create_notification_event, order_notification_image
 from app.core.security import hash_password
 from app.services.push_service import (
     customer_order_status_push_copy,
     dispatch_customer_order_push,
-    dispatch_customer_return_push,
 )
 from app.core.catalog_taxonomy import ODOS_CATEGORY_TAXONOMY
 from app.controllers.vendor_controller import (
@@ -55,9 +53,11 @@ from app.controllers.vendor_controller import (
 from app.controllers.review_controller import recompute_product_review_metrics
 from app.controllers.wallet_controller import (
     list_admin_vendor_withdrawal_requests,
-    publish_vendor_wallet_updates,
-    reverse_vendor_wallet_for_return_request,
     update_admin_vendor_withdrawal_request,
+)
+from app.services.return_request_service import (
+    ReturnRequestError,
+    apply_return_request_status_change,
 )
 from app.controllers.voucher_controller import (
     build_voucher_reward_text,
@@ -178,14 +178,6 @@ SUPPORTED_ORDER_STATUSES = {
     "out_for_delivery",
     "delivered",
     "cancelled",
-}
-SUPPORTED_RETURN_REQUEST_STATUSES = {
-    "requested",
-    "under_review",
-    "approved",
-    "rejected",
-    "refunded",
-    "exchanged",
 }
 
 
@@ -331,7 +323,14 @@ def _apply_voucher_upsert(voucher: Voucher, payload: AdminVoucherUpsert, *, targ
     voucher.eligible_store_ids = (
         None if payload.scope == "store" else payload.eligible_store_ids
     )
-    voucher.reward_text = build_voucher_reward_text(payload.discount_type, discount_value or payload.discount_value)
+    voucher.reward_text = build_voucher_reward_text(
+        payload.discount_type,
+        discount_value or payload.discount_value,
+        promotion_type=payload.promotion_type,
+        bogo_buy_quantity=payload.bogo_buy_quantity,
+        bogo_get_quantity=payload.bogo_get_quantity,
+        bogo_get_discount_percent=payload.bogo_get_discount_percent,
+    )
     voucher.discount_type = payload.discount_type
     voucher.discount_value = discount_value
     voucher.min_subtotal = round(payload.min_subtotal, 2)
@@ -373,6 +372,7 @@ def _validate_voucher_payload(payload: AdminVoucherUpsert) -> None:
         owner_type=payload.owner_type or "platform",
         bogo_buy_quantity=payload.bogo_buy_quantity,
         bogo_get_quantity=payload.bogo_get_quantity,
+        bogo_get_discount_percent=payload.bogo_get_discount_percent,
         category_slugs=payload.category_slugs,
         product_ids=payload.product_ids,
         eligible_store_ids=payload.eligible_store_ids,
@@ -930,6 +930,8 @@ def _serialize_return_request(db: Session, request: ReturnRequest) -> AdminRetur
         product_title=order_item.title,
         product_image_url=order_item.image_url,
         product_image_key=order_item.image_key,
+        selected_color=order_item.selected_color,
+        selected_size=order_item.selected_size,
         store_name=_store_name_lookup(db, order),
         user_id=request.user_id,
         customer_name=order.address_full_name,
@@ -2821,7 +2823,14 @@ def create_admin_voucher(
     voucher = Voucher(
         code=payload.code,
         title=payload.title,
-        reward_text=build_voucher_reward_text(payload.discount_type, discount_value or payload.discount_value),
+        reward_text=build_voucher_reward_text(
+            payload.discount_type,
+            discount_value or payload.discount_value,
+            promotion_type=payload.promotion_type,
+            bogo_buy_quantity=payload.bogo_buy_quantity,
+            bogo_get_quantity=payload.bogo_get_quantity,
+            bogo_get_discount_percent=payload.bogo_get_discount_percent,
+        ),
         discount_type=payload.discount_type,
         discount_value=discount_value,
         owner_type=payload.owner_type or "platform",
@@ -3072,7 +3081,14 @@ def bulk_generate_admin_vouchers(
         voucher = Voucher(
             code=code,
             title=item_payload.title,
-            reward_text=build_voucher_reward_text(item_payload.discount_type, item_payload.discount_value),
+            reward_text=build_voucher_reward_text(
+                item_payload.discount_type,
+                item_payload.discount_value,
+                promotion_type=item_payload.promotion_type,
+                bogo_buy_quantity=item_payload.bogo_buy_quantity,
+                bogo_get_quantity=item_payload.bogo_get_quantity,
+                bogo_get_discount_percent=item_payload.bogo_get_discount_percent,
+            ),
             discount_type=item_payload.discount_type,
             discount_value=item_payload.discount_value,
             approval_status="approved",
@@ -3514,103 +3530,40 @@ def update_admin_return_request(
     payload: AdminReturnRequestUpdate,
 ) -> AdminReturnRequestRead:
     require_admin(current_user)
-    if payload.status not in SUPPORTED_RETURN_REQUEST_STATUSES:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Unsupported return request status.",
-        )
 
-    request = db.scalar(
-        select(ReturnRequest)
-        .options(
-            selectinload(ReturnRequest.order).selectinload(Order.items),
-            selectinload(ReturnRequest.order).selectinload(Order.user),
-            selectinload(ReturnRequest.order).selectinload(Order.return_requests),
-            selectinload(ReturnRequest.order_item),
-            selectinload(ReturnRequest.reviewed_by_user),
-        )
+    # Cheap unlocked read just to size the refund ceiling — unit_price and
+    # quantity never change after the request is created, so a stale read
+    # here carries no race risk. The shared function re-enforces this cap
+    # under its own lock as the authoritative check.
+    pricing_row = db.execute(
+        select(OrderItem.unit_price, ReturnRequest.quantity)
+        .join(ReturnRequest, ReturnRequest.order_item_id == OrderItem.id)
         .where(ReturnRequest.id == request_id)
-    )
-    if not request:
+    ).first()
+    if not pricing_row:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Return request not found.",
         )
+    max_refund_amount = max_refund_amount_for(pricing_row.unit_price, pricing_row.quantity)
 
-    request.status = payload.status
-    request.admin_note = payload.admin_note
-    request.reviewed_by_user_id = current_user.id
-    request.reviewed_at = datetime.now(UTC)
+    try:
+        result = apply_return_request_status_change(
+            db,
+            request_id,
+            status=payload.status,
+            note=payload.admin_note,
+            refund_amount=payload.refund_amount,
+            reviewed_by_user_id=current_user.id,
+            max_refund_amount=max_refund_amount,
+        )
+    except ReturnRequestError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
 
-    # An admin-supplied refund_amount is still an untrusted input — cap it at
-    # what the line item is actually worth so a typo or a compromised support
-    # account can't drain a vendor's wallet via an inflated refund.
-    max_refund_amount = max_refund_amount_for(request.order_item.unit_price, request.quantity)
-    if payload.refund_amount is not None:
-        if payload.refund_amount > max_refund_amount:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Refund amount can't exceed the item's value ({max_refund_amount}).",
-            )
-        request.refund_amount = round(payload.refund_amount, 2)
-    elif payload.status == "refunded" and request.refund_amount is None:
-        request.refund_amount = max_refund_amount
-
-    if payload.status in {"rejected", "refunded", "exchanged"}:
-        request.resolved_at = datetime.now(UTC)
-    else:
-        request.resolved_at = None
-
-    changed_wallet_vendor_id: uuid.UUID | None = None
-    if payload.status == "refunded":
-        changed_wallet_vendor_id = reverse_vendor_wallet_for_return_request(db, request)
-        record_refund_adjustments(db, request)
-        from app.controllers.customer_wallet_controller import credit_customer_wallet_for_return
-
-        credit_customer_wallet_for_return(db, request)
-
-    db.commit()
-    db.refresh(request)
-
-    status_copy = {
-        "requested": "Return request reopened",
-        "under_review": "Return request under review",
-        "approved": "Return approved",
-        "rejected": "Return request declined",
-        "refunded": "Refund completed",
-        "exchanged": "Exchange completed",
-    }
-    title = status_copy.get(payload.status, "Return request updated")
-    body = f"{request.order_item.title}: {payload.status.replace('_', ' ')}."
-    return_event = create_notification_event(
-        db,
-        request.order.user,
-        kind="return_updated",
-        title=title,
-        body=body,
-        icon="swap-horizontal-outline",
-        accent="warning" if payload.status in {"requested", "under_review"} else "success" if payload.status in {"approved", "refunded", "exchanged"} else "warning",
-        action_label="View order",
-        route_type="order",
-        route_target_id=str(request.order_id),
-        image_key=request.order_item.image_key,
-    )
-    dispatch_customer_return_push(
-        user=request.order.user,
-        title=title,
-        body=body,
-        order_id=request.order_id,
-        notification_event=return_event,
-    )
-    db.commit()
-    db.refresh(request)
-    if changed_wallet_vendor_id:
-        publish_vendor_wallet_updates(changed_wallet_vendor_id)
-
-    from app.controllers.order_controller import _broadcast_order_realtime
-
-    _broadcast_order_realtime(db, request.order)
-    return _serialize_return_request(db, request)
+    return _serialize_return_request(db, result.request)
 
 
 def update_admin_order_status(

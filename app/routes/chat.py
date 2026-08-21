@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Form, Query, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.controllers.chat_controller import (
+    delete_chat_message,
     ensure_store_chat_thread,
     ensure_support_chat_thread,
     list_chat_messages,
@@ -91,6 +92,15 @@ async def create_thread_message(
         attachment=attachment,
         attachment_duration_seconds=attachment_duration_seconds,
     )
+
+
+@router.delete("/messages/{message_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_thread_message(
+    message_id: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    delete_chat_message(db, current_user, message_id)
 
 
 @router.patch("/threads/{thread_id}/support-status", response_model=ChatThreadRead)

@@ -45,10 +45,25 @@ def _normalize_code(value: str | None) -> str | None:
     return cleaned or None
 
 
-def build_voucher_reward_text(discount_type: str, discount_value: float) -> str:
+def build_voucher_reward_text(
+    discount_type: str,
+    discount_value: float,
+    *,
+    promotion_type: str = "coupon",
+    bogo_buy_quantity: int | None = None,
+    bogo_get_quantity: int | None = None,
+    bogo_get_discount_percent: float | None = None,
+) -> str:
     from app.services.promotion_service import build_voucher_reward_text as _build
 
-    return _build(discount_type, discount_value)
+    return _build(
+        discount_type,
+        discount_value,
+        promotion_type=promotion_type,
+        bogo_buy_quantity=bogo_buy_quantity,
+        bogo_get_quantity=bogo_get_quantity,
+        bogo_get_discount_percent=bogo_get_discount_percent,
+    )
 
 
 def validate_voucher_configuration(**kwargs) -> None:
@@ -304,7 +319,7 @@ def list_user_vouchers(db: Session, user: User) -> list[VoucherWalletRead]:
     return payloads
 
 
-def list_public_promotions(db: Session) -> list[StoreVoucherRead]:
+def list_public_promotions(db: Session, user_id: str | None = None) -> list[StoreVoucherRead]:
     from app.services.promotion_service import is_voucher_publicly_listable
 
     vouchers = list(
@@ -334,6 +349,26 @@ def list_public_promotions(db: Session) -> list[StoreVoucherRead]:
             continue
         if voucher_status(voucher, now=now, overall_count=overall_map.get(voucher.id, 0)) != "active":
             continue
+        if user_id is not None:
+            if getattr(voucher, "first_order_only", False):
+                from app.services.promotion_service import _user_has_prior_orders
+                if _user_has_prior_orders(db, user_id):
+                    continue
+            if getattr(voucher, "new_user_only", False):
+                user = db.scalar(select(User).where(User.id == user_id))
+                if user and user.created_at:
+                    account_age_days = (now - user.created_at).days
+                    if account_age_days > 30:
+                        continue
+            eligibility_rules_dict = getattr(voucher, "eligibility_rules", None)
+            if eligibility_rules_dict:
+                from app.services.eligibility_service import parse_eligibility_rules, compute_user_eligibility_stats, evaluate_eligibility
+                rules = parse_eligibility_rules(eligibility_rules_dict)
+                if rules:
+                    stats = compute_user_eligibility_stats(db, user_id)
+                    ok, _ = evaluate_eligibility(rules, stats, now=now)
+                    if not ok:
+                        continue
         payloads.append(
             _serialize_store_voucher(
                 voucher,

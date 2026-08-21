@@ -6,7 +6,9 @@ from app.controllers.campaign_controller import (
     list_public_campaigns,
 )
 from app.controllers.deals_controller import get_deals_hub
+from app.core.auth import get_optional_current_user
 from app.core.promo_banner_config import PROMO_CAMPAIGN_TAGS
+from app.models import User
 from app.controllers.catalog_controller import (
     get_catalog_product,
     get_store,
@@ -19,6 +21,7 @@ from app.controllers.catalog_controller import (
     list_stores,
     serialize_catalog_product,
     serialize_catalog_products,
+    search_products,
 )
 from app.core.cache import (
     TTL_CATEGORIES,
@@ -148,6 +151,18 @@ def get_product(product_id: str, response: Response, db: Session = Depends(get_d
     return serialized
 
 
+@router.get("/search")
+async def search_endpoint(
+    q: str = Query(..., min_length=1, max_length=120, description="Search query"),
+    limit: int = Query(default=30, ge=1, le=100),
+    db: Session = Depends(get_db),
+    current_user: User | None = Depends(get_optional_current_user),
+):
+    """Search products with enhanced ranking and click learning."""
+    user_id = current_user.id if current_user else None
+    return await search_products(db, q, user_id=user_id, limit=limit)
+
+
 @router.get("/markets", response_model=list[MarketRead])
 def get_markets(response: Response, db: Session = Depends(get_db)):
     return cached_list(
@@ -206,8 +221,12 @@ def get_store_by_id(store_id: str, response: Response, db: Session = Depends(get
 
 
 @router.get("/deals-hub", response_model=DealsHubRead)
-def get_deals_hub_endpoint(db: Session = Depends(get_db)):
-    return get_deals_hub(db)
+def get_deals_hub_endpoint(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_optional_current_user),
+):
+    user_id = current_user.id if current_user else None
+    return get_deals_hub(db, user_id=user_id)
 
 
 @router.get("/campaign-tags")

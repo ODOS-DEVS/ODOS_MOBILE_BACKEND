@@ -1,7 +1,18 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, JSON, String, UniqueConstraint, func
+from sqlalchemy import (
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    JSON,
+    String,
+    UniqueConstraint,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -131,11 +142,18 @@ class VendorWalletTransaction(Base):
     )
 
     __table_args__ = (
-        UniqueConstraint(
+        # NOT scoped to kind='refund_reversal' — an order can have several
+        # items each refunded independently, so "one refund_reversal row per
+        # order" would reject every reversal on that order after the first.
+        # That kind is deduped by return_request_id instead, via the
+        # (vendor_user_id, return_request_id, kind) constraint below.
+        Index(
+            "uq_vendor_wallet_tx_vendor_order_kind",
             "vendor_user_id",
             "order_id",
             "kind",
-            name="uq_vendor_wallet_tx_vendor_order_kind",
+            unique=True,
+            postgresql_where=text("kind != 'refund_reversal'"),
         ),
         UniqueConstraint(
             "vendor_user_id",
@@ -308,6 +326,12 @@ class CustomerWalletTransaction(Base):
         nullable=True,
         index=True,
     )
+    return_request_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("return_requests.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     kind: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
     title: Mapped[str] = mapped_column(String(160), nullable=False)
     amount: Mapped[float] = mapped_column(Float, nullable=False)
@@ -326,19 +350,33 @@ class CustomerWalletTransaction(Base):
     )
     order: Mapped["Order | None"] = relationship()
     topup: Mapped["CustomerWalletTopUp | None"] = relationship(back_populates="transaction")
+    return_request: Mapped["ReturnRequest | None"] = relationship()
 
     __table_args__ = (
-        UniqueConstraint(
+        # NOT scoped to kind='credit_return' — an order can have several
+        # items each refunded via a separate return request, so "one
+        # credit_return row per order" would reject every refund on that
+        # order after the first. That kind is deduped by return_request_id
+        # instead, via the partial index below.
+        Index(
+            "uq_customer_wallet_tx_user_order_kind",
             "user_id",
             "order_id",
             "kind",
-            name="uq_customer_wallet_tx_user_order_kind",
+            unique=True,
+            postgresql_where=text("kind != 'credit_return'"),
         ),
         UniqueConstraint(
             "user_id",
             "topup_id",
             "kind",
             name="uq_customer_wallet_tx_user_topup_kind",
+        ),
+        Index(
+            "uq_customer_wallet_tx_return_request",
+            "return_request_id",
+            unique=True,
+            postgresql_where=text("kind = 'credit_return' AND return_request_id IS NOT NULL"),
         ),
     )
 

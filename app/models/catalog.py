@@ -431,6 +431,7 @@ class MerchandisingCampaign(Base):
         server_default="false",
         nullable=False,
     )
+    eligibility_rules: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

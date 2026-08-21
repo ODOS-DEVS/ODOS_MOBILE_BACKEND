@@ -791,6 +791,61 @@ async def post_chat_message(
     return serialized_message
 
 
+def delete_chat_message(db: Session, user: User, message_id: str) -> None:
+    message = db.get(ChatMessage, message_id)
+    if not message:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="That message was not found.",
+        )
+
+    thread = _load_thread(db, message.thread_id)
+    if not thread:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="That chat thread was not found.",
+        )
+
+    _authorize_thread_participation(thread, user)
+
+    if message.sender_user_id != user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You can only delete your own messages.",
+        )
+
+    thread_id = thread.id
+    db.delete(message)
+    db.commit()
+
+    realtime_manager.publish_many_user_event_sync(
+        [str(thread.customer_user_id), str(thread.vendor_user_id)],
+        "chat.message.deleted",
+        {"thread_id": str(thread_id), "message_id": str(message_id)},
+    )
+
+    # The deleted message may have been the thread's last-message preview — recompute it.
+    latest_message = db.scalar(
+        select(ChatMessage)
+        .where(ChatMessage.thread_id == thread_id)
+        .order_by(ChatMessage.created_at.desc())
+        .limit(1)
+    )
+    thread.last_message_text = (
+        (latest_message.body or _attachment_preview_text(
+            latest_message.attachment_type, latest_message.attachment_name
+        ))
+        if latest_message
+        else None
+    )
+    thread.last_message_at = latest_message.created_at if latest_message else None
+    db.commit()
+
+    refreshed_thread = _load_thread(db, thread_id)
+    if refreshed_thread:
+        _publish_thread_updates(db, refreshed_thread)
+
+
 def update_support_thread_status(
     db: Session,
     user: User,

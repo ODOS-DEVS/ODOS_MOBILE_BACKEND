@@ -161,6 +161,7 @@ class Voucher(Base):
     bogo_get_quantity: Mapped[int | None] = mapped_column(Integer, nullable=True)
     bogo_get_discount_percent: Mapped[float | None] = mapped_column(Float, nullable=True)
     rules_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    eligibility_rules: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     vendor_expiry_reminder_sent_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,

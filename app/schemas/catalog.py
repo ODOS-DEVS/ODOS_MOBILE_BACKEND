@@ -179,6 +179,23 @@ class StoreRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class SearchResultRead(BaseModel):
+    """Search result with product details and relevance score."""
+
+    product: ProductRead
+    relevance_score: float
+    reason: str
+
+
+class SearchResponseRead(BaseModel):
+    """Search response with results list."""
+
+    query: str
+    results: list[SearchResultRead]
+    total_count: int
+    has_more: bool
+
+
 from app.schemas.voucher import StoreVoucherRead  # noqa: E402
 
 DealsHubRead.model_rebuild()

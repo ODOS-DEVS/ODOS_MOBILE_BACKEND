@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 import uuid
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from app.models import Order, Product, Store, User, Voucher, VoucherAssignment, VoucherRedemption
@@ -50,7 +50,23 @@ def normalize_voucher_code(value: str | None) -> str | None:
     return cleaned or None
 
 
-def build_voucher_reward_text(discount_type: str, discount_value: float) -> str:
+def build_voucher_reward_text(
+    discount_type: str,
+    discount_value: float,
+    *,
+    promotion_type: str = "coupon",
+    bogo_buy_quantity: int | None = None,
+    bogo_get_quantity: int | None = None,
+    bogo_get_discount_percent: float | None = None,
+) -> str:
+    if promotion_type == "bogo" or discount_type == "bogo":
+        if bogo_buy_quantity and bogo_get_quantity:
+            pct = bogo_get_discount_percent or 100
+            if pct >= 100:
+                return f"BUY {bogo_buy_quantity} GET {bogo_get_quantity} FREE"
+            else:
+                pct_val = int(pct) if float(pct).is_integer() else round(pct, 1)
+                return f"BUY {bogo_buy_quantity} GET {bogo_get_quantity} {pct_val}% OFF"
     if discount_type == "percent":
         value = int(discount_value) if float(discount_value).is_integer() else round(discount_value, 2)
         return f"{value}% OFF"
@@ -92,6 +108,32 @@ def _counts_for_voucher(db: Session, voucher_id: uuid.UUID, user_id: uuid.UUID) 
         )
     )
     return int(overall or 0), int(user_count or 0) + int(pending_count or 0)
+
+
+def reserve_voucher_usage(db: Session, user_id: uuid.UUID, voucher: Voucher) -> None:
+    """Row-lock + recount immediately before order persistence, closing the TOCTOU
+    window between the unlocked check in validate_voucher_for_checkout and the
+    locked recheck in activate_order_after_payment. No-ops for unlimited vouchers."""
+    if voucher.per_user_limit is None and voucher.usage_limit is None:
+        return
+    try:
+        db.execute(text("SET LOCAL lock_timeout = '3000ms'"))
+        locked = db.scalar(select(Voucher).where(Voucher.id == voucher.id).with_for_update())
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This promo is in high demand right now. Please try again in a moment.",
+        ) from exc
+    if locked is None:
+        return
+    now = datetime.now(timezone.utc)
+    overall_count, user_count = _counts_for_voucher(db, locked.id, user_id)
+    current_status = voucher_status(locked, now=now, overall_count=overall_count)
+    if current_status in {"expired", "limit_reached", "disabled", "pending_review"}:
+        _raise_voucher_error("This voucher is no longer available.")
+    if locked.per_user_limit is not None and user_count >= locked.per_user_limit:
+        _raise_voucher_error("This voucher has already been used.")
 
 
 def _assignment_for_user(db: Session, voucher_id: uuid.UUID, user_id: uuid.UUID) -> VoucherAssignment | None:
@@ -347,6 +389,16 @@ def validate_voucher_for_checkout(
         if account_age_days > 30:
             _raise_voucher_error("This voucher is only available to new ODOS shoppers.")
 
+    eligibility_rules_dict = getattr(voucher, "eligibility_rules", None)
+    if eligibility_rules_dict:
+        from app.services.eligibility_service import parse_eligibility_rules, compute_user_eligibility_stats, evaluate_eligibility
+        rules = parse_eligibility_rules(eligibility_rules_dict)
+        if rules:
+            stats = compute_user_eligibility_stats(db, user.id)
+            ok, reason = evaluate_eligibility(rules, stats, now=now)
+            if not ok:
+                _raise_voucher_error(reason or "This voucher is not available for your account.")
+
     pricing = resolve_cart_line_prices(db, items)
     line_prices = {
         product_id: price.sale_price for product_id, price in pricing.items()
@@ -438,6 +490,7 @@ def validate_voucher_configuration(
     owner_type: str = "platform",
     bogo_buy_quantity: int | None = None,
     bogo_get_quantity: int | None = None,
+    bogo_get_discount_percent: float | None = None,
     category_slugs: list[str] | None = None,
     product_ids: list[str] | None = None,
     eligible_store_ids: list[str] | None = None,
@@ -514,6 +567,11 @@ def validate_voucher_configuration(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="BOGO promotions require buy and get quantities.",
+            )
+        if bogo_get_discount_percent is not None and not (0 <= bogo_get_discount_percent <= 100):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="BOGO get discount percent must be between 0 and 100.",
             )
     if starts_at and ends_at and ends_at < starts_at:
         raise HTTPException(

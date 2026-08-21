@@ -452,6 +452,10 @@ def prepare_order_for_checkout(
     computed_discount = round(promo_result.discount_amount, 2)
     primary_voucher = promo_result.primary_voucher
 
+    if primary_voucher is not None:
+        from app.services.promotion_service import reserve_voucher_usage
+        reserve_voucher_usage(db, user.id, primary_voucher)
+
     try:
         delivery_config = get_delivery_config(db)
         delivery_method, validated_shipping = validate_delivery_checkout(
@@ -841,6 +845,26 @@ def create_return_request(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Return quantity cannot be greater than the delivered quantity.",
+        )
+
+    # A rejected request never consumed any of the item's returnable quantity,
+    # but a completed refund/exchange did — without this, a customer could
+    # get qty=2 of a qty=3 item refunded, then request qty=3 all over again.
+    already_settled_quantity = db.scalar(
+        select(func.coalesce(func.sum(ReturnRequest.quantity), 0)).where(
+            ReturnRequest.order_item_id == order_item.id,
+            ReturnRequest.status.in_(("refunded", "exchanged")),
+        )
+    ) or 0
+    remaining_returnable_quantity = order_item.quantity - already_settled_quantity
+    if payload.quantity > remaining_returnable_quantity:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "You've already returned or exchanged the maximum quantity for this item."
+                if remaining_returnable_quantity <= 0
+                else f"You can request at most {remaining_returnable_quantity} more unit(s) of this item."
+            ),
         )
 
     existing_open_request = db.scalar(

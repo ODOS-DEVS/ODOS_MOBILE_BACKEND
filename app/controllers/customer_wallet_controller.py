@@ -190,17 +190,13 @@ def credit_customer_wallet_for_return(
     if refund_amount <= 0:
         return None
 
-    existing_transactions = db.scalars(
-        select(CustomerWalletTransaction).where(
-            CustomerWalletTransaction.user_id == user.id,
+    existing_transaction = db.scalar(
+        select(CustomerWalletTransaction.id).where(
+            CustomerWalletTransaction.return_request_id == request.id,
             CustomerWalletTransaction.kind == "credit_return",
         )
-    ).all()
-    if any(
-        transaction.metadata_json
-        and transaction.metadata_json.get("return_request_id") == str(request.id)
-        for transaction in existing_transactions
-    ):
+    )
+    if existing_transaction:
         return get_or_create_customer_wallet(db, user.id)
 
     wallet = get_or_create_customer_wallet_for_update(db, user.id)
@@ -212,6 +208,7 @@ def credit_customer_wallet_for_return(
             wallet_id=wallet.id,
             user_id=user.id,
             order_id=order.id,
+            return_request_id=request.id,
             kind="credit_return",
             title=f"Refund for {order_item.title}",
             amount=refund_amount,

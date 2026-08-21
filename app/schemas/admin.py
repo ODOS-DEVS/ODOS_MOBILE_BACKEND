@@ -805,6 +805,8 @@ class AdminReturnRequestRead(BaseModel):
     product_title: str
     product_image_url: str | None
     product_image_key: str | None
+    selected_color: str | None
+    selected_size: str | None
     store_name: str
     user_id: uuid.UUID
     customer_name: str

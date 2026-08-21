@@ -31,6 +31,7 @@ from app.models.payment import (
     PlatformLedgerEntry,
     PlatformTreasuryAccount,
 )
+from app.models.promo_analytics import PromoAnalyticsEvent
 from app.models.voucher import Voucher, VoucherAssignment, VoucherRedemption
 from app.models.wallet import (
     CustomerWallet,
@@ -92,6 +93,7 @@ __all__ = [
     "PlatformLedgerEntry",
     "PlatformTreasuryAccount",
     "Product",
+    "PromoAnalyticsEvent",
     "PromoBanner",
     "Review",
     "SavedAddress",
