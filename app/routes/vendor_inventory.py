@@ -1,5 +1,6 @@
 """Vendor inventory management routes."""
 
+from pydantic import BaseModel
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
@@ -14,6 +15,12 @@ from app.controllers.vendor_inventory_controller import (
     get_low_stock_alerts,
 )
 from app.models import User
+
+
+class BulkUpdateRequest(BaseModel):
+    """Bulk inventory update request."""
+    store_id: str
+    updates: list[dict]
 
 router = APIRouter(prefix="/vendor/inventory", tags=["vendor-inventory"])
 
@@ -75,8 +82,7 @@ def update_price(
 
 @router.post("/bulk-update")
 def bulk_update(
-    store_id: str = Query(...),
-    updates: list[dict] = Query(...),
+    request: BulkUpdateRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -84,7 +90,7 @@ def bulk_update(
 
     Each update should be: {\"product_id\": \"...\", \"stock\": 10}
     """
-    return bulk_update_inventory(db, current_user, store_id, updates)
+    return bulk_update_inventory(db, current_user, request.store_id, request.updates)
 
 
 @router.get("/alerts/low-stock")
