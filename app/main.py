@@ -25,6 +25,7 @@ from app.routes import (
     health,
     notifications,
     orders,
+    payment_methods,
     payments,
     promo_analytics,
     realtime,
@@ -144,6 +145,10 @@ async def _delivery_auto_release_loop() -> None:
 
 @app.on_event("startup")
 async def on_startup() -> None:
+    # Initialize payment providers
+    from app.services.payment_initialization import initialize_payment_providers
+    initialize_payment_providers()
+
     realtime_manager.bind_loop(asyncio.get_running_loop())
     asyncio.create_task(asyncio.to_thread(get_redis))
     asyncio.create_task(_vendor_order_reminder_loop())
@@ -182,6 +187,7 @@ app.include_router(chat.router, prefix="/api")
 app.include_router(notifications.router, prefix="/api")
 app.include_router(orders.router, prefix="/api")
 app.include_router(payments.router, prefix="/api")
+app.include_router(payment_methods.router, prefix="/api")
 app.include_router(customer_wallet.router, prefix="/api")
 app.include_router(realtime.router, prefix="/api")
 app.include_router(reviews.router, prefix="/api")
