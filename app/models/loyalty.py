@@ -96,7 +96,7 @@ class LoyaltyTransaction(Base):
         nullable=True,
         index=True,
     )
-    metadata: Mapped[dict | None] = mapped_column(
+    metadata_json: Mapped[dict | None] = mapped_column(
         default=None,
         nullable=True,
     )
