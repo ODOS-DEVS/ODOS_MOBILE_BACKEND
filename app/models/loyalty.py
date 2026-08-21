@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, func
+from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -64,7 +64,7 @@ class LoyaltyAccount(Base):
     )
 
     __table_args__ = (
-        {"indexes": [{"name": "idx_loyalty_tier_level", "column_names": ["tier_level"]}]},
+        Index("idx_loyalty_tier_level", "tier_level"),
     )
 
 
@@ -110,11 +110,7 @@ class LoyaltyTransaction(Base):
     account: Mapped["LoyaltyAccount"] = relationship(back_populates="transactions")
 
     __table_args__ = (
-        {
-            "indexes": [
-                {"name": "idx_loyalty_type_created", "column_names": ["transaction_type", "created_at"]},
-            ]
-        },
+        Index("idx_loyalty_type_created", "transaction_type", "created_at"),
     )
 
 
