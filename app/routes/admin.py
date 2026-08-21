@@ -7,6 +7,11 @@ from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
+from app.controllers.admin_metrics_controller import (
+    get_sales_chart_timeseries,
+    get_top_vendors,
+    get_kpi_metrics,
+)
 from app.controllers.admin_controller import (
     archive_admin_voucher,
     archive_admin_promo_banner,
@@ -286,6 +291,36 @@ def admin_dashboard(
     db: Session = Depends(get_db),
 ):
     return get_admin_dashboard(db, current_user)
+
+
+@router.get("/dashboard/sales-chart")
+def admin_sales_chart(
+    current_user: RequireDashboardAdmin,
+    db: Session = Depends(get_db),
+    days: int = Query(default=7, ge=7, le=90),
+):
+    """Get sales timeseries data for chart visualization."""
+    return get_sales_chart_timeseries(db, current_user, days=days)
+
+
+@router.get("/dashboard/top-vendors")
+def admin_top_vendors(
+    current_user: RequireDashboardAdmin,
+    db: Session = Depends(get_db),
+    limit: int = Query(default=10, ge=1, le=50),
+    days: int = Query(default=30, ge=1, le=365),
+):
+    """Get top vendors by GMV (Gross Merchandise Value)."""
+    return get_top_vendors(db, current_user, limit=limit, days=days)
+
+
+@router.get("/dashboard/kpi-metrics")
+def admin_kpi_metrics(
+    current_user: RequireDashboardAdmin,
+    db: Session = Depends(get_db),
+):
+    """Get key performance indicator metrics."""
+    return get_kpi_metrics(db, current_user)
 
 
 @router.get("/users", response_model=AdminPageRead[AdminUserRead])
