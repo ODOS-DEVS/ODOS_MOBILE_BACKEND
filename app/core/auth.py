@@ -105,3 +105,14 @@ def get_optional_current_user(
         return None
 
     return user
+
+
+def require_admin(user: User) -> None:
+    """Verify user is admin; raise HTTPException if not."""
+    from app.models.user import UserRole
+
+    if user.role != UserRole.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required",
+        )
