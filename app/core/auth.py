@@ -107,6 +107,19 @@ def get_optional_current_user(
     return user
 
 
+def require_user(user: User) -> None:
+    """Verify user is authenticated; raise HTTPException if not.
+
+    This is a no-op since authentication is already enforced by the
+    get_current_user dependency. Kept for API clarity and compatibility.
+    """
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required",
+        )
+
+
 def require_admin(user: User) -> None:
     """Verify user is admin; raise HTTPException if not."""
     from app.models.user import UserRole
@@ -115,4 +128,19 @@ def require_admin(user: User) -> None:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin access required",
+        )
+
+
+def require_vendor(user: User) -> None:
+    """Verify user is vendor; raise HTTPException if not."""
+    from app.models.user import UserRole, VendorStatus
+
+    is_vendor = (
+        user.role == UserRole.VENDOR
+        or (hasattr(user, "vendor_status") and user.vendor_status == VendorStatus.APPROVED)
+    )
+    if not is_vendor:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Vendor access required",
         )
