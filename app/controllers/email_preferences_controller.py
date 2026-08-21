@@ -4,7 +4,6 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
 from app.models import User
-from app.core.auth import require_auth
 from app.services.email_preferences_service import EmailPreferencesService
 
 
@@ -24,7 +23,6 @@ def get_email_preferences(
     current_user: User,
 ) -> dict:
     """Get current user's email preferences."""
-    require_auth(current_user)
     return EmailPreferencesService.get_preferences(db, str(current_user.id))
 
 
