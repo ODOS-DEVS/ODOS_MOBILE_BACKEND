@@ -14,6 +14,7 @@ from app.middleware.event_logging import EventLoggingMiddleware
 from app.routes import (
     admin,
     account,
+    advanced_analytics,
     assistant,
     auth,
     behavior,
@@ -205,6 +206,7 @@ app.include_router(vendor_campaigns.router, prefix="/api")
 app.include_router(vendor_inventory.router, prefix="/api")
 app.include_router(email_marketing.router, prefix="/api")
 app.include_router(customer_segmentation.router, prefix="/api")
+app.include_router(advanced_analytics.router, prefix="/api")
 app.include_router(admin.router, prefix="/api")
 app.include_router(promo_analytics.router, prefix="/api")
 app.include_router(wishlist.router, prefix="/api")

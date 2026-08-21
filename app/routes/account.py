@@ -14,6 +14,11 @@ from app.controllers.account_controller import (
     set_default_payment_method,
     update_address,
 )
+from app.controllers.email_preferences_controller import (
+    EmailPreferencesUpdate,
+    get_email_preferences,
+    update_email_preferences,
+)
 from app.core.auth import get_current_user
 from app.core.database import get_db
 from app.models import User
@@ -103,3 +108,22 @@ def delete_saved_payment_method(
 ):
     delete_payment_method(db, current_user, payment_method_id)
     return MessageResponse(message="Payment method removed successfully.")
+
+
+@router.get("/email-preferences")
+def get_preferences(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    """Get email preferences for current user."""
+    return get_email_preferences(db, current_user)
+
+
+@router.patch("/email-preferences")
+def update_preferences(
+    payload: EmailPreferencesUpdate,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    """Update email preferences for current user."""
+    return update_email_preferences(db, current_user, payload)
