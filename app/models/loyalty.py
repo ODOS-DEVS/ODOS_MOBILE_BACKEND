@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, func
+from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, JSON, String, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -97,6 +97,7 @@ class LoyaltyTransaction(Base):
         index=True,
     )
     metadata_json: Mapped[dict | None] = mapped_column(
+        JSON,
         default=None,
         nullable=True,
     )
