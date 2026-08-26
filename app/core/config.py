@@ -45,7 +45,16 @@ class Settings(BaseSettings):
     db_pool_size: int = 3
     db_max_overflow: int = 7
     db_pool_timeout: int = 20
-    db_pool_recycle: int = 1800
+    # Neon closes idle connections at its proxy well before 30 minutes, so a
+    # connection recycled at 5 minutes is never handed to a query after the far
+    # end has already gone away. pool_pre_ping catches the rest.
+    db_pool_recycle: int = 300
+    # Run the five periodic jobs as in-process asyncio loops in the API process.
+    #
+    # True (the default) preserves the existing behaviour exactly. Set to FALSE when running
+    # the Celery worker + beat pair, which schedules the same five jobs — leaving both enabled
+    # runs every job twice. See app/core/celery_app.py.
+    scheduler_enabled: bool = True
 
     model_config = SettingsConfigDict(
         env_file=".env",

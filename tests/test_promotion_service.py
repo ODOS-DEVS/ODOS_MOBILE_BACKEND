@@ -235,3 +235,47 @@ def test_configuration_rejects_bad_date_window():
             store_id=None,
             owner_type="platform",
         )
+
+
+def test_zero_max_discount_is_uncapped_not_zero_discount():
+    """A cap of 0 means "no cap", not "grant nothing".
+
+    Regression: voucher PSNM in production was a 10%-off code saved with
+    max_discount = 0.0. `min(discount, 0)` zeroed every discount, so orders
+    applied the code, consumed a usage slot, wrote a voucher_redemptions row,
+    and still charged the customer full price.
+    """
+    from app.services.promotion_service import discount_for_voucher
+
+    voucher = SimpleNamespace(
+        discount_type="percent",
+        discount_value=10.0,
+        max_discount=0.0,
+        promotion_type="coupon",
+    )
+    assert discount_for_voucher(voucher, 300.0, shipping_amount=0.0) == 30.0
+
+
+def test_positive_max_discount_still_caps():
+    from app.services.promotion_service import discount_for_voucher
+
+    voucher = SimpleNamespace(
+        discount_type="percent",
+        discount_value=50.0,
+        max_discount=20.0,
+        promotion_type="coupon",
+    )
+    # 50% of 300 is 150, but the cap holds it to 20.
+    assert discount_for_voucher(voucher, 300.0, shipping_amount=0.0) == 20.0
+
+
+def test_absent_max_discount_is_uncapped():
+    from app.services.promotion_service import discount_for_voucher
+
+    voucher = SimpleNamespace(
+        discount_type="percent",
+        discount_value=10.0,
+        max_discount=None,
+        promotion_type="coupon",
+    )
+    assert discount_for_voucher(voucher, 300.0, shipping_amount=0.0) == 30.0

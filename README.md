@@ -9,7 +9,7 @@ FastAPI API for the ODOS marketplace — powers the mobile shopper app, vendor t
 
 ## Stack
 
-- FastAPI · SQLAlchemy 2 · Alembic · PostgreSQL
+- FastAPI · SQLAlchemy 2 · Alembic · Neon Postgres
 - JWT auth · Paystack · Cloudinary · Brevo email · Redis (rate limits + catalog cache)
 - WebSocket realtime for admin and catalog invalidation
 
@@ -67,8 +67,8 @@ FastAPI API for the ODOS marketplace — powers the mobile shopper app, vendor t
 ## Requirements
 
 - Python 3.11+
-- PostgreSQL
-- Optional but recommended: Redis (Upstash or Render), Cloudinary, Brevo, Paystack, Arkesel SMS
+- A Neon Postgres branch (see below — there is no local database to install)
+- Optional but recommended: Redis, Cloudinary, Brevo, Paystack, Arkesel SMS
 
 ## Local setup
 
@@ -81,10 +81,25 @@ pip install -r requirements.txt
 Create `.env` in the project root (never commit this file). Minimum:
 
 ```env
-DATABASE_URL=postgresql+psycopg://user:password@localhost:5432/odos_mobile
+DATABASE_URL=postgresql+psycopg://user:password@ep-xxx.aws.neon.tech/neondb?sslmode=require
 SECRET_KEY=replace-with-a-long-random-secret
 CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 ```
+
+### The database
+
+Neon is the database for every environment — local, staging and production. There is no
+separate local Postgres to install and no second copy of the data to keep in sync.
+
+For day-to-day work, point `DATABASE_URL` at a Neon **branch** rather than the production
+branch. Branches are copy-on-write forks: instant to create, and dropping one cannot touch
+production data.
+
+Two things to check on the connection string you paste:
+
+- Keep `?sslmode=require`. Neon refuses plaintext connections.
+- Percent-encode the password if it contains `@ : / ? # &`. Anything that parses the URL —
+  `pg_dump`, `psql`, the app's own pooling setup — will otherwise read the host wrongly.
 
 Common optional variables:
 
@@ -114,6 +129,15 @@ alembic upgrade head
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
+Or bring up the whole stack — API, Celery worker, beat, Redis and nginx — against the same
+Neon database:
+
+```bash
+docker compose up --build      # API on :8000, through nginx on :8080
+```
+
+See [docs/DOCKER.md](docs/DOCKER.md).
+
 - API docs: http://127.0.0.1:8000/docs
 - Health: http://127.0.0.1:8000/api/health
 
@@ -133,10 +157,16 @@ Recent additions (run `alembic upgrade head` after pull):
 - Flash-sale stock caps, flash-attributed order items, and voucher expiry-reminder tracking columns
 - Removed the vendor-facing delivery code (superseded by customer-confirmed delivery)
 - Delivery/settlement sub-state columns (`delivery_status`, `settlement_status`, `confirmation_method`, auto-release scheduling), richer timeline event metadata, and a DB-level uniqueness guard against double-settling a vendor for the same order
+- Loyalty accounts/transactions/tier benefits and `promo_analytics_events`, plus `eligibility_rules` on vouchers and campaigns
+
+`alembic upgrade head` is self-healing. The reconcile revision at head re-checks every object
+the promo/loyalty migrations are meant to create and adds whatever is missing, so a database
+that was stamped past a migration it never actually ran converges to the right schema instead
+of failing at runtime with a missing column.
 
 ## Background jobs
 
-The API runs a few lightweight polling loops in-process on startup (no separate worker needed):
+The API runs five lightweight polling loops in-process on startup (no separate worker needed):
 
 | Loop | Interval | Purpose |
 |------|----------|---------|
@@ -146,22 +176,32 @@ The API runs a few lightweight polling loops in-process on startup (no separate 
 | Payment reconciliation | 5 min | Re-verifies payments/wallet top-ups stuck `pending` directly against Paystack |
 | Delivery auto-release | 30 min | Reminds the customer at 36h, then auto-confirms + settles the vendor at 48h if there's no active problem/reschedule |
 
-## Deployment (Render)
+Set `SCHEDULER_ENABLED=false` to hand the same five jobs to a Celery worker + beat pair
+instead — the Docker Compose stack does this. Exactly one of the two must be active: leaving
+the in-process loops on while beat is running executes every job twice. It should also be
+false on every API replica beyond the first.
 
-This repo includes `render.yaml` for a Blueprint with web service + Postgres.
+## Deployment
 
-1. Connect the GitHub repo in Render and deploy the Blueprint.
-2. Set secrets: `CORS_ORIGINS`, Cloudinary, Brevo, Paystack, Google client IDs, Redis URL.
-3. `DATABASE_URL` and `SECRET_KEY` are provisioned by Render.
-4. Migrations run on startup via `alembic upgrade head`.
-
-Production API base:
+Production runs on a VPS behind nginx with TLS:
 
 ```text
-https://odos-backend.onrender.com/api
+https://appbe.odos.market/api
 ```
 
-Add admin and any web client origins to `CORS_ORIGINS`.
+The `Dockerfile` builds one image used by the API, the Celery worker and beat — they run the
+same code and differ only in their command, so there is no chance of the worker running a
+different revision than the API.
+
+Migrations are deliberately **not** run on container start: with more than one replica every
+container would race to `alembic upgrade head`. Compose runs them once in a dedicated
+`migrate` service, and a real deployment runs them as a release step.
+
+Whatever origin serves the admin has to be listed in `CORS_ORIGINS`, or every request fails in
+the browser even though the server is healthy.
+
+`render.yaml` is kept for reference. It declares no `databases:` block on purpose — Neon is
+the single database, so `DATABASE_URL` is set by hand rather than provisioned.
 
 ## API overview
 

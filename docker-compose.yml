@@ -1,0 +1,194 @@
+# ODOS backend — full local stack, pointed at the same database as production.
+#
+#   docker compose up --build
+#
+# Brings up Redis, runs migrations once, then starts the API, a Celery worker, Celery beat and
+# nginx. The API is reachable on http://localhost:8080 (through nginx) and on
+# http://localhost:8000 (direct, for debugging without the proxy in the way).
+#
+# --- The database ---
+#
+# There is one database for every environment: Neon. DATABASE_URL is read from your shell or
+# from the .env file next to this one and passed through unchanged, so local, staging and
+# production all speak to a managed Postgres with backups, failover and patching. Nothing here
+# provisions a database, and no environment gets a different one by accident.
+#
+# Point local development at a Neon *branch* rather than the production branch — a branch is a
+# copy-on-write fork, so it is instant, free of charge to create, and destroying it cannot
+# affect production data.
+#
+# If you do need a throwaway Postgres in the stack (offline work, say), it is available but
+# opt-in and never the default:
+#
+#   docker compose --profile local-db up            # starts the `postgres` service too
+#   DATABASE_URL=postgresql+psycopg://odos_user:odos_local_password@postgres:5432/odos_mobile \
+#     docker compose --profile local-db up
+
+x-app-env: &app-env
+  # Anchored so the API, worker and beat cannot drift apart. They run the same code against the
+  # same database, and a setting that differs between them produces bugs that only appear in
+  # whichever process happens to handle the request.
+  #
+  # `:?` makes a missing DATABASE_URL a startup error with that message, rather than a stack
+  # that silently comes up against nothing.
+  DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL to your Neon connection string (see .env.example)}
+  REDIS_URL: redis://redis:6379/0
+  SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY (at least 32 random characters)}
+  JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+  ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-10080}
+  CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://localhost:8080}
+  RATE_LIMIT_ENABLED: "true"
+  CACHE_ENABLED: "true"
+  # Local disk inside the container. Production uses Cloudinary — see CLOUDINARY_* in .env.example.
+  MEDIA_ROOT: /app/uploads
+
+x-app-build: &app-build
+  build:
+    context: .
+    dockerfile: Dockerfile
+
+services:
+  # ---------------------------------------------------------------- datastores
+  # Opt-in only (`--profile local-db`). Present for offline work; Neon is the default and the
+  # only database any environment uses unless you deliberately ask for this one.
+  postgres:
+    profiles: ["local-db"]
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: odos_user
+      POSTGRES_PASSWORD: odos_local_password
+      POSTGRES_DB: odos_mobile
+    ports:
+      # 5433 on the host side because a machine doing Postgres work usually already has
+      # something on 5432.
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U odos_user -d odos_mobile"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    # No persistence: Redis holds rate-limit counters, the catalog cache and the Celery queue.
+    # None of it is business truth — Postgres is the source of record — so losing it on restart
+    # costs a few recomputed cache entries and nothing else.
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ---------------------------------------------------------------- migrations
+  migrate:
+    <<: *app-build
+    command: ["python", "-m", "alembic", "upgrade", "head"]
+    environment:
+      <<: *app-env
+    # Runs once and exits. Everything that touches the database waits for it to exit 0, so no
+    # service ever queries a schema that has not been migrated. Neon is reachable the moment
+    # the container starts, so there is nothing to wait on first.
+    restart: "no"
+
+  # ---------------------------------------------------------------- application
+  api:
+    <<: *app-build
+    environment:
+      <<: *app-env
+      # OFF here. Celery beat owns the schedule in this stack — leaving the in-process loops on
+      # as well would run every periodic job twice. See app/core/celery_app.py.
+      SCHEDULER_ENABLED: "false"
+    ports:
+      # Direct access, bypassing nginx. Useful when you need to tell "the app is broken" from
+      # "the proxy is misconfigured".
+      - "8000:8000"
+    volumes:
+      # Live reload against the working tree. Read-only so a process in the container cannot
+      # modify your source.
+      - ./app:/app/app:ro
+      - uploads_data:/app/uploads
+    depends_on:
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    command:
+      - sh
+      - -c
+      - exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  worker:
+    <<: *app-build
+    # `--without-gossip --without-mingle` cut the inter-worker chatter that only matters with a
+    # large fleet; with one or two workers it is noise in the logs.
+    command:
+      - sh
+      - -c
+      - exec celery -A app.core.celery_app.celery_app worker
+        --loglevel=info --concurrency=2 --without-gossip --without-mingle
+    environment:
+      <<: *app-env
+      # The worker serves no HTTP and must never start its own asyncio loops.
+      SCHEDULER_ENABLED: "false"
+    volumes:
+      - ./app:/app/app:ro
+      - uploads_data:/app/uploads
+    depends_on:
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.core.celery_app.celery_app inspect ping -d celery@$$HOSTNAME || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  beat:
+    <<: *app-build
+    # The scheduler. Exactly ONE of these may run — two beats means two of every job.
+    # `--schedule` points the shelve file at a writable volume; the working directory is not.
+    command:
+      - sh
+      - -c
+      - exec celery -A app.core.celery_app.celery_app beat
+        --loglevel=info --schedule=/tmp/celerybeat-schedule
+    environment:
+      <<: *app-env
+      SCHEDULER_ENABLED: "false"
+    volumes:
+      - ./app:/app/app:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  # ---------------------------------------------------------------- edge
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "8080:80"
+    volumes:
+      - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./docker/nginx/conf.d:/etc/nginx/conf.d:ro
+    depends_on:
+      - api
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost/api/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  # Only used by the opt-in `local-db` profile.
+  postgres_data:
+  # Named rather than a bind mount so the API and worker share the same uploads directory —
+  # a file written by one is visible to the other.
+  uploads_data:

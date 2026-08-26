@@ -56,8 +56,7 @@ services:
       - key: GEMINI_BASE_URL
         value: https://generativelanguage.googleapis.com/v1beta
 
-databases:
-  - name: odos-postgres
-    plan: free
-    databaseName: odos_mobile
-    user: odos_user
+# No `databases:` block on purpose. Neon is the single database for every environment, so
+# DATABASE_URL is set by hand (`sync: false` above) to the Neon connection string. Declaring a
+# Render-managed Postgres here would provision a second, empty database and invite a deploy
+# that quietly points at the wrong one.

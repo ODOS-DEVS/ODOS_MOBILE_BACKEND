@@ -157,6 +157,17 @@ async def on_startup() -> None:
 
     realtime_manager.bind_loop(asyncio.get_running_loop())
     asyncio.create_task(asyncio.to_thread(get_redis))
+
+    # The five periodic jobs run EITHER here as asyncio loops, or in a Celery worker driven by
+    # beat — never both, or every job fires twice. SCHEDULER_ENABLED defaults to True, so a
+    # deployment that knows nothing about Celery behaves exactly as it always has; the Docker
+    # Compose stack sets it False on the API and runs the worker/beat services instead.
+    if not settings.scheduler_enabled:
+        logger.info(
+            "In-process scheduler disabled; expecting Celery beat to run the periodic jobs."
+        )
+        return
+
     asyncio.create_task(_vendor_order_reminder_loop())
     asyncio.create_task(_delivery_sla_monitor_loop())
     asyncio.create_task(_promo_reminder_loop())

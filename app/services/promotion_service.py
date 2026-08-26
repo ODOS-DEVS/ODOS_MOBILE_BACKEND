@@ -253,6 +253,23 @@ def eligible_subtotal_for_voucher(
     return round_money(total)
 
 
+def _discount_cap(voucher: Voucher) -> float | None:
+    """The maximum discount this voucher may grant, or None for uncapped.
+
+    A stored cap of 0 (or negative) is treated as "no cap", not as "grant
+    nothing". The column is nullable and the admin/vendor forms accept `ge=0`,
+    so a cap left at 0 rather than blank is the normal way an uncapped voucher
+    gets saved — and `min(discount, 0)` silently turned those into dead codes
+    that were still accepted at checkout, still counted against usage limits,
+    and still written to voucher_redemptions, while charging the customer full
+    price. Nobody deliberately configures a promotion that discounts nothing.
+    """
+    cap = voucher.max_discount
+    if cap is None or cap <= 0:
+        return None
+    return cap
+
+
 def discount_for_voucher(
     voucher: Voucher,
     eligible_subtotal: float,
@@ -284,8 +301,9 @@ def discount_for_voucher(
             detail="That promo code is configured incorrectly.",
         )
 
-    if voucher.max_discount is not None:
-        discount = min(discount, voucher.max_discount)
+    cap = _discount_cap(voucher)
+    if cap is not None:
+        discount = min(discount, cap)
 
     ceiling = eligible_subtotal + (shipping_amount if voucher.discount_type == "free_shipping" else 0)
     return round_money(max(0, min(discount, ceiling)))
@@ -327,8 +345,9 @@ def _bogo_discount_for_voucher(
 
     free_items = complete_bundles * get_qty
     discount = sum(unit_prices[:free_items]) * (get_percent / 100)
-    if voucher.max_discount is not None:
-        discount = min(discount, voucher.max_discount)
+    cap = _discount_cap(voucher)
+    if cap is not None:
+        discount = min(discount, cap)
     return round_money(max(0, discount))
 
 

@@ -39,14 +39,27 @@ async def get_vendor_store(db: Session, vendor_user: User) -> Store:
     """Get vendor's store. Verify vendor ownership.
 
     Security: Ensures user is a vendor with a store.
+
+    Delegates to vendor_controller for both the access rule and the lookup.
+    The local versions were wrong in two ways: they queried a
+    `Store.owner_user_id` column that does not exist (it is `vendor_user_id`),
+    raising AttributeError on every vendor campaign request, and they required
+    `role == "vendor"`, locking out approved vendors whose role column still
+    reads `customer` even though every other vendor endpoint serves them.
     """
-    if not vendor_user or vendor_user.role != "vendor":
+    from app.controllers.vendor_controller import (
+        get_vendor_store as fetch_store,
+        require_vendor_access,
+    )
+
+    if not vendor_user:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only vendors can create campaigns.",
         )
+    require_vendor_access(vendor_user)
 
-    store = db.scalar(select(Store).where(Store.owner_user_id == vendor_user.id))
+    store = fetch_store(db, vendor_user)
     if not store:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

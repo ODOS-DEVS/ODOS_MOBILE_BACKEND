@@ -2,7 +2,7 @@ from typing import Annotated
 from datetime import datetime
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
 from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
@@ -123,6 +123,17 @@ from app.controllers.wallet_controller import (
     update_admin_vendor_withdrawal_request,
 )
 from app.core.auth import get_current_user
+from app.services.promo_analytics_service import (
+    ENTITY_TYPES as PROMO_ENTITY_TYPES,
+    build_leaderboard as build_promo_leaderboard,
+    build_overview as build_promo_overview,
+    build_timeseries as build_promo_timeseries,
+)
+from app.schemas.promo_analytics import (
+    PromoAnalyticsLeaderboardRead,
+    PromoAnalyticsOverviewRead,
+    PromoAnalyticsTimeseriesRead,
+)
 from app.core.database import get_db
 from app.routes.admin_list_params import AdminListParams
 from app.schemas.delivery_settings import (
@@ -131,6 +142,14 @@ from app.schemas.delivery_settings import (
 )
 from app.schemas.pagination import AdminPageRead
 from app.models import User
+
+def _validate_promo_entity_type(entity_type: str) -> None:
+    if entity_type not in PROMO_ENTITY_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"entity_type must be one of: {', '.join(PROMO_ENTITY_TYPES)}.",
+        )
+
 
 RequirePromotionsAdmin = Annotated[User, Depends(require_admin_feature("promotions"))]
 RequireUsersAdmin = Annotated[User, Depends(require_admin_feature("users"))]
@@ -1123,6 +1142,52 @@ def get_voucher_analytics(
     db: Session = Depends(get_db),
 ):
     return get_admin_promotion_analytics(db, current_user)
+
+
+# --- Promo performance -------------------------------------------------------
+# /vouchers/analytics above answers "what have vouchers cost us in discount?".
+# These three answer "are our promotions actually working?" across all three
+# promo surfaces — merchandising campaigns, vouchers and home banners — from the
+# impression/click/conversion events the apps report to /api/promotions/events/batch.
+# Same permission band as the rest of promotions.
+
+
+@router.get("/promo-analytics/overview", response_model=PromoAnalyticsOverviewRead)
+def get_promo_analytics_overview(
+    current_user: RequirePromotionsAdmin,
+    db: Session = Depends(get_db),
+    days: int = Query(30, ge=1, le=365, description="Days to look back"),
+):
+    """Marketplace-wide promo funnel across campaigns, vouchers and banners."""
+    return build_promo_overview(db, days=days)
+
+
+@router.get("/promo-analytics/timeseries", response_model=PromoAnalyticsTimeseriesRead)
+def get_promo_analytics_timeseries(
+    current_user: RequirePromotionsAdmin,
+    db: Session = Depends(get_db),
+    entity_type: str = Query("campaign", description="campaign|voucher|banner"),
+    entity_id: str | None = Query(None, description="Limit to one campaign/voucher/banner"),
+    days: int = Query(30, ge=1, le=365),
+):
+    """Daily impressions/clicks/conversions, with quiet days included as zeroes."""
+    _validate_promo_entity_type(entity_type)
+    return build_promo_timeseries(
+        db, entity_type=entity_type, days=days, entity_id=entity_id
+    )
+
+
+@router.get("/promo-analytics/leaderboard", response_model=PromoAnalyticsLeaderboardRead)
+def get_promo_analytics_leaderboard(
+    current_user: RequirePromotionsAdmin,
+    db: Session = Depends(get_db),
+    entity_type: str = Query("campaign", description="campaign|voucher|banner"),
+    days: int = Query(30, ge=1, le=365),
+    limit: int = Query(10, ge=1, le=50),
+):
+    """Best-performing promotions of the chosen type."""
+    _validate_promo_entity_type(entity_type)
+    return build_promo_leaderboard(db, entity_type=entity_type, days=days, limit=limit)
 
 
 @router.post("/vouchers/bulk-generate", response_model=list[AdminVoucherRead], status_code=status.HTTP_201_CREATED)

@@ -69,3 +69,47 @@ class PromoAnalyticsLeaderboardRead(BaseModel):
 
     entity_type: str
     items: list[PromoAnalyticsLeaderboardItem]
+
+
+class PromoAnalyticsEntityPerformance(BaseModel):
+    """Per-entity funnel, plus the money for vouchers.
+
+    Redemption fields stay 0 for campaigns and banners: only vouchers have a
+    `voucher_redemptions` row recording a real discount, so anything else would
+    be a guess dressed up as a figure.
+    """
+
+    entity_id: str
+    entity_label: str
+    impressions: int
+    clicks: int
+    conversions: int
+    click_through_rate: float
+    conversion_rate: float
+    redemption_count: int = 0
+    unique_user_count: int = 0
+    total_discount_amount: float = 0.0
+
+
+class PromoAnalyticsChannelSummary(BaseModel):
+    """Totals for one entity type over the window."""
+
+    entity_type: str
+    tracked_entities: int
+    impressions: int
+    clicks: int
+    conversions: int
+    click_through_rate: float
+    conversion_rate: float
+
+
+class PromoAnalyticsOverviewRead(BaseModel):
+    """Everything a promo dashboard needs in one request."""
+
+    days: int
+    generated_at: datetime
+    scope: str = Field("marketplace", description="marketplace|store")
+    channels: list[PromoAnalyticsChannelSummary]
+    total_discount_given: float
+    total_redemptions: int
+    top_performers: list[PromoAnalyticsEntityPerformance]
