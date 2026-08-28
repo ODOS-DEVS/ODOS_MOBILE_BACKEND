@@ -1,3 +1,5 @@
+import ipaddress
+
 from sqlalchemy import create_engine
 from sqlalchemy.engine.url import make_url
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
@@ -5,7 +7,31 @@ from sqlalchemy.orm import DeclarativeBase, sessionmaker
 from app.core.config import settings
 
 
-_LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "postgres", "db"}
+# Bare hostnames that always mean "a database next to us", regardless of shape.
+_LOCAL_HOSTNAMES = {"localhost", "postgres", "postgresql", "db", "database"}
+
+
+def _is_internal_host(host: str) -> bool:
+    """True when the host is reachable on a private network rather than the internet.
+
+    This deliberately tests the *shape* of the host instead of matching a list of
+    known names. Coolify, Docker Compose, Kubernetes and Swarm all address a
+    sibling database by its service name -- ``d4nwvegnlxnqgvkopgu50jhf``,
+    ``odos-db``, ``postgres-primary`` -- which is a single DNS label with no dot
+    and is unguessable ahead of time. A managed provider (Neon, RDS, Supabase)
+    is always a fully-qualified name. That structural difference is the reliable
+    signal; an allowlist of names is not, and getting it wrong forces TLS onto a
+    container Postgres that does not speak it, which fails every connection.
+    """
+    if host in _LOCAL_HOSTNAMES:
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        # Not an IP literal, so judge by DNS shape: no dot means a single label,
+        # which can only resolve on an internal network.
+        return "." not in host
+    return address.is_loopback or address.is_private or address.is_link_local
 
 
 def _build_connect_args(url: str) -> dict[str, object]:
@@ -23,8 +49,8 @@ def _build_connect_args(url: str) -> dict[str, object]:
       discovered as a hung query. TCP keepalives turn a silently severed link
       into a prompt error that ``pool_pre_ping`` can then recycle.
 
-    Neither is applied to a local host: keepalives are pointless over loopback,
-    and forcing TLS would break a plain local Postgres.
+    Neither is applied to an internal host: keepalives are pointless over a
+    private network, and forcing TLS breaks a plain container Postgres.
     """
     # SQLAlchemy's parser, not urllib's: passwords here are not percent-encoded
     # and a "/" or "?" inside one makes urlsplit truncate the netloc, so it
@@ -34,8 +60,8 @@ def _build_connect_args(url: str) -> dict[str, object]:
     except Exception:
         return {}
 
-    host = (parsed.host or "").lower()
-    if not host or host in _LOCAL_HOSTS:
+    host = (parsed.host or "").lower().strip("[]")
+    if not host or _is_internal_host(host):
         return {}
 
     connect_args: dict[str, object] = {
