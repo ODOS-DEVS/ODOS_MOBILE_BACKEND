@@ -9,8 +9,10 @@ FastAPI API for the ODOS marketplace — powers the mobile shopper app, vendor t
 
 ## Stack
 
-- FastAPI · SQLAlchemy 2 · Alembic · Neon Postgres
-- JWT auth · Paystack · Cloudinary · Brevo email · Redis (rate limits + catalog cache)
+- FastAPI · SQLAlchemy 2 · Alembic · PostgreSQL 18
+- JWT auth · Google OAuth · Paystack · Cloudinary · Brevo email · Arkesel SMS
+- Redis (rate limits + catalog cache) · Celery + beat for background and scheduled work
+- Docker · deployed with Coolify on a self-hosted VPS
 - WebSocket realtime for admin and catalog invalidation
 
 ## What the API covers
@@ -67,7 +69,7 @@ FastAPI API for the ODOS marketplace — powers the mobile shopper app, vendor t
 ## Requirements
 
 - Python 3.11+
-- A Neon Postgres branch (see below — there is no local database to install)
+- PostgreSQL 14+ (Docker Compose brings one up — see below)
 - Optional but recommended: Redis, Cloudinary, Brevo, Paystack, Arkesel SMS
 
 ## Local setup
@@ -81,23 +83,27 @@ pip install -r requirements.txt
 Create `.env` in the project root (never commit this file). Minimum:
 
 ```env
-DATABASE_URL=postgresql+psycopg://user:password@ep-xxx.aws.neon.tech/neondb?sslmode=require
+DATABASE_URL=postgresql+psycopg://odos:odos@localhost:5432/odos_mobile
 SECRET_KEY=replace-with-a-long-random-secret
 CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 ```
 
 ### The database
 
-Neon is the database for every environment — local, staging and production. There is no
-separate local Postgres to install and no second copy of the data to keep in sync.
+Production runs PostgreSQL in a container on the same host as the API, reachable only on the
+private container network — it is not published to the internet. Local development uses the
+Postgres service in `docker-compose.yml`, so there is nothing to install by hand:
 
-For day-to-day work, point `DATABASE_URL` at a Neon **branch** rather than the production
-branch. Branches are copy-on-write forks: instant to create, and dropping one cannot touch
-production data.
+```bash
+docker compose up -d db
+```
 
-Two things to check on the connection string you paste:
+Two things to check on any connection string you paste:
 
-- Keep `?sslmode=require`. Neon refuses plaintext connections.
+- TLS is required for a managed provider and unavailable on a plain container. The app decides
+  which applies from the shape of the host: a single-label name (`db`, a container name) is
+  treated as internal, a fully-qualified name (`*.neon.tech`, `*.rds.amazonaws.com`) as public.
+  An explicit `?sslmode=` in the URL always wins.
 - Percent-encode the password if it contains `@ : / ? # &`. Anything that parses the URL —
   `pg_dump`, `psql`, the app's own pooling setup — will otherwise read the host wrongly.
 
@@ -129,14 +135,13 @@ alembic upgrade head
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Or bring up the whole stack — API, Celery worker, beat, Redis and nginx — against the same
-Neon database:
+Or bring up the whole stack — Postgres, Redis, migrations, API, Celery worker, beat and
+nginx — in one command:
 
 ```bash
 docker compose up --build      # API on :8000, through nginx on :8080
 ```
 
-See [docs/DOCKER.md](docs/DOCKER.md).
 
 - API docs: http://127.0.0.1:8000/docs
 - Health: http://127.0.0.1:8000/api/health
@@ -183,11 +188,8 @@ false on every API replica beyond the first.
 
 ## Deployment
 
-Production runs on a VPS behind nginx with TLS:
-
-```text
-https://appbe.odos.market/api
-```
+Production runs on a self-hosted VPS, managed with **Coolify**: deploys are triggered from
+Git, built into a Docker image and rolled out with a rolling update, behind automatic TLS.
 
 The `Dockerfile` builds one image used by the API, the Celery worker and beat — they run the
 same code and differ only in their command, so there is no chance of the worker running a
@@ -200,8 +202,19 @@ container would race to `alembic upgrade head`. Compose runs them once in a dedi
 Whatever origin serves the admin has to be listed in `CORS_ORIGINS`, or every request fails in
 the browser even though the server is healthy.
 
-`render.yaml` is kept for reference. It declares no `databases:` block on purpose — Neon is
-the single database, so `DATABASE_URL` is set by hand rather than provisioned.
+### Configuration
+
+Integrations fail closed: if `PAYSTACK_*`, `CLOUDINARY_*`, `ARKESEL_*`, `BREVO_*` or
+`GOOGLE_CLIENT_IDS` are unset, the endpoints that need them return a clear "not configured"
+error rather than crashing. That keeps the service up, but it also means a missing variable is
+easy to miss — `.env.example` is the checklist, and `/api/health/services` reports what is
+actually live.
+
+### Backups
+
+The database is backed up on a nightly schedule with retention. Backups are verified by
+restoring into a scratch database and checking row counts, not by trusting that the job
+reported success.
 
 ## API overview
 
@@ -268,7 +281,7 @@ python3 -m py_compile app/main.py
 | Empty recommendations | Behavior migrations applied; user has viewed/clicked products |
 | Admin list mismatch | Deploy latest backend so `{ items, has_more }` is returned |
 | Promo banner 404 in studio | `GET /admin/promo-banners/{id}` route deployed |
-| Redis errors on Render | `REDIS_URL` set; check `/api/health` hint |
+| Rate limiting or cache disabled | `REDIS_URL` unset — check `/api/health/services` |
 | CORS | `CORS_ORIGINS` includes admin and mobile web origins |
 
 ## License
