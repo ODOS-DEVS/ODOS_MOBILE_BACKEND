@@ -20,6 +20,7 @@ from app.core.admin_permissions import AdminPermissionLevel, require_super_admin
 from app.core.event_types import PROMO_CREATED, PROMO_DELETED, PROMO_UPDATED, USER_LOGIN
 from app.helpers.admin_audit import (
     log_admin_order_status_change,
+    log_admin_return_resolution,
     log_admin_product_mutation,
     log_admin_user_status_change,
     log_admin_vendor_status_change,
@@ -3547,6 +3548,10 @@ def update_admin_return_request(
         )
     max_refund_amount = max_refund_amount_for(pricing_row.unit_price, pricing_row.quantity)
 
+    # Captured before the change: apply_return_request_status_change overwrites
+    # status in place, so reading it afterwards would log the new value twice.
+    before_status = db.scalar(select(ReturnRequest.status).where(ReturnRequest.id == request_id))
+
     try:
         result = apply_return_request_status_change(
             db,
@@ -3556,12 +3561,30 @@ def update_admin_return_request(
             refund_amount=payload.refund_amount,
             reviewed_by_user_id=current_user.id,
             max_refund_amount=max_refund_amount,
+            actor_role="admin",
+            waive_return=payload.waive_return,
+            received_condition_note=payload.received_condition_note,
         )
     except ReturnRequestError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(exc),
         ) from exc
+
+    # Only the transitions that cost somebody money are worth an audit entry;
+    # logging every note edit would bury them.
+    if payload.status in {"approved", "refunded", "exchanged", "rejected"}:
+        log_admin_return_resolution(
+            db,
+            admin_user=current_user,
+            return_request_id=str(request_id),
+            order_number=result.request.order.order_number,
+            before_status=before_status or "unknown",
+            after_status=payload.status,
+            refund_amount=result.request.refund_amount,
+            waived=bool(result.request.return_waived),
+        )
+        db.commit()
 
     return _serialize_return_request(db, result.request)
 

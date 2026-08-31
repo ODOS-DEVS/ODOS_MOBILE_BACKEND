@@ -34,6 +34,15 @@ class Settings(BaseSettings):
     password_reset_token_expire_minutes: int = 15
     vendor_commission_rate: float = 0.10
     vendor_withdrawal_minimum: float = 20.0
+
+    # How long after delivery a customer may open a return. Without a limit a
+    # request can arrive a year later, by which point the goods, the vendor's
+    # settlement and any evidence are long gone.
+    return_window_days: int = 14
+    # A vendor may settle small refunds themselves; above this an admin has to
+    # approve. Protects against a compromised seller account draining value,
+    # and gives ODOS sight of the expensive cases.
+    vendor_self_refund_limit: float = 200.0
     paystack_secret_key: str = ""
     paystack_public_key: str = ""
     paystack_webhook_secret: str = ""

@@ -115,6 +115,17 @@ class ReturnRequestCreate(BaseModel):
         return cleaned_value or None
 
 
+class ReturnStatusEventRead(BaseModel):
+    id: uuid.UUID
+    status: str
+    actor_role: str
+    note: str | None = None
+    refund_amount: float | None = None
+    occurred_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class ReturnRequestRead(BaseModel):
     id: uuid.UUID
     order_id: uuid.UUID
@@ -131,8 +142,15 @@ class ReturnRequestRead(BaseModel):
     reviewed_by_user_id: uuid.UUID | None
     reviewed_at: datetime | None
     resolved_at: datetime | None
+    collected_at: datetime | None = None
+    received_at: datetime | None = None
+    received_condition_note: str | None = None
+    return_waived: bool = False
     created_at: datetime
     updated_at: datetime
+    # The same rows for customer, vendor and admin, so a dispute has one
+    # account of what happened rather than three.
+    timeline: list[ReturnStatusEventRead] = []
 
     model_config = ConfigDict(from_attributes=True)
 

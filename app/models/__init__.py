@@ -24,7 +24,14 @@ from app.models.catalog import (
 )
 from app.models.delivery_settings import DeliverySettings
 from app.models.inventory import InventoryMovement
-from app.models.order import Order, OrderItem, OrderStatusEvent, ReturnRequest, Review
+from app.models.order import (
+    Order,
+    OrderItem,
+    OrderStatusEvent,
+    ReturnRequest,
+    ReturnStatusEvent,
+    Review,
+)
 from app.models.payment import (
     PaymentTransaction,
     PaymentWebhookEvent,
@@ -90,6 +97,7 @@ __all__ = [
     "PaymentTransaction",
     "PaymentWebhookEvent",
     "ReturnRequest",
+    "ReturnStatusEvent",
     "PaymentMethodType",
     "PlatformLedgerEntry",
     "PlatformTreasuryAccount",
