@@ -1,5 +1,5 @@
 from typing import Annotated
-from datetime import datetime
+from datetime import date, datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
@@ -1258,6 +1258,50 @@ def get_finance_overview(
     db: Session = Depends(get_db),
 ):
     return get_admin_finance_overview_payload(db, current_user)
+
+
+@router.get("/finance/reconciliation")
+def get_finance_reconciliation(
+    current_user: RequireFinanceAdmin,
+    db: Session = Depends(get_db),
+    day: date | None = Query(
+        default=None,
+        description="Day to total, UTC. Defaults to today.",
+    ),
+):
+    """What ODOS believes it collected on a day, plus wallet balance integrity.
+
+    Hold `collected` against the provider's own settlement report for the same
+    day. Amounts are summed in minor units and converted once, so this figure
+    does not inherit float drift from the balances it is checking.
+
+    `integrity` reports wallets whose balance no longer equals the sum of their
+    transactions. An empty list is the expected result.
+    """
+    from app.services.financial_integrity_service import (
+        check_customer_wallet_balances,
+        check_vendor_wallet_balances,
+        collected_total_for_day,
+    )
+
+    target_day = day or datetime.now(timezone.utc).date()
+    discrepancies = check_vendor_wallet_balances(db) + check_customer_wallet_balances(db)
+    return {
+        "collected": collected_total_for_day(db, target_day),
+        "integrity": {
+            "ok": not discrepancies,
+            "discrepancies": [
+                {
+                    "scope": d.scope,
+                    "subject_id": d.subject_id,
+                    "expected": d.expected,
+                    "actual": d.actual,
+                    "delta": d.delta,
+                }
+                for d in discrepancies
+            ],
+        },
+    }
 
 
 @router.get("/finance/payments", response_model=AdminPageRead[AdminPaymentTransactionRead])

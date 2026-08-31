@@ -387,9 +387,22 @@ def _validate_order_totals(
     *,
     computed_subtotal: float,
     computed_discount: float,
+    validated_shipping: float,
 ) -> float:
+    """Recompute the order total from server-derived figures only.
+
+    Every input here is server-side: the subtotal is recomputed from database
+    prices, the discount from the promotion engine, and the shipping from a
+    delivery quote. The payload is compared against the result, never used to
+    produce it.
+
+    This previously used payload.shipping_amount. That was safe only because
+    validate_delivery_checkout raises on a mismatch and happens to run first —
+    a correctness guarantee that lived in the ordering of two calls rather than
+    in this function, and that nothing would have caught if reordered.
+    """
     computed_total = round(
-        computed_subtotal + payload.shipping_amount - computed_discount, 2
+        computed_subtotal + validated_shipping - computed_discount, 2
     )
     if (
         abs(computed_subtotal - payload.subtotal_amount) > 0.01
@@ -554,6 +567,7 @@ def prepare_order_for_checkout(
         payload,
         computed_subtotal=computed_subtotal,
         computed_discount=computed_discount,
+        validated_shipping=round(validated_shipping, 2),
     )
     order.subtotal_amount = computed_subtotal
     order.shipping_amount = round(validated_shipping, 2)

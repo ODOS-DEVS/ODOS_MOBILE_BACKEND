@@ -44,6 +44,9 @@ DELIVERY_SLA_MONITOR_INTERVAL_SECONDS = 120
 PROMO_REMINDER_INTERVAL_SECONDS = 1800
 PAYMENT_RECONCILIATION_INTERVAL_SECONDS = 300
 DELIVERY_AUTO_RELEASE_INTERVAL_SECONDS = 1800
+# Hourly: this detects slow drift rather than a live incident, and it scans
+# every wallet on each run.
+FINANCIAL_INTEGRITY_INTERVAL_SECONDS = 3600
 
 
 def _broker_url() -> str:
@@ -113,6 +116,10 @@ celery_app.conf.beat_schedule = {
     "delivery-auto-release": {
         "task": "app.tasks.delivery_auto_release",
         "schedule": float(DELIVERY_AUTO_RELEASE_INTERVAL_SECONDS),
+    },
+    "financial-integrity-check": {
+        "task": "app.tasks.financial_integrity_check",
+        "schedule": float(FINANCIAL_INTEGRITY_INTERVAL_SECONDS),
     },
 }
 
