@@ -1,6 +1,6 @@
 import secrets
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import logging
 
 from fastapi import HTTPException, status
@@ -825,6 +825,28 @@ def create_return_request(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Returns can only be requested after an order has been delivered.",
         )
+
+    # Without a deadline a request can arrive a year later, by which point the
+    # goods, the vendor's settlement and any evidence are long gone. Measured
+    # from delivery, falling back to when the order was placed if a legacy row
+    # has no delivery timestamp.
+    window_days = int(settings.return_window_days)
+    if window_days > 0:
+        delivered_at = order.delivered_at or order.placed_at or order.created_at
+        if delivered_at is not None:
+            reference = (
+                delivered_at
+                if delivered_at.tzinfo
+                else delivered_at.replace(tzinfo=timezone.utc)
+            )
+            if datetime.now(timezone.utc) - reference > timedelta(days=window_days):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        f"Returns close {window_days} days after delivery, and that "
+                        "window has passed for this order."
+                    ),
+                )
 
     order_item = next(
         (item for item in order.items if item.id == payload.order_item_id), None

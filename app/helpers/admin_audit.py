@@ -152,3 +152,37 @@ def log_admin_role_change(
         ip_address=ip_address,
         user_agent=user_agent,
     )
+
+
+def log_admin_return_resolution(
+    db: Session,
+    *,
+    admin_user: User,
+    return_request_id: str,
+    order_number: str | None,
+    before_status: str,
+    after_status: str,
+    refund_amount: float | None,
+    waived: bool,
+    ip_address: str | None = None,
+    user_agent: str | None = None,
+) -> None:
+    """Audit a return that moved money.
+
+    Approving and refunding are the two points where a return costs somebody
+    something, and until now neither left an audit entry — the request record
+    itself only keeps the latest reviewer, overwritten on each change.
+    """
+    record_admin_event(
+        db,
+        admin_user=admin_user,
+        event_type=ADMIN_ORDER_MUTATION,
+        action=f"return.{after_status}",
+        entity_type="return_request",
+        entity_id=return_request_id,
+        before_state={"status": before_status},
+        after_state={"status": after_status, "refund_amount": refund_amount},
+        metadata={"order_number": order_number, "return_waived": waived},
+        ip_address=ip_address,
+        user_agent=user_agent,
+    )

@@ -327,6 +327,24 @@ class ReturnRequest(Base):
     )
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Custody of the goods. Money must not move until the item is back, so these
+    # record who confirmed that and in what condition. A refund settled without
+    # a return -- a damaged item the seller does not want back, say -- is still
+    # possible, but has to be waived deliberately rather than by omission.
+    collected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    received_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    received_condition_note: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    return_waived: Mapped[bool] = mapped_column(
+        nullable=False, default=False, server_default="false"
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
@@ -340,6 +358,11 @@ class ReturnRequest(Base):
     )
 
     order: Mapped["Order"] = relationship(back_populates="return_requests")
+    timeline: Mapped[list["ReturnStatusEvent"]] = relationship(
+        back_populates="return_request",
+        cascade="all, delete-orphan",
+        order_by="ReturnStatusEvent.occurred_at",
+    )
     order_item: Mapped["OrderItem"] = relationship(back_populates="return_requests")
     user: Mapped["User"] = relationship(
         foreign_keys=[user_id],
@@ -349,6 +372,52 @@ class ReturnRequest(Base):
         foreign_keys=[reviewed_by_user_id],
         back_populates="reviewed_return_requests",
     )
+    received_by_user: Mapped["User | None"] = relationship(foreign_keys=[received_by_user_id])
+
+
+class ReturnStatusEvent(Base):
+    """Append-only history of a return request.
+
+    ReturnRequest carries only the *current* status, and reviewed_by/reviewed_at
+    are overwritten on every change -- so without this table there is no way to
+    answer who moved a request to under review, who approved it, and when. Money
+    moves on these transitions, so the trail matters: customer, vendor and admin
+    all read the same rows.
+
+    Written once per transition; never updated or deleted individually."""
+
+    __tablename__ = "return_status_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    return_request_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("return_requests.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    status: Mapped[str] = mapped_column(String(30), nullable=False)
+    actor_role: Mapped[str] = mapped_column(String(20), nullable=False)
+    # Nullable: a system transition (an expiry sweep) has no account behind it.
+    actor_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    note: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    refund_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
+    event_metadata: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+        index=True,
+    )
+
+    return_request: Mapped["ReturnRequest"] = relationship(back_populates="timeline")
 
 
 class Review(Base):

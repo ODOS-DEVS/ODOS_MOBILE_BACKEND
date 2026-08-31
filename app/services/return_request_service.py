@@ -21,13 +21,16 @@ from app.controllers.wallet_controller import (
     publish_vendor_wallet_updates,
     reverse_vendor_wallet_for_return_request,
 )
-from app.models import Order, OrderItem, ReturnRequest, User
+from app.core.config import settings
+from app.models import Order, OrderItem, ReturnRequest, ReturnStatusEvent, User
 from app.services.push_service import dispatch_customer_return_push
 
 SUPPORTED_RETURN_REQUEST_STATUSES = {
     "requested",
     "under_review",
     "approved",
+    "awaiting_return",
+    "received",
     "rejected",
     "refunded",
     "exchanged",
@@ -36,20 +39,37 @@ SUPPORTED_RETURN_REQUEST_STATUSES = {
 VENDOR_RETURN_REQUEST_STATUSES = {
     "under_review",
     "approved",
+    "awaiting_return",
+    "received",
     "rejected",
     "refunded",
 }
 
 TERMINAL_RETURN_STATUSES = {"rejected", "refunded", "exchanged"}
 
+# Money may only move once the goods are accounted for. Reaching "refunded"
+# from "approved" or "awaiting_return" means paying out for an item nobody has
+# confirmed came back, so it is allowed only when the return has been waived
+# deliberately (return_waived) -- a damaged item the seller does not want
+# returned, say. Omission is not a waiver.
+STATUSES_REQUIRING_GOODS_ACCOUNTED = {"refunded", "exchanged"}
+
 # What a request may move to *from* its current status. Non-terminal statuses
 # may also stay put (e.g. an admin editing just the note) — terminal ones may
 # not, which is what actually stops the same request from being refunded (or
 # rejected, or exchanged) more than once.
 ALLOWED_RETURN_STATUS_TRANSITIONS: dict[str, set[str]] = {
-    "requested": {"requested", "under_review", "approved", "rejected", "refunded", "exchanged"},
-    "under_review": {"under_review", "approved", "rejected", "refunded", "exchanged"},
-    "approved": {"approved", "rejected", "refunded", "exchanged"},
+    "requested": {
+        "requested", "under_review", "approved", "awaiting_return",
+        "rejected", "refunded", "exchanged",
+    },
+    "under_review": {
+        "under_review", "approved", "awaiting_return",
+        "rejected", "refunded", "exchanged",
+    },
+    "approved": {"approved", "awaiting_return", "received", "rejected", "refunded", "exchanged"},
+    "awaiting_return": {"awaiting_return", "received", "rejected", "refunded", "exchanged"},
+    "received": {"received", "refunded", "exchanged", "rejected"},
     "rejected": set(),
     "refunded": set(),
     "exchanged": set(),
@@ -59,10 +79,40 @@ _STATUS_COPY = {
     "requested": "Return request reopened",
     "under_review": "Return request under review",
     "approved": "Return approved",
+    "awaiting_return": "Send the item back",
+    "received": "Item received",
     "rejected": "Return request declined",
     "refunded": "Refund completed",
     "exchanged": "Exchange completed",
 }
+
+_STATUS_BODY = {
+    "under_review": "We are looking at your request.",
+    "approved": "Your return was approved.",
+    "awaiting_return": "Hand the item to the courier or drop it at the store.",
+    "received": "The seller has confirmed your item arrived.",
+    "rejected": "Your return request was declined.",
+    "refunded": "The refund is now in your ODOS wallet.",
+    "exchanged": "Your exchange has been completed.",
+}
+
+
+class ReturnGoodsNotAccountedError(ValueError):
+    """Refunding before the item is back, without an explicit waiver."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Confirm the item was received before refunding, or waive the return "
+            "explicitly if the seller does not want it back."
+        )
+
+
+class ReturnWindowClosedError(ValueError):
+    def __init__(self, days: int) -> None:
+        super().__init__(
+            f"Returns close {days} days after delivery, and that window has passed "
+            "for this order."
+        )
 
 
 class ReturnRequestError(ValueError):
@@ -99,6 +149,55 @@ class ReturnRequestChangeResult:
     changed_wallet_vendor_id: uuid.UUID | None
 
 
+def goods_are_accounted_for(
+    *, received_at: datetime | None, return_waived: bool
+) -> bool:
+    """True when it is safe to settle money on a return.
+
+    Either the item is physically back (received_at), or someone deliberately
+    waived the return -- a damaged item the seller does not want returned. An
+    unset received_at with no waiver means nobody has confirmed anything, which
+    is the case this exists to stop.
+    """
+    return received_at is not None or bool(return_waived)
+
+
+def exceeds_vendor_self_refund_limit(amount: float | None) -> bool:
+    """True when a refund is large enough to need ODOS approval.
+
+    Bounds what a single compromised or over-generous seller account can pay
+    out without anyone at ODOS seeing it.
+    """
+    if amount is None:
+        return False
+    return float(amount) > float(settings.vendor_self_refund_limit)
+
+
+def record_return_status_event(
+    db: Session,
+    request: ReturnRequest,
+    *,
+    status: str,
+    actor_role: str,
+    actor_id: uuid.UUID | None = None,
+    note: str | None = None,
+    refund_amount: float | None = None,
+    event_metadata: dict | None = None,
+) -> ReturnStatusEvent:
+    """Append one immutable entry to a return's history. Caller owns the commit."""
+    event = ReturnStatusEvent(
+        return_request_id=request.id,
+        status=status,
+        actor_role=actor_role,
+        actor_id=actor_id,
+        note=note,
+        refund_amount=refund_amount,
+        event_metadata=event_metadata,
+    )
+    db.add(event)
+    return event
+
+
 def _load_return_request_for_update(db: Session, request_id: str) -> ReturnRequest | None:
     """Row-locks the return request for the rest of the caller's transaction.
 
@@ -130,6 +229,9 @@ def apply_return_request_status_change(
     refund_amount: float | None,
     reviewed_by_user_id: uuid.UUID,
     max_refund_amount: float | None = None,
+    actor_role: str = "admin",
+    waive_return: bool = False,
+    received_condition_note: str | None = None,
 ) -> ReturnRequestChangeResult:
     if status not in SUPPORTED_RETURN_REQUEST_STATUSES:
         raise ReturnRequestError("Unsupported return request status.")
@@ -146,6 +248,27 @@ def apply_return_request_status_change(
     # without this, re-saving an already-refunded request (blocked above in
     # practice, but kept as an explicit guard here too) could double-credit.
     is_new_refund = status == "refunded" and request.status != "refunded"
+
+    if waive_return:
+        request.return_waived = True
+
+    # Record custody before settling. "received" is the only status that proves
+    # the goods came back, so it is what the refund guard below looks for.
+    if status == "awaiting_return" and request.collected_at is None:
+        request.collected_at = datetime.now(UTC)
+    if status == "received" and request.received_at is None:
+        request.received_at = datetime.now(UTC)
+        request.received_by_user_id = reviewed_by_user_id
+        if received_condition_note is not None:
+            request.received_condition_note = received_condition_note
+
+    # Paying out for an item nobody has confirmed came back is the expensive
+    # failure mode here, so it has to be chosen rather than fallen into.
+    if status in STATUSES_REQUIRING_GOODS_ACCOUNTED:
+        if not goods_are_accounted_for(
+            received_at=request.received_at, return_waived=request.return_waived
+        ):
+            raise ReturnGoodsNotAccountedError()
 
     request.status = status
     if note is not None:
@@ -173,8 +296,19 @@ def apply_return_request_status_change(
         record_refund_adjustments(db, request)
         credit_customer_wallet_for_return(db, request)
 
+    record_return_status_event(
+        db,
+        request,
+        status=status,
+        actor_role=actor_role,
+        actor_id=reviewed_by_user_id,
+        note=note,
+        refund_amount=request.refund_amount if is_new_refund else None,
+        event_metadata={"waived": True} if waive_return else None,
+    )
+
     title = _STATUS_COPY.get(status, "Return request updated")
-    body = f"{request.order_item.title}: {status.replace('_', ' ')}."
+    body = _STATUS_BODY.get(status) or f"{request.order_item.title}: {status.replace('_', ' ')}."
     return_event = create_notification_event(
         db,
         request.order.user,
@@ -239,6 +373,20 @@ def update_vendor_return_request(
     if not owned_request_id:
         raise ReturnRequestNotFoundError()
 
+    # A vendor settles small refunds themselves; above the configured limit an
+    # admin has to. This bounds what a single compromised or over-generous
+    # seller account can pay out, and puts the expensive cases in front of ODOS.
+    if status == "refunded":
+        request = db.get(ReturnRequest, return_request_id)
+        pending_amount = request.refund_amount if request else None
+        if pending_amount is None and request is not None:
+            pending_amount = request.order_item.unit_price * request.quantity
+        if exceeds_vendor_self_refund_limit(pending_amount):
+            raise ReturnRequestError(
+                f"Refunds above {float(settings.vendor_self_refund_limit):.2f} need "
+                "ODOS approval. Mark the item received and an admin will settle it."
+            )
+
     result = apply_return_request_status_change(
         db,
         return_request_id,
@@ -246,5 +394,6 @@ def update_vendor_return_request(
         note=vendor_note,
         refund_amount=None,
         reviewed_by_user_id=user.id,
+        actor_role="vendor",
     )
     return result.request

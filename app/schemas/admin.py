@@ -929,6 +929,11 @@ class AdminReturnRequestUpdate(BaseModel):
     status: str = Field(min_length=1, max_length=30)
     admin_note: str | None = Field(default=None, max_length=1000)
     refund_amount: float | None = Field(default=None, ge=0)
+    # Settle without the item coming back — a damaged product the seller does
+    # not want returned. Explicit, because the default must never be "pay out
+    # for goods nobody has seen".
+    waive_return: bool = False
+    received_condition_note: str | None = Field(default=None, max_length=500)
 
     @field_validator("status", "admin_note", mode="before")
     @classmethod
