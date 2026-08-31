@@ -19,7 +19,7 @@ router = APIRouter(prefix="/reviews", tags=["reviews"])
 @router.get("/products/{product_id}", response_model=list[ProductReviewRead])
 def get_product_reviews(
     product_id: str,
-    limit: int = Query(default=20, ge=1, le=50),
+    limit: int = Query(default=20, ge=1, le=200),
     db: Session = Depends(get_db),
 ):
     return list_product_reviews(db, product_id, limit=limit)

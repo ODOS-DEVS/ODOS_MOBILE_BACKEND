@@ -34,6 +34,11 @@ class ProductReviewRead(BaseModel):
     user_display_name: str
     created_at: datetime
     updated_at: datetime
+    # A shop that answers its reviews is the strongest signal on the page, and
+    # the reply was already being stored -- it just never left the vendor's own
+    # dashboard.
+    vendor_reply: str | None = None
+    vendor_replied_at: datetime | None = None
 
 
 class UserReviewRead(BaseModel):
