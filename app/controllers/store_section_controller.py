@@ -193,6 +193,27 @@ def reorder_vendor_sections(
     return _serialize(ordered, product_counts(db, [s.id for s in ordered]))
 
 
+def fetch_section_product_ids(
+    db: Session, user: User, section_id: uuid.UUID
+) -> list[str]:
+    """Which products are on this shelf, from the vendor's point of view.
+
+    Unlike the customer endpoint this does not hide out-of-stock or unapproved
+    products: the picker has to show them ticked, or a vendor would re-add an
+    item that is already there and wonder why nothing changed.
+    """
+    store = _require_store(db, user)
+    section = _owned_section(db, store, section_id)
+    return [
+        str(pid)
+        for pid in db.scalars(
+            select(StoreSectionProduct.product_id)
+            .where(StoreSectionProduct.section_id == section.id)
+            .order_by(StoreSectionProduct.sort_order)
+        ).all()
+    ]
+
+
 def add_products_to_section(
     db: Session,
     user: User,

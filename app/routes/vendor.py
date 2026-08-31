@@ -66,6 +66,7 @@ from app.models import User
 from app.schemas.user import MessageResponse
 from app.controllers.store_section_controller import (
     add_products_to_section,
+    fetch_section_product_ids,
     create_vendor_section,
     delete_vendor_section,
     fetch_starter_suggestions,
@@ -819,6 +820,16 @@ def delete_store_section(
     db: Session = Depends(get_db),
 ):
     delete_vendor_section(db, current_user, section_id)
+
+
+@router.get("/store/sections/{section_id}/products", response_model=list[str])
+def get_store_section_products(
+    section_id: uuid.UUID,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    """Product ids on this shelf, so the picker can show them already ticked."""
+    return fetch_section_product_ids(db, current_user, section_id)
 
 
 @router.post("/store/sections/{section_id}/products", response_model=VendorStoreSectionRead)
