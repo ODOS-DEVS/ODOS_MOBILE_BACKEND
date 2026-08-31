@@ -42,7 +42,9 @@ from app.core.cache import (
 )
 from app.core.database import get_db
 from app.services.deal_catalog_service import list_deal_products
+from app.services.store_section_service import list_sections, products_in_section
 from app.schemas.catalog import (
+    StoreSectionRead,
     CategoryRead,
     FlashSaleEventRead,
     MarketRead,
@@ -200,6 +202,45 @@ def get_stores(
         ),
         response=response,
     )
+
+
+@router.get("/stores/{store_id}/sections", response_model=list[StoreSectionRead])
+def get_store_sections(store_id: str, db: Session = Depends(get_db)):
+    """The shelves a shop arranged, for its own page.
+
+    Sections are per-store and deliberately not exposed as a cross-store filter:
+    two shops with a "Kids" shelf do not mean the same thing by it, so allowing
+    them to feed a shared filter would quietly corrupt browse results.
+
+    Empty and inactive shelves are omitted. A shop page showing "Perfumes (0)"
+    reads as abandoned, and a shelf holding only out-of-stock items is empty as
+    far as a shopper is concerned — which is why visibility is judged on stock
+    rather than on assignment.
+    """
+    store = get_store(db, store_id)
+    if not store:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="That store was not found.",
+        )
+
+    payload: list[StoreSectionRead] = []
+    for section in list_sections(db, store_id):
+        if not section.is_active:
+            continue
+        products = products_in_section(db, section.id, visible_only=True)
+        if not products:
+            continue
+        payload.append(
+            StoreSectionRead(
+                id=section.id,
+                title=section.title,
+                slug=section.slug,
+                sort_order=section.sort_order,
+                products=[ProductRead.model_validate(p) for p in products],
+            )
+        )
+    return payload
 
 
 @router.get("/stores/{store_id}", response_model=StoreRead)

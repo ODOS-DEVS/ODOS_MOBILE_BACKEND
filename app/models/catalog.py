@@ -2,7 +2,15 @@ from datetime import datetime
 
 import uuid
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, func
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -540,4 +548,104 @@ class MerchandisingCampaignOptIn(Base):
         server_default=func.now(),
         onupdate=func.now(),
         nullable=False,
+    )
+
+
+class StoreSection(Base):
+    """A shelf inside one shop, named by that shop.
+
+    Distinct from Category, which is platform-wide and shared: categories answer
+    "show me all shoes on ODOS" and only work because every store uses the same
+    words. A section answers "what is in this shop", and only works because the
+    shop chose the words itself — a bookshop's "Forex" means nothing to a
+    fashion store.
+
+    Sections are therefore never used to filter across stores. Letting two shops
+    that both have a "Kids" shelf feed the same cross-store filter would quietly
+    corrupt search results.
+    """
+
+    __tablename__ = "store_sections"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    store_id: Mapped[str] = mapped_column(
+        String(50),
+        ForeignKey("stores.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    title: Mapped[str] = mapped_column(String(80), nullable=False)
+    slug: Mapped[str] = mapped_column(String(80), nullable=False)
+    sort_order: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    # Hidden without deleting, so the products keep their placement and the
+    # shelf can come back without re-filing everything.
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        # One shop cannot have two shelves with the same name; two different
+        # shops both can.
+        UniqueConstraint("store_id", "slug", name="uq_store_sections_store_slug"),
+    )
+
+
+class StoreSectionProduct(Base):
+    """Which products sit on which shelf.
+
+    Many-to-many on purpose: a pair of jeans belongs under "Jeans" and can also
+    appear under "Sale" without being moved out of where it lives.
+    """
+
+    __tablename__ = "store_section_products"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    section_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("store_sections.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    product_id: Mapped[str] = mapped_column(
+        String(100),
+        ForeignKey("products.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    sort_order: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        # Assigning a product to a shelf it is already on is a no-op, not a
+        # duplicate row that would show the item twice on the store page.
+        UniqueConstraint(
+            "section_id", "product_id", name="uq_store_section_products_section_product"
+        ),
     )
