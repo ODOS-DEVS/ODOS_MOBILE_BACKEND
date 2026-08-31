@@ -199,3 +199,15 @@ class SearchResponseRead(BaseModel):
 from app.schemas.voucher import StoreVoucherRead  # noqa: E402
 
 DealsHubRead.model_rebuild()
+
+
+class StoreSectionRead(BaseModel):
+    """A shelf on a store page, with the products currently on it."""
+
+    id: uuid.UUID
+    title: str
+    slug: str
+    sort_order: int
+    products: list[ProductRead]
+
+    model_config = ConfigDict(from_attributes=True)

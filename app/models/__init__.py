@@ -21,6 +21,8 @@ from app.models.catalog import (
     Product,
     PromoBanner,
     Store,
+    StoreSection,
+    StoreSectionProduct,
 )
 from app.models.delivery_settings import DeliverySettings
 from app.models.inventory import InventoryMovement
@@ -108,6 +110,8 @@ __all__ = [
     "SavedAddress",
     "SavedPaymentMethod",
     "Store",
+    "StoreSection",
+    "StoreSectionProduct",
     "SystemEventLog",
     "User",
     "UserAuthAccount",

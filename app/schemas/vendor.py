@@ -682,3 +682,45 @@ class VendorAnalyticsRead(BaseModel):
     open_returns: int
     top_products: list[VendorTopProductRead]
     daily_points: list[VendorAnalyticsDailyPoint] = []
+
+
+class VendorStoreSectionRead(BaseModel):
+    id: uuid.UUID
+    title: str
+    slug: str
+    sort_order: int
+    is_active: bool
+    product_count: int = 0
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class VendorStoreSectionCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=80)
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def strip_title(cls, value: str) -> str:
+        return value.strip() if isinstance(value, str) else value
+
+
+class VendorStoreSectionUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=80)
+    is_active: bool | None = None
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def strip_title(cls, value: str | None) -> str | None:
+        return value.strip() if isinstance(value, str) else value
+
+
+class VendorStoreSectionReorder(BaseModel):
+    section_ids: list[uuid.UUID] = Field(min_length=1)
+
+
+class VendorStoreSectionProductsUpdate(BaseModel):
+    product_ids: list[str] = Field(min_length=1)
+
+
+class VendorStoreSectionSuggestions(BaseModel):
+    titles: list[str]

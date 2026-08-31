@@ -2,6 +2,8 @@ import json
 from typing import Annotated
 from uuid import UUID
 
+import uuid
+
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -62,6 +64,24 @@ from app.core.auth import get_current_user
 from app.core.database import get_db
 from app.models import User
 from app.schemas.user import MessageResponse
+from app.controllers.store_section_controller import (
+    add_products_to_section,
+    create_vendor_section,
+    delete_vendor_section,
+    fetch_starter_suggestions,
+    fetch_vendor_sections,
+    remove_product_from_section,
+    reorder_vendor_sections,
+    update_vendor_section,
+)
+from app.schemas.vendor import (
+    VendorStoreSectionCreate,
+    VendorStoreSectionProductsUpdate,
+    VendorStoreSectionRead,
+    VendorStoreSectionReorder,
+    VendorStoreSectionSuggestions,
+    VendorStoreSectionUpdate,
+)
 from app.schemas.vendor import (
     VendorAnalyticsRead,
     VendorApplicationRead,
@@ -741,3 +761,84 @@ async def patch_vendor_store(
         logo_image=logo_image,
         banner_image=banner_image,
     )
+
+
+@router.get("/store/sections", response_model=list[VendorStoreSectionRead])
+def get_store_sections(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return fetch_vendor_sections(db, current_user)
+
+
+@router.get("/store/sections/starter-suggestions", response_model=VendorStoreSectionSuggestions)
+def get_store_section_suggestions(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    """Shelves to offer a vendor whose sections screen is empty."""
+    return fetch_starter_suggestions(db, current_user)
+
+
+@router.post(
+    "/store/sections",
+    response_model=VendorStoreSectionRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def post_store_section(
+    payload: VendorStoreSectionCreate,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return create_vendor_section(db, current_user, payload)
+
+
+@router.post("/store/sections/reorder", response_model=list[VendorStoreSectionRead])
+def post_store_sections_reorder(
+    payload: VendorStoreSectionReorder,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return reorder_vendor_sections(db, current_user, payload)
+
+
+@router.patch("/store/sections/{section_id}", response_model=VendorStoreSectionRead)
+def patch_store_section(
+    section_id: uuid.UUID,
+    payload: VendorStoreSectionUpdate,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return update_vendor_section(db, current_user, section_id, payload)
+
+
+@router.delete("/store/sections/{section_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_store_section(
+    section_id: uuid.UUID,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    delete_vendor_section(db, current_user, section_id)
+
+
+@router.post("/store/sections/{section_id}/products", response_model=VendorStoreSectionRead)
+def post_store_section_products(
+    section_id: uuid.UUID,
+    payload: VendorStoreSectionProductsUpdate,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return add_products_to_section(db, current_user, section_id, payload)
+
+
+@router.delete(
+    "/store/sections/{section_id}/products/{product_id}",
+    response_model=VendorStoreSectionRead,
+)
+def delete_store_section_product(
+    section_id: uuid.UUID,
+    product_id: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return remove_product_from_section(db, current_user, section_id, product_id)
