@@ -122,6 +122,8 @@ def list_product_reviews(
             user_display_name=_build_user_display_name(review.user),
             created_at=review.created_at,
             updated_at=review.updated_at,
+            vendor_reply=review.vendor_reply,
+            vendor_replied_at=review.vendor_replied_at,
         )
         for review in reviews
     ]
