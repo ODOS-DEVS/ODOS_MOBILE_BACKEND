@@ -125,5 +125,13 @@ def products_in_section(
         .order_by(StoreSectionProduct.sort_order, Product.title)
     )
     if visible_only:
-        query = query.where(Product.stock > 0)
+        # The same three conditions the public catalog uses. Filtering on stock
+        # alone would put products still awaiting admin approval, and ones the
+        # vendor deactivated, onto the store page through a section — a way
+        # around moderation that exists nowhere else in the catalog.
+        query = query.where(
+            Product.is_active.is_(True),
+            Product.status == "active",
+            Product.stock > 0,
+        )
     return list(db.scalars(query).all())
