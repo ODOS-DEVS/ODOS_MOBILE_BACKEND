@@ -1148,10 +1148,25 @@ def update_admin_vendor_withdrawal_request(
         )
         request.paid_at = None
 
+    # Read before the overwrite: request.status is mutated in place, so the
+    # audit entry would otherwise record the new value as both before and after.
+    previous_status = request.status
     request.status = next_status
     request.admin_note = payload.admin_note
     request.reviewed_by_user_id = current_user.id
     request.reviewed_at = datetime.now(UTC)
+
+    log_admin_withdrawal_decision(
+        db,
+        admin_user=current_user,
+        withdrawal_request_id=str(request.id),
+        vendor_user_id=str(request.vendor_user_id),
+        amount=float(request.amount),
+        currency=str(wallet.currency),
+        before_status=previous_status,
+        after_status=next_status,
+        admin_note=payload.admin_note,
+    )
 
     if next_status == "paid":
         message_title = "Withdrawal paid out"

@@ -47,6 +47,7 @@ from app.core.redis_client import close_redis, get_redis
 from app.services.realtime_service import realtime_manager
 from app.services.delivery_auto_release_service import process_delivery_auto_release
 from app.services.delivery_ops_monitor_service import process_delivery_sla_alerts
+from app.services.financial_integrity_service import run_financial_integrity_check
 from app.services.payment_reconciliation_service import process_stuck_payment_reconciliation
 from app.services.promo_reminder_service import process_promo_expiry_reminders
 from app.services.vendor_order_reminder_service import process_vendor_order_reminders
@@ -58,6 +59,7 @@ DELIVERY_SLA_MONITOR_INTERVAL_SECONDS = 120
 PROMO_REMINDER_INTERVAL_SECONDS = 1800
 PAYMENT_RECONCILIATION_INTERVAL_SECONDS = 300
 DELIVERY_AUTO_RELEASE_INTERVAL_SECONDS = 1800
+FINANCIAL_INTEGRITY_INTERVAL_SECONDS = 3600
 logger = logging.getLogger(__name__)
 
 
@@ -140,6 +142,15 @@ async def _payment_reconciliation_loop() -> None:
         await asyncio.sleep(PAYMENT_RECONCILIATION_INTERVAL_SECONDS)
 
 
+async def _financial_integrity_loop() -> None:
+    while True:
+        try:
+            await asyncio.to_thread(run_financial_integrity_check)
+        except Exception:
+            logger.exception("Financial integrity check failed")
+        await asyncio.sleep(FINANCIAL_INTEGRITY_INTERVAL_SECONDS)
+
+
 async def _delivery_auto_release_loop() -> None:
     while True:
         try:
@@ -173,6 +184,7 @@ async def on_startup() -> None:
     asyncio.create_task(_promo_reminder_loop())
     asyncio.create_task(_payment_reconciliation_loop())
     asyncio.create_task(_delivery_auto_release_loop())
+    asyncio.create_task(_financial_integrity_loop())
 
 
 @app.on_event("shutdown")

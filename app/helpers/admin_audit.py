@@ -186,3 +186,39 @@ def log_admin_return_resolution(
         ip_address=ip_address,
         user_agent=user_agent,
     )
+
+
+def log_admin_withdrawal_decision(
+    db: Session,
+    *,
+    admin_user: User,
+    withdrawal_request_id: str,
+    vendor_user_id: str,
+    amount: float,
+    currency: str,
+    before_status: str,
+    after_status: str,
+    admin_note: str | None,
+    ip_address: str | None = None,
+    user_agent: str | None = None,
+) -> None:
+    """Audit a withdrawal decision.
+
+    Approving or paying a withdrawal is the only admin action that moves money
+    *out* of the platform, and it previously left nothing behind but the request
+    row — whose reviewer field is overwritten on each change. If a payout is ever
+    disputed, this is the record that answers who released it.
+    """
+    record_admin_event(
+        db,
+        admin_user=admin_user,
+        event_type=ADMIN_ORDER_MUTATION,
+        action=f"withdrawal.{after_status}",
+        entity_type="vendor_withdrawal_request",
+        entity_id=withdrawal_request_id,
+        before_state={"status": before_status},
+        after_state={"status": after_status, "amount": amount, "currency": currency},
+        metadata={"vendor_user_id": vendor_user_id, "admin_note": admin_note},
+        ip_address=ip_address,
+        user_agent=user_agent,
+    )

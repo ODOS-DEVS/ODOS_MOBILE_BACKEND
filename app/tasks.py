@@ -83,3 +83,16 @@ def delivery_auto_release() -> str:
     from app.services.delivery_auto_release_service import process_delivery_auto_release
 
     return _run("delivery_auto_release", process_delivery_auto_release)
+
+
+@celery_app.task(name="app.tasks.financial_integrity_check")
+def financial_integrity_check() -> str:
+    """Assert that wallet balances still equal the sum of their transactions.
+
+    Read-only. Everything else in the financial system is correct by
+    construction; this is the only thing that would notice if it stopped being.
+    A discrepancy is logged for a human rather than auto-corrected.
+    """
+    from app.services.financial_integrity_service import run_financial_integrity_check
+
+    return _run("financial_integrity_check", run_financial_integrity_check)

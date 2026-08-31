@@ -9,7 +9,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from fastapi import HTTPException, Request, status
 from fastapi.responses import HTMLResponse
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.controllers.finance_controller import record_payment_collection
@@ -196,6 +196,27 @@ def _apply_successful_payment(
             detail="We couldn't load the order tied to this payment.",
         )
 
+    # Serialize concurrent confirmations of the same payment.
+    #
+    # The webhook and the client's own verify call routinely arrive together —
+    # the app calls verify the moment Paystack returns, which is roughly when
+    # the webhook fires. Without this lock both read payment_status as not-paid,
+    # both proceed, and the second collection is stopped only by the ledger's
+    # (payment_transaction_id, kind) unique constraint. The money stays correct,
+    # but the caller gets a 500 and Paystack retries an event that was fine.
+    #
+    # populate_existing is required: SQLAlchemy would otherwise hand back the
+    # already-loaded instance from the identity map, so the lock would be held
+    # while payment_status was still read from a stale in-memory value.
+    locked_order = db.scalar(
+        select(Order)
+        .where(Order.id == order.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if locked_order is not None:
+        order = locked_order
+
     now = datetime.now(UTC)
     paid_at = provider_payload.get("paid_at") or provider_payload.get("created_at")
     preferred_paid_at = None
@@ -245,6 +266,9 @@ def _apply_successful_payment(
         _dispatch_vendor_new_order_alerts(db, order)
         db.commit()
     else:
+        # Already confirmed by whichever caller got here first. Committing the
+        # provider-metadata refresh above is enough; re-running collection would
+        # be caught by a constraint, which is not how a duplicate should surface.
         db.commit()
         db.refresh(order)
 
@@ -578,11 +602,43 @@ def handle_paystack_webhook(
     event_type = str(payload.get("event") or "").strip().lower()
     event_data = payload.get("data") or {}
     reference = event_data.get("reference")
+
+    # Two dedup keys, because they fail in different ways.
+    #
+    # The raw-body digest catches a byte-identical retry, which is the common
+    # case. It misses a retry whose body differs in any field — a timestamp, an
+    # ordering change — and then the same real-world event is processed twice.
+    #
+    # The semantic digest covers that: provider, event type, reference and the
+    # provider's own transaction id identify the event itself rather than its
+    # encoding. Downstream guards would still keep the money correct, but a
+    # duplicate should be recognised here rather than surfacing as a constraint
+    # violation three layers down.
+    provider_event_id = event_data.get("id")
+    semantic_digest = hashlib.sha256(
+        "|".join(
+            [
+                "paystack",
+                event_type,
+                str(reference or ""),
+                str(provider_event_id or ""),
+            ]
+        ).encode("utf-8")
+    ).hexdigest()
     event_digest = hashlib.sha256(raw_body).hexdigest()
 
+    # A semantic match only counts once the earlier delivery was actually
+    # processed. A previous attempt that failed mid-flight must be allowed to
+    # run again, which is the whole point of the provider retrying.
     existing_event = db.scalar(
         select(PaymentWebhookEvent).where(
-            PaymentWebhookEvent.event_digest == event_digest
+            or_(
+                PaymentWebhookEvent.event_digest == event_digest,
+                and_(
+                    PaymentWebhookEvent.event_digest == semantic_digest,
+                    PaymentWebhookEvent.processing_status == "processed",
+                ),
+            )
         )
     )
     if existing_event:
@@ -597,6 +653,23 @@ def handle_paystack_webhook(
         payload=payload,
     )
     db.add(webhook_event)
+
+    # The semantic key is recorded as its own row so a later, differently-encoded
+    # delivery of the same event matches it. Kept as a separate row rather than a
+    # new column so the existing unique index on event_digest does the enforcing.
+    if provider_event_id is not None and semantic_digest != event_digest:
+        db.add(
+            PaymentWebhookEvent(
+                provider="paystack",
+                event_type=event_type,
+                event_digest=semantic_digest,
+                reference=reference,
+                signature=None,
+                payload={"semantic_key_for": event_digest},
+                processing_status="processed",
+                processed_at=datetime.now(UTC),
+            )
+        )
     db.flush()
 
     try:
