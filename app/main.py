@@ -38,6 +38,7 @@ from app.routes import (
     reviews,
     vouchers,
     vendor,
+    courier,
     vendor_analytics,
     vendor_campaigns,
     vendor_inventory,
@@ -224,6 +225,7 @@ app.include_router(realtime.router, prefix="/api")
 app.include_router(reviews.router, prefix="/api")
 app.include_router(vouchers.router, prefix="/api")
 app.include_router(vendor.router, prefix="/api")
+app.include_router(courier.router, prefix="/api")
 app.include_router(vendor_analytics.router, prefix="/api")
 app.include_router(vendor_campaigns.router, prefix="/api")
 app.include_router(vendor_inventory.router, prefix="/api")
