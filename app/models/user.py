@@ -17,12 +17,14 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
+from app.models.courier import CourierStatus
 
 
 class UserRole(str, enum.Enum):
     CUSTOMER = "customer"
     VENDOR = "vendor"
     ADMIN = "admin"
+    COURIER = "courier"
 
 
 class VendorStatus(str, enum.Enum):
@@ -173,6 +175,20 @@ class User(Base):
         nullable=False,
     )
     vendor_rejection_reason: Mapped[str | None] = mapped_column(
+        String(255),
+        nullable=True,
+    )
+    courier_status: Mapped[CourierStatus] = mapped_column(
+        Enum(
+            CourierStatus,
+            name="courier_status",
+            values_callable=lambda values: [value.value for value in values],
+        ),
+        default=CourierStatus.NONE,
+        server_default=CourierStatus.NONE.value,
+        nullable=False,
+    )
+    courier_rejection_reason: Mapped[str | None] = mapped_column(
         String(255),
         nullable=True,
     )
@@ -386,6 +402,9 @@ class User(Base):
 
         if self.role == UserRole.VENDOR or self.vendor_status == VendorStatus.APPROVED:
             roles.append(UserRole.VENDOR.value)
+
+        if self.role == UserRole.COURIER or self.courier_status == CourierStatus.APPROVED:
+            roles.append(UserRole.COURIER.value)
 
         return roles
 
