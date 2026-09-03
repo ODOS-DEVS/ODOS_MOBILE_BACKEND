@@ -89,6 +89,32 @@ class Order(Base):
     dispatch_photo_key: Mapped[str | None] = mapped_column(String(100), nullable=True)
     departure_notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    # --- Courier fulfilment (opt-in; see app/models/courier.py) ---
+    # Null for every order that stays on today's flow: vendor dispatches to
+    # their own external rider, delivery_status moves straight to
+    # out_for_delivery, unchanged. Set only for orders a courier claimed or
+    # was assigned. The delivery_status state machine gains courier states
+    # (ready_for_pickup, courier_assigned, picked_up, delivered_by_courier) as
+    # a Phase 2 addition -- deliberately not wired here, so this column can
+    # land and be tested without touching the transition table the existing,
+    # working vendor-dispatch flow depends on.
+    courier_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("couriers.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    courier_assigned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    courier_picked_up_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # The courier's own certification -- parallel to, and independent of, the
+    # customer-confirm fields below. Moving delivery_status forward on this
+    # alone would repeat the vendor self-certification problem this codebase
+    # already rejected once; settlement still waits for customer confirmation
+    # or auto-release, exactly as it does today.
+    courier_delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    delivery_proof_image_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    delivery_proof_note: Mapped[str | None] = mapped_column(String(280), nullable=True)
+
     address_full_name: Mapped[str] = mapped_column(String(120), nullable=False)
     address_phone: Mapped[str] = mapped_column(String(30), nullable=False)
     address_street: Mapped[str] = mapped_column(String(255), nullable=False)

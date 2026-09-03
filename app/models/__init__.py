@@ -6,6 +6,16 @@ from app.models.assistant import (
     AssistantMessageRole,
 )
 from app.models.chat import ChatMessage, ChatThread, ChatThreadType, SupportChatStatus
+from app.models.courier import (
+    Courier,
+    CourierApplication,
+    CourierStatus,
+    CourierWallet,
+    CourierWalletTransaction,
+    CourierWithdrawalRequest,
+    DeliveryOffer,
+    VehicleType,
+)
 from app.models.notification import NotificationEvent, NotificationRead
 from app.models.catalog import (
     Category,
@@ -79,6 +89,14 @@ __all__ = [
     "ChatMessage",
     "ChatThread",
     "ChatThreadType",
+    "Courier",
+    "CourierApplication",
+    "CourierStatus",
+    "CourierWallet",
+    "CourierWalletTransaction",
+    "CourierWithdrawalRequest",
+    "DeliveryOffer",
+    "VehicleType",
     "CustomerWallet",
     "CustomerWalletTopUp",
     "CustomerWalletTransaction",
