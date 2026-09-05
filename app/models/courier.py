@@ -196,8 +196,10 @@ class Courier(Base):
 
 
 class DeliveryOffer(Base):
-    """The claim pool. One row per order once the vendor marks it ready for
-    pickup.
+    """The claim pool. One row per *offer* of a delivery -- a delivery can be
+    offered more than once over its life (the first rider let it expire, an
+    accepted delivery was abandoned, a failed one needs a return leg), and each
+    of those is a new row rather than an edit of the old one.
 
     Claiming is a SELECT ... FOR UPDATE SKIP LOCKED against this row: the
     first courier to grab the lock wins, everyone else sees it as already
@@ -215,6 +217,18 @@ class DeliveryOffer(Base):
         UUID(as_uuid=True),
         ForeignKey("orders.id", ondelete="CASCADE"),
         nullable=False,
+    )
+    delivery_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("deliveries.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    # Why an offer stopped being open, when it did so without being claimed:
+    # expired | superseded | cancelled. Null while open or once claimed.
+    closed_reason: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    closed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
     # Scopes visibility: set means only that vendor's own couriers may see or
     # claim it. Null means ODOS's open pool.
@@ -254,10 +268,18 @@ class DeliveryOffer(Base):
     claimed_by_courier: Mapped["Courier | None"] = relationship()
 
     __table_args__ = (
-        # One active offer per order -- a second offer for an order that
-        # already has one open would let two couriers claim the same delivery
-        # through two different rows.
-        UniqueConstraint("order_id", name="uq_delivery_offers_order_id"),
+        # One *open* offer per delivery. The old constraint was a plain unique
+        # on order_id, which bought the same safety at the cost of ever
+        # re-offering an order -- an abandoned claim or an expired offer left
+        # the order permanently unofferable. Partial-unique keeps the guarantee
+        # (two riders can never race through two different open rows) while
+        # letting closed offers accumulate as history.
+        Index(
+            "uq_delivery_offers_open_per_delivery",
+            "delivery_id",
+            unique=True,
+            postgresql_where=text("status = 'open'"),
+        ),
         Index("ix_delivery_offers_status_vendor", "status", "vendor_id"),
     )
 
