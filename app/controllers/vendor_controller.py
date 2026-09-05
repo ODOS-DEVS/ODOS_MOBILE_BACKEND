@@ -85,6 +85,10 @@ from app.services.delivery_service import (
     tracking_eta_for_vendor_status,
 )
 from app.services.delivery_lifecycle_service import dispatch_order
+from app.services.delivery_dispatch_service import (
+    offer_ready_order,
+    request_courier_for_order,
+)
 from app.services.order_timeline_service import record_order_status_event
 
 logger = logging.getLogger(__name__)
@@ -2045,6 +2049,59 @@ def _get_vendor_voucher(db: Session, user: User, voucher_id: str) -> Voucher:
     return voucher
 
 
+def request_odos_courier(db: Session, user: User, order_id: str) -> dict:
+    """Vendor asks ODOS to deliver an order instead of using their own rider.
+
+    Opt-in per order, which is what keeps this from changing the meaning of
+    "ready" for every vendor already on the platform. Idempotent: asking twice
+    returns the delivery that already exists rather than creating a second one
+    (the partial unique index on deliveries would reject it anyway).
+    """
+    require_vendor_access(user)
+
+    order = db.scalar(
+        select(Order)
+        .options(selectinload(Order.items))
+        .where(Order.id == order_id)
+        .with_for_update()
+    )
+    if not order:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="That order was not found."
+        )
+
+    # Same ownership test the status endpoint uses: the vendor must actually
+    # have items on this order. Checked against the product's owner as well as
+    # the denormalized vendor_user_id, because older rows can have the latter
+    # unset.
+    owns_any = False
+    for item in order.items:
+        if item.vendor_user_id == user.id:
+            owns_any = True
+            break
+        if db.scalar(
+            select(Product.id).where(
+                Product.id == item.product_id, Product.vendor_user_id == user.id
+            )
+        ):
+            owns_any = True
+            break
+    if not owns_any:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="That order was not found for this vendor.",
+        )
+
+    delivery = request_courier_for_order(db, order, actor=user)
+    db.commit()
+    db.refresh(delivery)
+    return {
+        "delivery_id": str(delivery.id),
+        "status": delivery.status,
+        "order_number": order.order_number,
+    }
+
+
 def update_vendor_order_status(
     db: Session,
     user: User,
@@ -2150,6 +2207,10 @@ def update_vendor_order_status(
         order.cancellation_reason = None
     else:
         record_order_status_event(db, order, status=next_status, actor_role="vendor", actor_id=user.id)
+        if next_status == "ready":
+            # No-op unless this vendor asked ODOS to deliver this order. Every
+            # order that stays on the vendor's own dispatch flow is unaffected.
+            offer_ready_order(db, order, actor=user)
         order.status = "processing"
         progress_map = {
             "pending": 0.1,

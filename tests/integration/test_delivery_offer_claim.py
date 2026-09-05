@@ -66,6 +66,35 @@ def _make_ready_order(session):
     return order
 
 
+def _make_delivery_and_offer(session, order, *, status: str = "open", vendor_id=None):
+    """An offer is now always attached to a delivery -- the delivery is the
+    thing a rider ends up holding, and the offer is one invitation to hold it."""
+    from app.models import Delivery, DeliveryOffer
+
+    delivery = Delivery(
+        order_id=order.id,
+        vendor_id=vendor_id,
+        status="offered",
+        dropoff_area="Accra, Greater Accra",
+        dropoff_address="1 Test Street, Accra, Greater Accra",
+        offered_at=datetime.now(UTC),
+    )
+    session.add(delivery)
+    session.flush()
+
+    offer = DeliveryOffer(
+        order_id=order.id,
+        delivery_id=delivery.id,
+        vendor_id=vendor_id,
+        status=status,
+        claimed_at=datetime.now(UTC) if status == "claimed" else None,
+        sla_deadline=datetime.now(UTC) + timedelta(minutes=15),
+    )
+    session.add(offer)
+    session.flush()
+    return delivery, offer
+
+
 @pytest.fixture
 def make_buyer(db):
     from app.models import User
@@ -105,19 +134,16 @@ def test_claiming_an_offer_marks_it_claimed_and_assigns_the_order(
     db.add(order)
     db.flush()
 
-    offer = DeliveryOffer(
-        order_id=order.id,
-        status="open",
-        sla_deadline=datetime.now(UTC) + timedelta(minutes=15),
-    )
-    db.add(offer)
-    db.flush()
+    delivery, offer = _make_delivery_and_offer(db, order)
 
     courier_user, courier = _make_courier_with_profile(db)
 
     result = claim_delivery_offer(db, courier_user, offer.id)
 
-    assert result.status == "claimed"
+    # The claim now returns the delivery the rider is holding, not the offer.
+    assert result.status == "accepted"
+    db.refresh(offer)
+    assert offer.status == "claimed"
     db.refresh(order)
     assert order.courier_id == courier.id
     assert order.courier_assigned_at is not None
@@ -146,14 +172,7 @@ def test_claiming_an_already_claimed_offer_is_rejected(db, make_buyer):
     db.add(order)
     db.flush()
 
-    offer = DeliveryOffer(
-        order_id=order.id,
-        status="claimed",
-        claimed_at=datetime.now(UTC),
-        sla_deadline=datetime.now(UTC) + timedelta(minutes=15),
-    )
-    db.add(offer)
-    db.flush()
+    _delivery, offer = _make_delivery_and_offer(db, order, status="claimed")
 
     _, courier = _make_courier_with_profile(db)
     _2, courier2 = _make_courier_with_profile(db)
@@ -193,14 +212,9 @@ def test_two_couriers_claiming_the_same_offer_concurrently_exactly_one_wins():
         setup.add(order)
         setup.flush()
 
-        offer = DeliveryOffer(
-            order_id=order.id,
-            status="open",
-            sla_deadline=datetime.now(UTC) + timedelta(minutes=15),
-        )
-        setup.add(offer)
-        setup.flush()
+        delivery, offer = _make_delivery_and_offer(setup, order)
         offer_id = offer.id
+        delivery_id = delivery.id
 
         courier_ids = []
         for _ in range(2):
@@ -254,6 +268,8 @@ def test_two_couriers_claiming_the_same_offer_concurrently_exactly_one_wins():
 
         cleanup_order_id = final_offer.order_id
         check.execute(text("DELETE FROM delivery_offers WHERE id = :i"), {"i": offer_id})
+        check.execute(text("DELETE FROM delivery_events WHERE delivery_id = :i"), {"i": delivery_id})
+        check.execute(text("DELETE FROM deliveries WHERE id = :i"), {"i": delivery_id})
         check.execute(text("DELETE FROM orders WHERE id = :i"), {"i": cleanup_order_id})
         for cid in courier_ids:
             check.execute(text("DELETE FROM couriers WHERE user_id = :u"), {"u": cid})

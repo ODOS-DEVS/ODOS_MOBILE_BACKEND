@@ -43,6 +43,7 @@ from app.controllers.vendor_controller import (
     list_vendor_voucher_redemptions,
     list_vendor_vouchers,
     notify_vendor_order_departure,
+    request_odos_courier,
     patch_vendor_product_stock,
     patch_vendor_return_request,
     reply_to_vendor_review,
@@ -685,6 +686,20 @@ def post_vendor_order_notify_departure(
     db: Session = Depends(get_db),
 ):
     return notify_vendor_order_departure(db, current_user, order_id)
+
+
+@router.post("/orders/{order_id}/request-courier")
+def post_vendor_request_courier(
+    order_id: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    """Ask ODOS to deliver this order with one of its riders.
+
+    Opt-in per order. An order the vendor never asks about keeps the existing
+    behaviour exactly: they dispatch it to their own rider themselves.
+    """
+    return request_odos_courier(db, current_user, order_id)
 
 
 @router.get("/store", response_model=VendorStoreRead)

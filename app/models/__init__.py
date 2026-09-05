@@ -34,6 +34,14 @@ from app.models.catalog import (
     StoreSection,
     StoreSectionProduct,
 )
+from app.models.delivery import (
+    ACTIVE_STATUSES,
+    TERMINAL_STATUSES,
+    Delivery,
+    DeliveryAttempt,
+    DeliveryEvent,
+    DeliveryStatus,
+)
 from app.models.delivery_settings import DeliverySettings
 from app.models.inventory import InventoryMovement
 from app.models.order import (
@@ -90,12 +98,18 @@ __all__ = [
     "ChatThread",
     "ChatThreadType",
     "Courier",
+    "ACTIVE_STATUSES",
+    "TERMINAL_STATUSES",
     "CourierApplication",
     "CourierStatus",
     "CourierWallet",
     "CourierWalletTransaction",
     "CourierWithdrawalRequest",
+    "Delivery",
+    "DeliveryAttempt",
+    "DeliveryEvent",
     "DeliveryOffer",
+    "DeliveryStatus",
     "VehicleType",
     "CustomerWallet",
     "CustomerWalletTopUp",
