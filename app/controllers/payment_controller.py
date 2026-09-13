@@ -1010,14 +1010,14 @@ def handle_ipay_ipn(db: Session, *, invoice_id: str | None) -> dict[str, str]:
             detail="Reported payment amount does not match the order total.",
         )
 
+    # The live gateway returns service_fee even though the docs omit it, so the
+    # ledger can record the real processor cost instead of assuming zero.
+    fee_subunit = ipay_parse_amount_to_subunit(payload.get("service_fee")) or 0
     provider_payload = {
         **payload,
-        "id": invoice_id,
+        "id": payload.get("payment_reference") or invoice_id,
         "gateway_response": _format_gateway_response(gateway_message),
-        # iPay's status response carries no per-transaction fee, so the ledger
-        # records zero here; processor fees are reconciled from iPay settlement
-        # statements rather than per payment.
-        "fees": 0,
+        "fees": fee_subunit,
         "paid_at": payload.get("as_at"),
         "authorization": extra or None,
     }

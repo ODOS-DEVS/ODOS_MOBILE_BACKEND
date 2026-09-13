@@ -89,8 +89,49 @@ def test_known_statuses_map_across(raw, expected):
 
 @pytest.mark.parametrize("raw", [None, "", "something_new", "success", "ok", 0, True])
 def test_unknown_statuses_are_never_treated_as_paid(raw):
-    # A gateway that adds a status later must not accidentally confirm orders.
-    assert normalize_status(raw) != "paid"
+    # A gateway that adds a status later must not accidentally confirm orders,
+    # and must not hard-fail a payment that might still settle either.
+    assert normalize_status(raw) == "pending"
+
+
+def test_error_status_is_pending_not_failed():
+    # The live gateway answers "error" when the invoice is not queryable yet.
+    assert normalize_status("error") == "pending"
+
+
+# --- live response envelope ----------------------------------------------
+
+def test_status_payload_is_unwrapped_from_the_invoice_id_envelope():
+    # Captured from the live gateway: the record is nested under the invoice
+    # id, not flat as the docs show. Read flat, `status` is missing and every
+    # real payment would normalise to a failure.
+    envelope = {"odos123": {"status": "paid", "amount": "12.50"}}
+    assert ipay_service._unwrap_status_payload(envelope, "odos123")["status"] == "paid"
+
+
+def test_a_flat_payload_still_works():
+    flat = {"status": "paid", "amount": "12.50"}
+    assert ipay_service._unwrap_status_payload(flat, "odos123")["status"] == "paid"
+
+
+def test_nested_paid_payload_normalises_to_paid():
+    envelope = {"odos123": {"status": "paid", "amount": "12.50"}}
+    inner = ipay_service._unwrap_status_payload(envelope, "odos123")
+    assert normalize_status(inner.get("status")) == "paid"
+
+
+def test_the_real_not_found_response_does_not_read_as_paid():
+    captured = {
+        "odosprobe1": {
+            "success": False,
+            "status": "error",
+            "status_reason": "No invoice was found using the speicified invoice_id",
+            "amount": "",
+        }
+    }
+    inner = ipay_service._unwrap_status_payload(captured, "odosprobe1")
+    assert normalize_status(inner.get("status")) == "pending"
+    assert parse_amount_to_subunit(inner.get("amount")) is None
 
 
 # --- checkout fields ------------------------------------------------------
