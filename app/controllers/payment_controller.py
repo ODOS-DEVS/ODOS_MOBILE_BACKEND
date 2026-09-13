@@ -765,9 +765,14 @@ def create_ipay_checkout_session(
         payment_reference=reference,
     )
 
+    # Paystack appends ?reference=&trxref= to its callback; iPay redirects to
+    # success_url exactly as given. Without the reference on the URL itself the
+    # return screen has nothing to verify against and reports the payment as
+    # unconfirmed even after the IPN has already settled it.
     app_return_url = _append_query_params(
         payload.callback_url or "odosmobileexpo://payments/return",
         orderId=str(order.id),
+        reference=reference,
     )
     app_cancel_url = _append_query_params(
         payload.cancel_url or payload.callback_url or "odosmobileexpo://payments/return",
@@ -903,7 +908,10 @@ def ipay_checkout_redirect(
         ),
         ipn_url=str(request.url_for("ipay_ipn")),
         customer_name=(transaction.user.full_name if transaction.user else None),
-        customer_mobile=(order.address_phone or None),
+        # The momo wallet picked at checkout, so iPay's prompt is prefilled and
+        # the customer only has to confirm. Falls back to the delivery contact
+        # when paying by card, where no wallet was chosen.
+        customer_mobile=(order.payment_phone or order.address_phone or None),
         customer_email=(transaction.user.email if transaction.user else None),
         description=f"ODOS order {order.order_number}",
     )
