@@ -583,6 +583,12 @@ def verify_checkout_session(
         user_id=current_user.id,
         reference=reference,
     )
+    # Dispatch on the provider that actually took the money. Sending an iPay
+    # reference to Paystack's verify endpoint returns "transaction not found",
+    # which would surface to the customer as a failed payment they had in fact
+    # completed.
+    if payment_transaction.provider == "ipay":
+        return _verify_ipay_payment(db, payment_transaction)
     verification_response = verify_transaction(reference)
     provider_payload = verification_response.get("data", {})
     return _reconcile_payment_transaction(db, payment_transaction, provider_payload)
@@ -951,22 +957,15 @@ def ipay_checkout_redirect(
     return HTMLResponse(content=html_body)
 
 
-def handle_ipay_ipn(db: Session, *, invoice_id: str | None) -> dict[str, str]:
-    """Handle an iPay payment notification.
+def _verify_ipay_payment(
+    db: Session,
+    transaction: PaymentTransaction,
+) -> PaymentVerificationRead:
+    """Ask iPay what happened, and decide from the answer alone.
 
-    iPay sends an unauthenticated `GET ?invoice_id=...` with no signature, so
-    nothing in this request is evidence. It is treated purely as a prompt to go
-    and ask the gateway, and the answer is then checked against the order's own
-    recorded amount before anything is released. A forged call can therefore do
-    no more than make the server re-verify a payment it already knows about.
+    Shared by the IPN and by the app's own verify call, so a payment is judged
+    the same way no matter which arrives first -- and they routinely race.
     """
-    if not invoice_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="invoice_id is required.",
-        )
-
-    transaction = _load_ipay_transaction(db, invoice_id)
     order = transaction.order
     if order is None:
         raise HTTPException(
@@ -974,7 +973,7 @@ def handle_ipay_ipn(db: Session, *, invoice_id: str | None) -> dict[str, str]:
             detail="We couldn't load the order tied to this payment.",
         )
 
-    payload = ipay_check_status(invoice_id)
+    payload = ipay_check_status(transaction.reference)
     gateway_status = ipay_normalize_status(payload.get("status"))
     extra = payload.get("extra") if isinstance(payload.get("extra"), dict) else {}
     gateway_message = (
@@ -983,6 +982,8 @@ def handle_ipay_ipn(db: Session, *, invoice_id: str | None) -> dict[str, str]:
         or payload.get("narration")
     )
     now = datetime.now(UTC)
+    transaction.raw_response = payload
+    transaction.last_checked_at = now
 
     if gateway_status != "paid":
         _mark_payment_as_unsuccessful(
@@ -992,22 +993,36 @@ def handle_ipay_ipn(db: Session, *, invoice_id: str | None) -> dict[str, str]:
             gateway_response=_format_gateway_response(gateway_message),
             now=now,
         )
-        transaction.raw_response = payload
         db.commit()
-        return {"status": gateway_status}
+        db.refresh(order)
+        return _serialize_payment_verification(
+            order,
+            transaction,
+            provider_status=gateway_status,
+            message=_unsuccessful_payment_message(
+                payment_status=transaction.status,
+                gateway_response=_format_gateway_response(gateway_message),
+            ),
+        )
 
-    # Paid according to iPay -- now confirm it paid what the order actually costs.
+    # Paid according to iPay -- now confirm it paid what the order actually
+    # costs. `total` is submitted in a form the customer's browser can edit, so
+    # this comparison against our own stored amount is the only thing standing
+    # between a tampered field and released goods.
     paid_subunit = ipay_parse_amount_to_subunit(payload.get("amount"))
     if paid_subunit is None or paid_subunit != transaction.amount_subunit:
         transaction.status = "failed"
-        transaction.gateway_response = "Amount mismatch against the order total."
-        transaction.raw_response = payload
-        transaction.last_checked_at = now
+        transaction.gateway_response = "Transaction amount mismatch."
         transaction.verified_at = now
+        if order.payment_status != "paid":
+            order.payment_status = "failed"
         db.commit()
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Reported payment amount does not match the order total.",
+        db.refresh(order)
+        return _serialize_payment_verification(
+            order,
+            transaction,
+            provider_status="failed",
+            message="Payment verification failed because the amount did not match the order.",
         )
 
     # The live gateway returns service_fee even though the docs omit it, so the
@@ -1015,11 +1030,28 @@ def handle_ipay_ipn(db: Session, *, invoice_id: str | None) -> dict[str, str]:
     fee_subunit = ipay_parse_amount_to_subunit(payload.get("service_fee")) or 0
     provider_payload = {
         **payload,
-        "id": payload.get("payment_reference") or invoice_id,
+        "id": payload.get("payment_reference") or transaction.reference,
         "gateway_response": _format_gateway_response(gateway_message),
         "fees": fee_subunit,
         "paid_at": payload.get("as_at"),
         "authorization": extra or None,
     }
-    _apply_successful_payment(db, transaction, provider_payload)
-    return {"status": "paid"}
+    return _apply_successful_payment(db, transaction, provider_payload)
+
+
+def handle_ipay_ipn(db: Session, *, invoice_id: str | None) -> dict[str, str]:
+    """Handle an iPay payment notification.
+
+    iPay sends an unauthenticated `GET ?invoice_id=...` with no signature, so
+    nothing in this request is evidence. It is treated purely as a prompt to go
+    and ask the gateway. A forged call can therefore do no more than make the
+    server re-verify a payment it already knows about.
+    """
+    if not invoice_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="invoice_id is required.",
+        )
+    transaction = _load_ipay_transaction(db, invoice_id)
+    result = _verify_ipay_payment(db, transaction)
+    return {"status": result.payment_status}
