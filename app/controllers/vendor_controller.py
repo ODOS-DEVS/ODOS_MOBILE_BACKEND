@@ -2807,6 +2807,19 @@ def list_vendor_applications(
     )
 
 
+# stores.description is VARCHAR(255), but VendorApplication holds up to 1000 chars
+# in both description fields. Copying either across without truncating raises
+# StringDataRightTruncation, which escapes as a bare 500 with no CORS headers --
+# the admin UI then reports it as "backend unreachable". 255 is the same limit the
+# vendor-facing PATCH /store enforces, so truncating here keeps one invariant.
+STORE_DESCRIPTION_MAX_LENGTH = 255
+
+
+def _store_description_from(application: VendorApplication) -> str:
+    source = application.store_description or application.business_description or ""
+    return source.strip()[:STORE_DESCRIPTION_MAX_LENGTH]
+
+
 def approve_vendor_application(
     db: Session,
     user: User,
@@ -2852,8 +2865,7 @@ def approve_vendor_application(
             email=applicant.email,
             city=application.city,
             region=application.region,
-            description=application.store_description
-            or application.business_description[:255],
+            description=_store_description_from(application),
             rating=0,
             status="active",
             vendor_user_id=applicant.id,
@@ -2884,9 +2896,7 @@ def approve_vendor_application(
         store.email = applicant.email
         store.city = application.city
         store.region = application.region
-        store.description = (
-            application.store_description or application.business_description[:255]
-        )
+        store.description = _store_description_from(application)
         store.vendor_user_id = applicant.id
         store.status = "active"
 
