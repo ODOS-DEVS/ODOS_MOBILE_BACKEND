@@ -11,6 +11,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.core.config import settings
 from app.middleware.event_logging import EventLoggingMiddleware
+from app.middleware.unhandled_errors import UnhandledExceptionMiddleware
 from app.routes import (
     admin,
     account,
@@ -192,6 +193,10 @@ async def on_startup() -> None:
 async def on_shutdown() -> None:
     close_redis()
 
+# add_middleware prepends, so the last registered layer is the outermost one.
+# UnhandledExceptionMiddleware is registered first and therefore sits *inside*
+# CORSMiddleware, which is what lets a 500 carry CORS headers back to a browser.
+app.add_middleware(UnhandledExceptionMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list,
