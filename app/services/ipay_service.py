@@ -35,7 +35,10 @@ _REFERENCE_PREFIX = "odos"
 PAID_STATUS = "paid"
 CANCELLED_STATUS = "cancelled"
 FAILED_STATUS = "failed"
-PENDING_STATUSES = frozenset({"new", "awaiting_payment"})
+# "error" is what the gateway returns when it cannot find the invoice yet, which
+# is a lookup problem rather than a refusal -- treating it as pending leaves it
+# open for the reconciliation loop instead of failing a payment that may land.
+PENDING_STATUSES = frozenset({"new", "awaiting_payment", "error"})
 
 
 def generate_invoice_id() -> str:
@@ -144,6 +147,29 @@ def check_status(invoice_id: str) -> dict[str, Any]:
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="iPay returned an unexpected response shape.",
         )
+    return _unwrap_status_payload(payload, invoice_id)
+
+
+def _unwrap_status_payload(payload: dict[str, Any], invoice_id: str) -> dict[str, Any]:
+    """Flatten the envelope the live gateway actually returns.
+
+    The docs show a flat object, but the live endpoint nests the record under
+    the invoice id::
+
+        {"odos123": {"status": "paid", "amount": "12.50", ...}}
+
+    Read flat, `status` is absent and every real payment normalises to a
+    failure. Both shapes are accepted so that a future change back to the
+    documented form does not break confirmation.
+    """
+    nested = payload.get(invoice_id)
+    if isinstance(nested, dict):
+        return nested
+    # Single-entry envelope whose key differs only in case/whitespace.
+    if len(payload) == 1:
+        (only_value,) = payload.values()
+        if isinstance(only_value, dict) and "status" in only_value:
+            return only_value
     return payload
 
 
@@ -169,6 +195,8 @@ def normalize_status(raw_status: Any) -> str:
         return "paid"
     if value == CANCELLED_STATUS:
         return "cancelled"
-    if value in PENDING_STATUSES:
-        return "pending"
-    return "failed"
+    if value == FAILED_STATUS:
+        return "failed"
+    # Anything unrecognised stays pending: it must never release goods, and
+    # marking it failed would close off a payment that might still settle.
+    return "pending"
