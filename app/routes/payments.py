@@ -5,7 +5,10 @@ from sqlalchemy.orm import Session
 
 from app.controllers.payment_controller import (
     create_checkout_session,
+    create_ipay_checkout_session,
+    handle_ipay_ipn,
     handle_paystack_webhook,
+    ipay_checkout_redirect,
     paystack_checkout_redirect,
     verify_checkout_session,
 )
@@ -62,3 +65,36 @@ def receive_paystack_redirect(
     return_url: str,
 ):
     return paystack_checkout_redirect(request, return_url=return_url)
+
+
+@router.post("/ipay/checkout", response_model=CheckoutSessionRead)
+def initialize_ipay_checkout(
+    request: Request,
+    payload: CheckoutSessionCreate,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    limit_payment_checkout(current_user)
+    return create_ipay_checkout_session(db, request, current_user, payload)
+
+
+@router.get("/ipay/redirect/{reference}", name="ipay_checkout_redirect")
+def open_ipay_checkout(
+    request: Request,
+    reference: str,
+    db: Session = Depends(get_db),
+):
+    """Unauthenticated on purpose: opened in a browser/WebView, not by the API
+    client. The reference is the capability, and it only yields a payment form
+    for an order that is still awaiting payment."""
+    return ipay_checkout_redirect(db, request, reference=reference)
+
+
+@router.get("/ipay/ipn", name="ipay_ipn")
+def receive_ipay_ipn(
+    invoice_id: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """iPay's notification. Unsigned and unauthenticated by their design, so
+    this only prompts a server-side status check -- see handle_ipay_ipn."""
+    return handle_ipay_ipn(db, invoice_id=invoice_id)

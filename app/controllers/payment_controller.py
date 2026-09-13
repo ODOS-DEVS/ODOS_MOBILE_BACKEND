@@ -42,6 +42,15 @@ from app.services.paystack_service import (
     verify_transaction,
     verify_webhook_signature,
 )
+from app.services.ipay_service import (
+    build_checkout_fields,
+    check_status as ipay_check_status,
+    checkout_url as ipay_checkout_url,
+    ensure_ipay_configured,
+    generate_invoice_id,
+    normalize_status as ipay_normalize_status,
+    parse_amount_to_subunit as ipay_parse_amount_to_subunit,
+)
 
 PENDING_PROVIDER_STATUSES = {"pending", "ongoing", "processing", "queued"}
 CANCELLED_PROVIDER_STATUSES = {"abandoned", "cancelled"}
@@ -711,3 +720,306 @@ def handle_paystack_webhook(
         webhook_event.processed_at = datetime.now(UTC)
         db.commit()
         raise
+
+
+# --------------------------------------------------------------------------
+# iPay (ipaygh.com) collections
+#
+# iPay has no JSON initiate and no signed webhook, so the flow differs from
+# Paystack in two places:
+#
+#   checkout  -> we hand the app a URL on *our* domain, not the gateway's,
+#                because the gateway wants an HTML form POST
+#   IPN       -> the notification carries no proof of anything, so it only
+#                triggers a server-side status check, which is authoritative
+#
+# Payouts stay on Paystack; iPay publishes no transfer API.
+# --------------------------------------------------------------------------
+
+
+def create_ipay_checkout_session(
+    db: Session,
+    request: Request,
+    current_user: User,
+    payload: CheckoutSessionCreate,
+) -> CheckoutSessionRead:
+    if payload.payment_type.strip().lower() == "wallet":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="In-app wallet payments must use POST /wallet/customer/checkout.",
+        )
+    ensure_ipay_configured()
+
+    reference = generate_invoice_id()
+    order = prepare_order_for_checkout(
+        db,
+        current_user,
+        payload,
+        payment_provider="ipay",
+        payment_reference=reference,
+    )
+
+    app_return_url = _append_query_params(
+        payload.callback_url or "odosmobileexpo://payments/return",
+        orderId=str(order.id),
+    )
+    app_cancel_url = _append_query_params(
+        payload.cancel_url or payload.callback_url or "odosmobileexpo://payments/return",
+        orderId=str(order.id),
+        cancelled="1",
+        reference=reference,
+    )
+
+    # The gateway form is built later, in ipay_checkout_redirect. Holding the
+    # return targets on the row rather than in the redirect URL keeps them out
+    # of a query string a customer could edit into an open redirect.
+    redirect_url = str(request.url_for("ipay_checkout_redirect", reference=reference))
+
+    transaction = PaymentTransaction(
+        order_id=order.id,
+        user_id=current_user.id,
+        provider="ipay",
+        reference=reference,
+        access_code=None,
+        authorization_url=redirect_url,
+        currency="GHS",
+        amount_subunit=amount_to_subunit(order.total_amount),
+        status="pending",
+        preferred_channel=None,
+        authorization_data={
+            "return_url": app_return_url,
+            "cancel_url": app_cancel_url,
+        },
+    )
+    db.add(transaction)
+    db.commit()
+
+    record_user_event(
+        db,
+        user_id=str(current_user.id),
+        event_type=CHECKOUT_STARTED,
+        action="commerce.checkout_started",
+        entity_type="order",
+        entity_id=str(order.id),
+        metadata={
+            "order_number": order.order_number,
+            "payment_type": payload.payment_type,
+            "amount": order.total_amount,
+        },
+        ip_address=request_ip(request),
+        user_agent=request_user_agent(request),
+    )
+    record_user_event(
+        db,
+        user_id=str(current_user.id),
+        event_type=PAYMENT_ATTEMPT,
+        action="commerce.payment_attempt",
+        entity_type="payment_transaction",
+        entity_id=reference,
+        metadata={
+            "order_id": str(order.id),
+            "provider": "ipay",
+            "amount": order.total_amount,
+        },
+        ip_address=request_ip(request),
+        user_agent=request_user_agent(request),
+    )
+
+    return CheckoutSessionRead(
+        order_id=order.id,
+        order_number=order.order_number,
+        reference=reference,
+        authorization_url=redirect_url,
+        access_code=None,
+        amount=order.total_amount,
+        currency="GHS",
+        payment_status=order.payment_status,
+    )
+
+
+def _load_ipay_transaction(db: Session, reference: str) -> PaymentTransaction:
+    transaction = db.scalar(
+        select(PaymentTransaction)
+        .options(selectinload(PaymentTransaction.order))
+        .where(
+            PaymentTransaction.reference == reference,
+            PaymentTransaction.provider == "ipay",
+        )
+    )
+    if not transaction:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="We couldn't find that payment.",
+        )
+    return transaction
+
+
+def ipay_checkout_redirect(
+    db: Session,
+    request: Request,
+    *,
+    reference: str,
+) -> HTMLResponse:
+    """Serve the form that posts the customer into iPay's hosted checkout.
+
+    Rendered server-side so merchant_key is never shipped to the app bundle,
+    and so `total` is taken from the stored order rather than from anything the
+    client can set. The customer's browser can still read both -- iPay's own
+    widget embeds them in page HTML -- which is exactly why the IPN handler
+    re-checks the amount instead of trusting what comes back.
+    """
+    transaction = _load_ipay_transaction(db, reference)
+    order = transaction.order
+    if order is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="We couldn't load the order tied to this payment.",
+        )
+
+    if transaction.status != "pending" or order.payment_status == "paid":
+        targets = transaction.authorization_data or {}
+        return paystack_checkout_redirect(
+            request,
+            return_url=targets.get("return_url") or "odosmobileexpo://payments/return",
+        )
+
+    targets = transaction.authorization_data or {}
+    fields = build_checkout_fields(
+        invoice_id=transaction.reference,
+        total=f"{amount_from_subunit(transaction.amount_subunit):.2f}",
+        success_url=_append_query_params(
+            str(request.url_for("paystack_checkout_redirect")),
+            return_url=targets.get("return_url"),
+        ),
+        cancelled_url=_append_query_params(
+            str(request.url_for("paystack_checkout_redirect")),
+            return_url=targets.get("cancel_url"),
+        ),
+        ipn_url=str(request.url_for("ipay_ipn")),
+        customer_name=(transaction.user.full_name if transaction.user else None),
+        customer_mobile=(order.address_phone or None),
+        customer_email=(transaction.user.email if transaction.user else None),
+        description=f"ODOS order {order.order_number}",
+    )
+
+    inputs = "\n".join(
+        f'      <input type="hidden" name="{html.escape(name, quote=True)}"'
+        f' value="{html.escape(str(value), quote=True)}" />'
+        for name, value in fields.items()
+    )
+    action = html.escape(ipay_checkout_url(), quote=True)
+    html_body = f"""<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Opening secure payment</title>
+    <style>
+      :root {{ color-scheme: light; }}
+      body {{
+        margin: 0; min-height: 100vh; display: grid; place-items: center;
+        background: #f8fafc; color: #0f172a;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }}
+      .card {{
+        width: min(92vw, 28rem); background: #ffffff; border-radius: 1.5rem;
+        padding: 2rem; box-shadow: 0 18px 50px rgba(15, 23, 42, 0.12);
+        text-align: center;
+      }}
+      h1 {{ margin: 0 0 0.75rem; font-size: 1.2rem; }}
+      p {{ margin: 0 0 1.25rem; color: #475569; line-height: 1.5; }}
+      button {{
+        padding: 0.85rem 1.2rem; border: 0; border-radius: 999px;
+        background: #111827; color: #ffffff; font-weight: 600; font-size: 1rem;
+      }}
+    </style>
+  </head>
+  <body>
+    <main class="card">
+      <h1>Opening secure payment</h1>
+      <p>Taking you to iPay to complete this order.</p>
+      <form id="ipay-checkout" method="post" action="{action}">
+{inputs}
+        <button type="submit">Continue to payment</button>
+      </form>
+    </main>
+    <script>
+      document.getElementById("ipay-checkout").submit();
+    </script>
+  </body>
+</html>"""
+    return HTMLResponse(content=html_body)
+
+
+def handle_ipay_ipn(db: Session, *, invoice_id: str | None) -> dict[str, str]:
+    """Handle an iPay payment notification.
+
+    iPay sends an unauthenticated `GET ?invoice_id=...` with no signature, so
+    nothing in this request is evidence. It is treated purely as a prompt to go
+    and ask the gateway, and the answer is then checked against the order's own
+    recorded amount before anything is released. A forged call can therefore do
+    no more than make the server re-verify a payment it already knows about.
+    """
+    if not invoice_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="invoice_id is required.",
+        )
+
+    transaction = _load_ipay_transaction(db, invoice_id)
+    order = transaction.order
+    if order is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="We couldn't load the order tied to this payment.",
+        )
+
+    payload = ipay_check_status(invoice_id)
+    gateway_status = ipay_normalize_status(payload.get("status"))
+    extra = payload.get("extra") if isinstance(payload.get("extra"), dict) else {}
+    gateway_message = (
+        extra.get("psp_response_msg")
+        or payload.get("status_reason")
+        or payload.get("narration")
+    )
+    now = datetime.now(UTC)
+
+    if gateway_status != "paid":
+        _mark_payment_as_unsuccessful(
+            order,
+            transaction,
+            provider_status=gateway_status,
+            gateway_response=_format_gateway_response(gateway_message),
+            now=now,
+        )
+        transaction.raw_response = payload
+        db.commit()
+        return {"status": gateway_status}
+
+    # Paid according to iPay -- now confirm it paid what the order actually costs.
+    paid_subunit = ipay_parse_amount_to_subunit(payload.get("amount"))
+    if paid_subunit is None or paid_subunit != transaction.amount_subunit:
+        transaction.status = "failed"
+        transaction.gateway_response = "Amount mismatch against the order total."
+        transaction.raw_response = payload
+        transaction.last_checked_at = now
+        transaction.verified_at = now
+        db.commit()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Reported payment amount does not match the order total.",
+        )
+
+    provider_payload = {
+        **payload,
+        "id": invoice_id,
+        "gateway_response": _format_gateway_response(gateway_message),
+        # iPay's status response carries no per-transaction fee, so the ledger
+        # records zero here; processor fees are reconciled from iPay settlement
+        # statements rather than per payment.
+        "fees": 0,
+        "paid_at": payload.get("as_at"),
+        "authorization": extra or None,
+    }
+    _apply_successful_payment(db, transaction, provider_payload)
+    return {"status": "paid"}

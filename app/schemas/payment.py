@@ -24,7 +24,8 @@ class CheckoutSessionRead(BaseModel):
     order_number: str
     reference: str
     authorization_url: str
-    access_code: str
+    # iPay has no access_code; it stays populated for Paystack sessions.
+    access_code: str | None = None
     amount: float
     currency: str
     payment_status: str
