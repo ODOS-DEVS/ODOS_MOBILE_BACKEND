@@ -173,6 +173,9 @@ class OrderDeliveryRatingUpdate(BaseModel):
 
 class OrderRescheduleRequest(BaseModel):
     note: str | None = Field(default=None, max_length=280)
+    #: Which shop's bag this is about. Omitted means "everything currently out
+    #: for delivery", which is what it means on a single-shop order.
+    package_id: uuid.UUID | None = None
 
     @field_validator("note", mode="before")
     @classmethod
@@ -186,6 +189,8 @@ class OrderRescheduleRequest(BaseModel):
 class OrderDeliveryProblemRequest(BaseModel):
     reason: str = Field(min_length=1, max_length=40)
     details: str | None = Field(default=None, max_length=500)
+    #: Scopes the problem — and the settlement hold it triggers — to one shop.
+    package_id: uuid.UUID | None = None
 
     @field_validator("reason", mode="before")
     @classmethod
@@ -199,6 +204,51 @@ class OrderDeliveryProblemRequest(BaseModel):
             return value
         cleaned = value.strip()
         return cleaned or None
+
+
+class OrderPackageRead(BaseModel):
+    """One vendor's bag, as the customer and vendor apps see it.
+
+    Everything the order-level fields say, but scoped to a single shop — which
+    is the only honest way to describe a cart that ships from three of them.
+    `item_ids` lets the client group the order's items under their package
+    without a second request; ownership is by vendor, exactly as the server
+    resolves it.
+    """
+
+    id: uuid.UUID
+    order_id: uuid.UUID
+    vendor_user_id: uuid.UUID | None
+    store_id: str | None
+    store_name: str | None
+    package_number: int
+    vendor_status: str
+    delivery_status: str
+    items_subtotal: float
+    discount_share: float
+    delivery_fee: float
+    #: Zero because the basket cleared this shop's threshold, as opposed to
+    #: zero because the shop never charges. The receipt reads differently.
+    delivery_fee_waived: bool
+    settlement_status: str
+    dispatched_at: datetime | None
+    delivered_at: datetime | None
+    cancelled_at: datetime | None
+    cancellation_reason: str | None
+    confirmation_method: str | None
+    auto_release_at: datetime | None
+    delivery_problem_reason: str | None
+    delivery_problem_reported_at: datetime | None
+    reschedule_requested_at: datetime | None
+    reschedule_note: str | None
+    dispatch_photo_url: str | None
+    departure_notified_at: datetime | None
+    tracking_eta: str | None
+    created_at: datetime
+    updated_at: datetime
+    item_ids: list[uuid.UUID] = []
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 class OrderRead(BaseModel):
@@ -254,5 +304,9 @@ class OrderRead(BaseModel):
     items: list[OrderItemRead]
     return_requests: list[ReturnRequestRead] = []
     timeline: list[OrderStatusEventRead] = []
+    # One per shop on the order. Single-shop orders — most of them — carry
+    # exactly one, and a client that ignores this field sees the order exactly
+    # as it did before packages existed.
+    packages: list[OrderPackageRead] = []
 
     model_config = ConfigDict(from_attributes=True)

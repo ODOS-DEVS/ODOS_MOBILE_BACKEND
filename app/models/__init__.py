@@ -47,6 +47,7 @@ from app.models.inventory import InventoryMovement
 from app.models.order import (
     Order,
     OrderItem,
+    OrderPackage,
     OrderStatusEvent,
     ReturnRequest,
     ReturnStatusEvent,
@@ -127,6 +128,7 @@ __all__ = [
     "NotificationRead",
     "Order",
     "OrderItem",
+    "OrderPackage",
     "OrderStatusEvent",
     "PaymentTransaction",
     "PaymentWebhookEvent",

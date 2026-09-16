@@ -41,8 +41,19 @@ from app.schemas.order import (
 from app.services.pricing_service import compute_server_subtotal
 from app.services.delivery_service import (
     get_delivery_config,
+    resolve_active_delivery_method,
+    resolve_delivery_amount,
     tracking_eta_after_payment,
-    validate_delivery_checkout,
+)
+from app.services.package_pricing_service import (
+    build_package_delivery_options,
+    packages_shipping_total,
+    quote_packages,
+)
+from app.services.order_package_service import (
+    build_packages_for_order,
+    ensure_packages,
+    group_checkout_items,
 )
 from app.services.delivery_lifecycle_service import (
     confirm_delivery_by_customer,
@@ -397,9 +408,12 @@ def _validate_order_totals(
     produce it.
 
     This previously used payload.shipping_amount. That was safe only because
-    validate_delivery_checkout raises on a mismatch and happens to run first —
-    a correctness guarantee that lived in the ordering of two calls rather than
+    the delivery check raises on a mismatch and happens to run first — a
+    correctness guarantee that lived in the ordering of two calls rather than
     in this function, and that nothing would have caught if reordered.
+
+    `validated_shipping` is now the sum of the order's per-package delivery
+    fees, each priced by the shop that will carry that package.
     """
     computed_total = round(
         computed_subtotal + validated_shipping - computed_discount, 2
@@ -444,11 +458,47 @@ def prepare_order_for_checkout(
                 detail="Some item prices changed. Refresh your cart and try again.",
             )
 
+    # Delivery is priced before the promotion engine runs, not after. The
+    # engine needs a shipping figure to apply free-shipping vouchers against,
+    # and it used to be handed `payload.shipping_amount` -- a client-supplied
+    # number. It now gets the server's own, derived from the cart's packages.
+    delivery_config = get_delivery_config(db)
+    package_groups = group_checkout_items(db, payload.items, product_snapshot_map)
+    delivery_options = build_package_delivery_options(
+        groups=package_groups,
+        region=payload.address_region,
+        city=payload.address_city,
+        config=delivery_config,
+    )
+    delivery_method = resolve_active_delivery_method(
+        delivery_options, payload.delivery_method or "economy"
+    )
+    validated_shipping = resolve_delivery_amount(delivery_options, delivery_method)
+    package_quotes = quote_packages(package_groups, delivery_method, delivery_config)
+
+    # Belt and braces: the options total and the per-package sum are computed
+    # from the same quotes, so a divergence means a bug in one of them rather
+    # than a stale client, and must not be allowed to reach an order.
+    if abs(packages_shipping_total(package_quotes) - validated_shipping) > 0.01:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="We couldn't price delivery for this order. Please try again.",
+        )
+
+    if abs(payload.shipping_amount - validated_shipping) > 0.01:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Delivery fee changed. Refresh checkout and choose your "
+                "delivery option again."
+            ),
+        )
+
     promo_result = calculate_best_discount(
         db,
         user,
         payload.items,
-        payload.shipping_amount,
+        validated_shipping,
         voucher_code=payload.voucher_code,
         include_auto_apply=True,
     )
@@ -468,22 +518,6 @@ def prepare_order_for_checkout(
     if primary_voucher is not None:
         from app.services.promotion_service import reserve_voucher_usage
         reserve_voucher_usage(db, user.id, primary_voucher)
-
-    try:
-        delivery_config = get_delivery_config(db)
-        delivery_method, validated_shipping = validate_delivery_checkout(
-            subtotal=server_subtotal,
-            region=payload.address_region,
-            city=payload.address_city,
-            delivery_method=payload.delivery_method,
-            shipping_amount=payload.shipping_amount,
-            config=delivery_config,
-        )
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(exc),
-        ) from exc
 
     order = Order(
         order_number=_generate_order_number(db),
@@ -577,6 +611,28 @@ def prepare_order_for_checkout(
 
     db.add(order)
     db.flush()
+
+    # One package per vendor, priced by that vendor's own delivery terms. The
+    # discount split comes from vendor_allocation_map -- the same apportionment
+    # settlement will pay against later -- so the figure a package records and
+    # the figure a vendor is eventually paid can never disagree.
+    from app.services.finance_math import vendor_allocation_map
+
+    voucher_store_id = None
+    if primary_voucher is not None and getattr(primary_voucher, "scope", None) == "store":
+        voucher_store_id = primary_voucher.store_id
+    allocations = vendor_allocation_map(order, voucher_store_id=voucher_store_id)
+    build_packages_for_order(
+        db,
+        order,
+        quotes=package_quotes,
+        discount_shares={
+            vendor_user_id: allocation["discount_share"]
+            for vendor_user_id, allocation in allocations.items()
+        },
+    )
+    db.flush()
+
     record_order_status_event(
         db,
         order,
@@ -761,7 +817,12 @@ def create_order(db: Session, user: User, payload: OrderCreate) -> Order:
 
     created_order = db.scalar(
         select(Order)
-        .options(selectinload(Order.items), selectinload(Order.return_requests), selectinload(Order.timeline))
+        .options(
+                selectinload(Order.items),
+                selectinload(Order.return_requests),
+                selectinload(Order.timeline),
+                selectinload(Order.packages),
+            )
         .where(Order.id == order.id, Order.user_id == user.id)
     )
     if not created_order:
@@ -804,7 +865,12 @@ def list_orders(db: Session, user: User) -> list[Order]:
     return list(
         db.scalars(
             select(Order)
-            .options(selectinload(Order.items), selectinload(Order.return_requests), selectinload(Order.timeline))
+            .options(
+                selectinload(Order.items),
+                selectinload(Order.return_requests),
+                selectinload(Order.timeline),
+                selectinload(Order.packages),
+            )
             .where(Order.user_id == user.id)
             .order_by(Order.placed_at.desc(), Order.created_at.desc())
         ).all()
@@ -814,7 +880,12 @@ def list_orders(db: Session, user: User) -> list[Order]:
 def get_order(db: Session, user: User, order_id: str) -> Order:
     order = db.scalar(
         select(Order)
-        .options(selectinload(Order.items), selectinload(Order.return_requests), selectinload(Order.timeline))
+        .options(
+                selectinload(Order.items),
+                selectinload(Order.return_requests),
+                selectinload(Order.timeline),
+                selectinload(Order.packages),
+            )
         .where(Order.id == order_id, Order.user_id == user.id)
     )
     if not order:
@@ -1049,12 +1120,19 @@ def cancel_order(
     return order
 
 
-def confirm_order_delivery(db: Session, user: User, order_id: str) -> Order:
+def confirm_order_delivery(db: Session, user: User, order_id: str, package_id=None) -> Order:
     """Thin wrapper: all delivery-completion business logic (state
     validation, settlement, notifications) lives in
     delivery_lifecycle_service so this can't drift from the vendor/admin/
-    auto-release completion paths."""
-    order, _changed_wallet_vendor_ids = confirm_delivery_by_customer(db, user, order_id)
+    auto-release completion paths.
+
+    `package_id` confirms one shop's bag. Omitting it confirms everything
+    outstanding, which is what "I got my order" means on the single-vendor
+    orders that are most of the platform.
+    """
+    order, _changed_wallet_vendor_ids = confirm_delivery_by_customer(
+        db, user, order_id, package_id=package_id
+    )
     _broadcast_order_realtime(db, order)
     return order
 
@@ -1144,8 +1222,11 @@ def report_order_delivery_problem(
     *,
     reason: str,
     details: str | None,
+    package_id=None,
 ) -> Order:
-    order = report_delivery_problem(db, user, order_id, reason=reason, details=details)
+    order = report_delivery_problem(
+        db, user, order_id, reason=reason, details=details, package_id=package_id
+    )
 
     admins = list_admins_with_feature(db, "delivery")
     for admin in admins:
@@ -1199,17 +1280,37 @@ def request_order_reschedule(
     user: User,
     order_id: str,
     note: str | None,
+    package_id=None,
 ) -> Order:
     order = get_order(db, user, order_id)
 
-    if order.vendor_status != "out_for_delivery":
+    # Checked against the packages rather than the order roll-up: on a
+    # multi-shop order, one bag being out for delivery is reason enough to let
+    # the customer ask that shop to come back later, even though the order as
+    # a whole still reads "processing" because another shop is still packing.
+    packages = ensure_packages(db, order)
+    if package_id is not None:
+        targets = [p for p in packages if str(p.id) == str(package_id)]
+        if not targets:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="That package isn't part of this order.",
+            )
+    else:
+        targets = [p for p in packages if p.delivery_status == "out_for_delivery"]
+
+    if not any(p.delivery_status == "out_for_delivery" for p in targets):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Reschedule requests are only available while an order is out for delivery.",
         )
 
-    if order.reschedule_requested_at:
-        last_requested_at = order.reschedule_requested_at
+    # Throttled per package, so asking Kofi to come back later doesn't lock
+    # the customer out of telling Ben the same thing.
+    for target in targets:
+        if not target.reschedule_requested_at:
+            continue
+        last_requested_at = target.reschedule_requested_at
         if last_requested_at.tzinfo is None:
             last_requested_at = last_requested_at.replace(tzinfo=timezone.utc)
         already_notified_minutes = (
@@ -1221,7 +1322,7 @@ def request_order_reschedule(
                 detail="You already let the seller know a few minutes ago — no need to send it again.",
             )
 
-    mark_rescheduled(db, order, note=note)
+    mark_rescheduled(db, order, note=note, package_id=package_id)
     db.commit()
     db.refresh(order)
 

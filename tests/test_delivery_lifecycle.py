@@ -30,16 +30,25 @@ from app.services.delivery_lifecycle_service import (
 )
 
 
-def _order(**overrides):
+def _pair(order_overrides=None, package_overrides=None):
+    """An (order, package) pair for the eligibility predicate.
+
+    The predicate now checks both halves: the *order* must still be live and
+    paid, and the *package* — one vendor's bag — must still be out for delivery
+    with an elapsed clock. Each bag carries its own clock because each is
+    dispatched separately, so a customer who receives one shop's items on
+    Monday and another's on Thursday gets a full grace window for each.
+    """
     now = datetime.now(timezone.utc)
-    base = {
+    order = {"status": "processing", "payment_status": "paid"}
+    order.update(order_overrides or {})
+    package = {
         "delivery_status": "out_for_delivery",
-        "status": "processing",
-        "payment_status": "paid",
+        "vendor_status": "out_for_delivery",
         "auto_release_at": now - timedelta(hours=1),
     }
-    base.update(overrides)
-    return SimpleNamespace(**base)
+    package.update(package_overrides or {})
+    return SimpleNamespace(**order), SimpleNamespace(**package)
 
 
 # --- Invariant 2: a vendor can never reach "delivered" ---
@@ -70,42 +79,55 @@ def test_vendor_can_only_cancel_before_prep_starts():
 
 
 def test_auto_release_eligible_when_grace_window_elapsed():
-    assert is_eligible_for_auto_release(_order(), datetime.now(timezone.utc)) is True
+    order, package = _pair()
+    assert is_eligible_for_auto_release(order, package, datetime.now(timezone.utc)) is True
 
 
 def test_auto_release_blocked_by_active_customer_problem():
-    order = _order(delivery_status="customer_problem")
-    assert is_eligible_for_auto_release(order, datetime.now(timezone.utc)) is False
+    order, package = _pair(package_overrides={"delivery_status": "customer_problem"})
+    assert is_eligible_for_auto_release(order, package, datetime.now(timezone.utc)) is False
 
 
 def test_auto_release_blocked_while_rescheduled():
-    order = _order(delivery_status="rescheduled")
-    assert is_eligible_for_auto_release(order, datetime.now(timezone.utc)) is False
+    order, package = _pair(package_overrides={"delivery_status": "rescheduled"})
+    assert is_eligible_for_auto_release(order, package, datetime.now(timezone.utc)) is False
 
 
 def test_auto_release_blocked_for_cancelled_order():
-    order = _order(status="cancelled")
-    assert is_eligible_for_auto_release(order, datetime.now(timezone.utc)) is False
+    order, package = _pair(order_overrides={"status": "cancelled"})
+    assert is_eligible_for_auto_release(order, package, datetime.now(timezone.utc)) is False
+
+
+def test_auto_release_blocked_for_cancelled_package():
+    """One vendor withdrawing their items must not drag the rest of a shared
+    order's money out with them."""
+    order, package = _pair(package_overrides={"vendor_status": "cancelled"})
+    assert is_eligible_for_auto_release(order, package, datetime.now(timezone.utc)) is False
 
 
 def test_auto_release_blocked_for_already_delivered_order():
-    order = _order(status="delivered", delivery_status="delivered")
-    assert is_eligible_for_auto_release(order, datetime.now(timezone.utc)) is False
+    order, package = _pair(
+        order_overrides={"status": "delivered"},
+        package_overrides={"delivery_status": "delivered", "vendor_status": "delivered"},
+    )
+    assert is_eligible_for_auto_release(order, package, datetime.now(timezone.utc)) is False
 
 
 def test_auto_release_blocked_when_unpaid():
-    order = _order(payment_status="pending")
-    assert is_eligible_for_auto_release(order, datetime.now(timezone.utc)) is False
+    order, package = _pair(order_overrides={"payment_status": "pending"})
+    assert is_eligible_for_auto_release(order, package, datetime.now(timezone.utc)) is False
 
 
 def test_auto_release_blocked_before_grace_window_elapses():
-    order = _order(auto_release_at=datetime.now(timezone.utc) + timedelta(hours=1))
-    assert is_eligible_for_auto_release(order, datetime.now(timezone.utc)) is False
+    order, package = _pair(
+        package_overrides={"auto_release_at": datetime.now(timezone.utc) + timedelta(hours=1)}
+    )
+    assert is_eligible_for_auto_release(order, package, datetime.now(timezone.utc)) is False
 
 
 def test_auto_release_blocked_when_never_scheduled():
-    order = _order(auto_release_at=None)
-    assert is_eligible_for_auto_release(order, datetime.now(timezone.utc)) is False
+    order, package = _pair(package_overrides={"auto_release_at": None})
+    assert is_eligible_for_auto_release(order, package, datetime.now(timezone.utc)) is False
 
 
 # --- Admin override always requires a reason (checked before any DB access,

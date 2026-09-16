@@ -165,6 +165,54 @@ class VendorStoreRead(BaseModel):
     business_hours: dict | None = None
 
 
+class VendorDeliverySettingsRead(BaseModel):
+    """What this shop charges to deliver, and what ODOS would charge if it
+    didn't set its own.
+
+    Both halves are returned together on purpose: the settings screen shows
+    the platform figure as the placeholder in each empty field, so a vendor
+    can see exactly what they are overriding rather than guessing.
+    """
+
+    #: None means "not set — the platform default applies".
+    economy_fee: float | None = None
+    express_fee: float | None = None
+    same_day_fee: float | None = None
+    free_delivery_threshold: float | None = None
+    express_enabled: bool = True
+    same_day_enabled: bool = True
+
+    # Platform fallbacks, for placeholder text.
+    default_economy_fee: float
+    default_express_fee: float
+    default_same_day_fee: float
+    default_free_delivery_threshold: float
+
+    #: What the customer sees on this shop's card right now.
+    badge: str | None = None
+    #: Ceilings enforced server-side, surfaced so the form can validate early.
+    max_fee: float
+    max_free_delivery_threshold: float
+    #: True once the shop has set any of its own numbers.
+    is_custom: bool = False
+
+
+class VendorDeliverySettingsUpdate(BaseModel):
+    """Null clears an override and returns that field to the platform default.
+
+    Zero is a real price, not a clear: a shop setting `economy_fee` to 0 is
+    saying "I deliver free", and setting `free_delivery_threshold` to 0 is
+    saying the same thing more strongly. Only None falls back.
+    """
+
+    economy_fee: float | None = Field(default=None, ge=0)
+    express_fee: float | None = Field(default=None, ge=0)
+    same_day_fee: float | None = Field(default=None, ge=0)
+    free_delivery_threshold: float | None = Field(default=None, ge=0)
+    express_enabled: bool | None = None
+    same_day_enabled: bool | None = None
+
+
 class VendorVoucherRead(BaseModel):
     id: uuid.UUID
     code: str
@@ -593,6 +641,20 @@ class VendorOrderItemRead(BaseModel):
 class VendorOrderRead(BaseModel):
     id: uuid.UUID
     order_number: str
+    # --- This vendor's package on the order ---
+    # Every status field below describes *this shop's* bag, not the order as a
+    # whole. On a shared cart the order-level roll-up reports the slowest shop,
+    # which would tell a vendor who dispatched an hour ago that their items are
+    # still being packed.
+    package_id: uuid.UUID | None = None
+    package_number: int = 1
+    #: How many shops are on this order, so the app can say "1 of 3" and the
+    #: vendor understands why the customer may be asking about someone else's
+    #: items.
+    package_count: int = 1
+    #: What this vendor is paid for delivering their own package — on top of
+    #: the goods, and never commissioned.
+    delivery_fee: float = 0.0
     customer_name: str | None
     customer_phone: str | None = None
     delivery_method: str | None = None

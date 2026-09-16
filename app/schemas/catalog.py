@@ -175,6 +175,14 @@ class StoreRead(BaseModel):
     is_on_vacation: bool = False
     vacation_message: str | None = None
     business_hours: dict | None = None
+    #: "Free delivery" or "Free over GH₵X" — computed from this store's own
+    #: delivery pricing, falling back to the platform default. Null when there
+    #: is nothing worth shouting about; a shop charging an ordinary fee gets no
+    #: badge rather than a badge announcing that it charges money.
+    delivery_badge: str | None = None
+    #: What this shop charges for standard delivery, after platform fallback.
+    #: Surfaced so a store page can say the number rather than only the badge.
+    delivery_fee_from: float | None = None
 
     model_config = ConfigDict(from_attributes=True)
 

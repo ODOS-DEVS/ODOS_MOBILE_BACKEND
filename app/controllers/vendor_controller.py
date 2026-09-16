@@ -62,6 +62,8 @@ from app.schemas.vendor import (
     VendorInventoryMovementRead,
     VendorProductUpdate,
     VendorProfileRead,
+    VendorDeliverySettingsRead,
+    VendorDeliverySettingsUpdate,
     VendorStoreRead,
     VendorVoucherGiftPayload,
     VendorVoucherRead,
@@ -84,7 +86,19 @@ from app.services.delivery_service import (
     get_delivery_config,
     tracking_eta_for_vendor_status,
 )
-from app.services.delivery_lifecycle_service import dispatch_order
+from app.services.delivery_lifecycle_service import dispatch_package
+from app.services.package_pricing_service import (
+    MAX_FREE_DELIVERY_THRESHOLD,
+    MAX_VENDOR_DELIVERY_FEE,
+    store_delivery_badge,
+    vendor_delivery_pricing,
+)
+from app.services.order_package_service import (
+    VENDOR_STAGE_PROGRESS,
+    ensure_packages,
+    package_for_vendor,
+    recompute_order_rollup,
+)
 from app.services.delivery_dispatch_service import (
     offer_ready_order,
     request_courier_for_order,
@@ -561,6 +575,18 @@ def _serialize_vendor_order(db: Session, user: User, order: Order) -> VendorOrde
 
     earnings = _order_earnings_fields(db, user, order)
 
+    # A vendor sees their own package's state, never the order roll-up. On a
+    # shared order the roll-up reports the *slowest* shop, so showing it here
+    # would tell a vendor who dispatched an hour ago that their items are
+    # still being packed — and the app's "mark next stage" button would offer
+    # the wrong next step.
+    package = next(
+        (p for p in order.packages if p.vendor_user_id == user.id),
+        None,
+    )
+    vendor_status = package.vendor_status if package else order.vendor_status
+    delivery_status = package.delivery_status if package else order.delivery_status
+
     return VendorOrderRead(
         id=order.id,
         order_number=order.order_number,
@@ -578,14 +604,26 @@ def _serialize_vendor_order(db: Session, user: User, order: Order) -> VendorOrde
         net_amount=earnings["net_amount"],
         is_settled=bool(earnings["is_settled"]),
         currency=str(earnings["currency"]),
-        status=order.vendor_status,
-        delivery_status=order.delivery_status,
-        delivery_problem_reason=order.delivery_problem_reason,
+        status=vendor_status,
+        delivery_status=delivery_status,
+        delivery_problem_reason=(
+            package.delivery_problem_reason if package else order.delivery_problem_reason
+        ),
         delivery_instructions=order.delivery_instructions,
-        reschedule_requested_at=order.reschedule_requested_at,
-        reschedule_note=order.reschedule_note,
-        dispatch_photo_url=order.dispatch_photo_url,
-        departure_notified_at=order.departure_notified_at,
+        reschedule_requested_at=(
+            package.reschedule_requested_at if package else order.reschedule_requested_at
+        ),
+        reschedule_note=package.reschedule_note if package else order.reschedule_note,
+        dispatch_photo_url=(
+            package.dispatch_photo_url if package else order.dispatch_photo_url
+        ),
+        departure_notified_at=(
+            package.departure_notified_at if package else order.departure_notified_at
+        ),
+        package_id=package.id if package else None,
+        package_number=package.package_number if package else 1,
+        package_count=len([p for p in order.packages if p.vendor_status != "cancelled"]) or 1,
+        delivery_fee=round(float(package.delivery_fee), 2) if package else 0.0,
         placed_at=order.placed_at,
         paid_at=order.paid_at,
         created_at=order.created_at,
@@ -649,7 +687,12 @@ def list_vendor_orders_payloads(db: Session, user: User) -> list[VendorOrderRead
     orders = list(
         db.scalars(
             select(Order)
-            .options(selectinload(Order.items), selectinload(Order.user), selectinload(Order.timeline))
+            .options(
+                selectinload(Order.items),
+                selectinload(Order.user),
+                selectinload(Order.timeline),
+                selectinload(Order.packages),
+            )
             .where(Order.id.in_(order_ids))
             .order_by(Order.placed_at.desc(), Order.created_at.desc())
         ).all()
@@ -668,7 +711,12 @@ def get_vendor_order(db: Session, user: User, order_id: str) -> VendorOrderRead:
     require_vendor_access(user)
     order = db.scalar(
         select(Order)
-        .options(selectinload(Order.items), selectinload(Order.user), selectinload(Order.timeline))
+        .options(
+                selectinload(Order.items),
+                selectinload(Order.user),
+                selectinload(Order.timeline),
+                selectinload(Order.packages),
+            )
         .where(Order.id == order_id)
     )
     if not order:
@@ -2061,7 +2109,7 @@ def request_odos_courier(db: Session, user: User, order_id: str) -> dict:
 
     order = db.scalar(
         select(Order)
-        .options(selectinload(Order.items))
+        .options(selectinload(Order.items), selectinload(Order.packages))
         .where(Order.id == order_id)
         .with_for_update()
     )
@@ -2102,6 +2150,44 @@ def request_odos_courier(db: Session, user: User, order_id: str) -> dict:
     }
 
 
+def _package_status_note(order: Order, package, phrase: str) -> str:
+    """Timeline copy that names the shop only when there is more than one.
+
+    On the single-vendor orders that are most of the platform, naming the shop
+    in every entry would be noise, and the customer's timeline should read
+    exactly as it did before packages existed.
+    """
+    if len(order.packages) <= 1:
+        return f"Order {phrase}"
+    label = package.store_name or f"Package {package.package_number}"
+    return f"{label} · {phrase}"
+
+
+def _order_tracking_eta(order: Order) -> str | None:
+    """The one line the customer sees at the top of a multi-shop order.
+
+    A per-package ETA is shown against each package in the app; this is the
+    summary above them. It deliberately reports the *slowest* package, because
+    an order is not "arriving today" while one of its three bags is still
+    being packed.
+    """
+    live = [p for p in order.packages if p.vendor_status != "cancelled"]
+    if not live:
+        return None
+    if len(live) == 1:
+        return live[0].tracking_eta
+
+    slowest = min(
+        live, key=lambda p: VENDOR_STAGE_PROGRESS.get(p.vendor_status, 0.0)
+    )
+    dispatched = sum(1 for p in live if p.vendor_status in ("out_for_delivery", "delivered"))
+    if dispatched and dispatched < len(live):
+        return f"{dispatched} of {len(live)} packages on the way"
+    if dispatched == len(live):
+        return "All packages on the way"
+    return slowest.tracking_eta or f"{len(live)} packages · {slowest.vendor_status.replace('_', ' ')}"
+
+
 def update_vendor_order_status(
     db: Session,
     user: User,
@@ -2118,7 +2204,12 @@ def update_vendor_order_status(
 
     order = db.scalar(
         select(Order)
-        .options(selectinload(Order.items), selectinload(Order.user), selectinload(Order.timeline))
+        .options(
+            selectinload(Order.items),
+            selectinload(Order.user),
+            selectinload(Order.timeline),
+            selectinload(Order.packages),
+        )
         .where(Order.id == order_id)
         .with_for_update()
     )
@@ -2147,14 +2238,24 @@ def update_vendor_order_status(
             detail="That order was not found for this vendor.",
         )
 
-    other_vendor_ids = {
-        item.vendor_user_id
-        for item in order.items
-        if item.vendor_user_id and item.vendor_user_id != user.id
-    }
-    is_sole_vendor = len(other_vendor_ids) == 0
+    # This vendor moves *their own package*, never the shared order.
+    #
+    # The guard below used to compare against `order.vendor_status`, a single
+    # column shared by every vendor on the order. On a two-shop order that
+    # meant the faster shop marking "ready" pushed the shared status past the
+    # slower shop, whose next legitimate step was then rejected with "orders
+    # move one stage at a time" — locking a vendor out of items that were
+    # sitting on their own shelf. Comparing against the package makes each
+    # shop's progress independent, which is what it always should have been.
+    ensure_packages(db, order)
+    package = package_for_vendor(db, order, user.id)
+    if package is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="That order was not found for this vendor.",
+        )
 
-    current_status = order.vendor_status
+    current_status = package.vendor_status
     if next_status != current_status:
         if next_status == "cancelled":
             if current_status not in VENDOR_STATUS_CANCELLABLE_FROM:
@@ -2169,63 +2270,61 @@ def update_vendor_order_status(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=(
-                    f"Orders move one stage at a time — this order is currently "
-                    f"{current_status.replace('_', ' ')}."
+                    f"Orders move one stage at a time — your items on this order "
+                    f"are currently {current_status.replace('_', ' ')}."
                 ),
             )
 
-    # Always track this vendor's fulfillment view.
-    order.vendor_status = next_status
+    package.vendor_status = next_status
     changed_wallet_vendor_ids: set[uuid.UUID] = set()
     if next_status == "cancelled":
-        if not is_sole_vendor:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    "This order includes items from other sellers. "
-                    "Contact ODOS support to cancel a shared cart."
-                ),
-            )
+        # A vendor cancelling now withdraws only their own items. It used to be
+        # refused outright on any shared cart ("contact ODOS support"), because
+        # cancelling wrote straight to the order and would have killed the other
+        # vendors' items along with their own.
+        package.cancelled_at = datetime.now(UTC)
+        package.cancellation_reason = "Cancelled by store"
+        package.tracking_eta = None
         record_order_status_event(
-            db, order, status=next_status, actor_role="vendor", actor_id=user.id, note="Cancelled by store"
+            db,
+            order,
+            status=next_status,
+            actor_role="vendor",
+            actor_id=user.id,
+            note=_package_status_note(order, package, "cancelled by store"),
+            event_metadata={"package_id": str(package.id)},
         )
-        order.status = "cancelled"
-        order.progress = 0
-        order.tracking_eta = None
-        order.cancelled_at = datetime.now(UTC)
-        order.cancellation_reason = "Cancelled by store"
     elif next_status == "out_for_delivery":
         # Delivery sub-state (delivery_status, dispatched_at, auto-release
         # scheduling, SMS, the DISPATCHED/REDISPATCHED audit event) is fully
         # owned by delivery_lifecycle_service — this only owns the vendor's
         # own fulfillment-view fields.
-        dispatch_order(db, order, actor=user)
-        order.status = "processing"
-        order.progress = 0.9
-        order.tracking_eta = "Out for delivery · on the way to you"
-        order.cancelled_at = None
-        order.cancellation_reason = None
+        dispatch_package(db, order, package, actor=user)
     else:
-        record_order_status_event(db, order, status=next_status, actor_role="vendor", actor_id=user.id)
+        record_order_status_event(
+            db,
+            order,
+            status=next_status,
+            actor_role="vendor",
+            actor_id=user.id,
+            note=_package_status_note(order, package, next_status.replace("_", " ")),
+            event_metadata={"package_id": str(package.id)},
+        )
         if next_status == "ready":
             # No-op unless this vendor asked ODOS to deliver this order. Every
             # order that stays on the vendor's own dispatch flow is unaffected.
             offer_ready_order(db, order, actor=user)
-        order.status = "processing"
-        progress_map = {
-            "pending": 0.1,
-            "confirmed": 0.2,
-            "processing": 0.45,
-            "ready": 0.75,
-        }
-        order.progress = progress_map.get(next_status, order.progress)
-        order.tracking_eta = tracking_eta_for_vendor_status(
+        package.tracking_eta = tracking_eta_for_vendor_status(
             next_status,
             order.delivery_method,
             get_delivery_config(db),
-        ) or order.tracking_eta
-        order.cancelled_at = None
-        order.cancellation_reason = None
+        ) or package.tracking_eta
+
+    # Every order-level field the rest of the app reads — vendor_status,
+    # delivery_status, progress, settlement_status, the dispatch/delivery
+    # timestamps — is derived from the packages here, in one place.
+    recompute_order_rollup(order)
+    order.tracking_eta = _order_tracking_eta(order)
 
     push_title, push_body = customer_order_status_push_copy(
         order_number=order.order_number,
@@ -2291,6 +2390,7 @@ def _require_owned_vendor_order(db: Session, user: User, order_id: str) -> Order
             selectinload(Order.items),
             selectinload(Order.user),
             selectinload(Order.timeline),
+            selectinload(Order.packages),
         )
         .where(Order.id == order_id)
     )
@@ -2309,13 +2409,29 @@ async def set_vendor_order_dispatch_photo(
     photo: UploadFile,
 ) -> VendorOrderRead:
     order = _require_owned_vendor_order(db, user, order_id)
-    if order.vendor_status in {"delivered", "cancelled"}:
+    # The photo is proof of *this vendor's* handover, so it belongs on their
+    # package. On a shared order, a photo of Kofi's dress going out says
+    # nothing about Ben's sneakers.
+    ensure_packages(db, order)
+    package = package_for_vendor(db, order, user.id)
+    if package is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="That order was not found for this vendor.",
+        )
+    if package.vendor_status in {"delivered", "cancelled"}:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"This order is already {order.vendor_status} — no need for a dispatch photo now.",
+            detail=(
+                f"Your items on this order are already {package.vendor_status} — "
+                "no need for a dispatch photo now."
+            ),
         )
 
     photo_url = await save_image_upload(photo, folder="orders/dispatch")
+    package.dispatch_photo_url = photo_url
+    # Mirrored onto the order so the existing admin and customer reads, which
+    # know nothing about packages, keep finding a photo where they expect one.
     order.dispatch_photo_url = photo_url
     db.commit()
     db.refresh(order)
@@ -2340,19 +2456,29 @@ def notify_vendor_order_departure(
     order_id: str,
 ) -> VendorOrderRead:
     order = _require_owned_vendor_order(db, user, order_id)
+    ensure_packages(db, order)
+    package = package_for_vendor(db, order, user.id)
+    if package is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="That order was not found for this vendor.",
+        )
 
-    if order.vendor_status not in {"ready", "out_for_delivery"}:
+    if package.vendor_status not in {"ready", "out_for_delivery"}:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="You can only send this heads-up once the order is ready.",
+            detail="You can only send this heads-up once your items are ready.",
         )
-    if order.departure_notified_at:
+    # Throttled per package: on a three-shop order each shop gets to announce
+    # its own departure, but only once.
+    if package.departure_notified_at:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="The customer has already been notified you're heading out.",
         )
 
-    order.departure_notified_at = datetime.now(UTC)
+    package.departure_notified_at = datetime.now(UTC)
+    order.departure_notified_at = package.departure_notified_at
     db.commit()
     db.refresh(order)
 
@@ -2973,3 +3099,111 @@ def reject_vendor_application(
     db.commit()
     db.refresh(application)
     return application
+
+
+# --------------------------------------------------------------------------
+# What this shop charges to deliver
+#
+# The shop sets the price because the shop pays the rider. A single
+# platform-wide fee was a number chosen by the one party not buying the fuel:
+# it overcharged the shop delivering two streets away and underpaid the one
+# crossing Accra, while ODOS kept the whole fee for a ride it never made.
+# --------------------------------------------------------------------------
+
+
+def _delivery_settings_read(store, config) -> VendorDeliverySettingsRead:
+    pricing = vendor_delivery_pricing(store, config)
+    return VendorDeliverySettingsRead(
+        economy_fee=store.delivery_fee_economy,
+        express_fee=store.delivery_fee_express,
+        same_day_fee=store.delivery_fee_same_day,
+        free_delivery_threshold=store.free_delivery_threshold,
+        express_enabled=bool(store.express_delivery_enabled),
+        same_day_enabled=bool(store.same_day_delivery_enabled),
+        default_economy_fee=config.economy_fee,
+        default_express_fee=config.express_fee,
+        default_same_day_fee=config.same_day_fee,
+        default_free_delivery_threshold=config.free_shipping_threshold,
+        badge=store_delivery_badge(store, config),
+        max_fee=MAX_VENDOR_DELIVERY_FEE,
+        max_free_delivery_threshold=MAX_FREE_DELIVERY_THRESHOLD,
+        is_custom=pricing.is_custom,
+    )
+
+
+def fetch_vendor_delivery_settings(db: Session, user: User) -> VendorDeliverySettingsRead:
+    require_vendor_access(user)
+    store = get_vendor_store(db, user)
+    if not store:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No managed store was found for this vendor.",
+        )
+    return _delivery_settings_read(store, get_delivery_config(db))
+
+
+def update_vendor_delivery_settings(
+    db: Session,
+    user: User,
+    payload: VendorDeliverySettingsUpdate,
+) -> VendorDeliverySettingsRead:
+    require_vendor_access(user)
+    store = get_vendor_store(db, user)
+    if not store:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No managed store was found for this vendor.",
+        )
+
+    # Only fields the client actually sent are touched. Without this, a form
+    # that renders three fee inputs and omits the fourth would silently wipe
+    # the fourth back to the platform default.
+    provided = payload.model_dump(exclude_unset=True)
+
+    for field in ("economy_fee", "express_fee", "same_day_fee"):
+        if field in provided and provided[field] is not None:
+            if provided[field] > MAX_VENDOR_DELIVERY_FEE:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        f"Delivery fees can't be more than GH₵{MAX_VENDOR_DELIVERY_FEE:.0f}. "
+                        "If a delivery really costs more than that, talk to ODOS support."
+                    ),
+                )
+
+    if provided.get("free_delivery_threshold") is not None:
+        if provided["free_delivery_threshold"] > MAX_FREE_DELIVERY_THRESHOLD:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "A free-delivery threshold above "
+                    f"GH₵{MAX_FREE_DELIVERY_THRESHOLD:.0f} isn't an offer anyone can use."
+                ),
+            )
+
+    field_map = {
+        "economy_fee": "delivery_fee_economy",
+        "express_fee": "delivery_fee_express",
+        "same_day_fee": "delivery_fee_same_day",
+        "free_delivery_threshold": "free_delivery_threshold",
+        "express_enabled": "express_delivery_enabled",
+        "same_day_enabled": "same_day_delivery_enabled",
+    }
+    for payload_field, column in field_map.items():
+        if payload_field in provided:
+            value = provided[payload_field]
+            if payload_field in ("express_enabled", "same_day_enabled"):
+                # A bool column can't take None; omitting the field leaves it.
+                if value is not None:
+                    setattr(store, column, bool(value))
+            else:
+                setattr(store, column, None if value is None else round(float(value), 2))
+
+    db.commit()
+    db.refresh(store)
+
+    # Prices only ever apply to future orders. An order already placed keeps
+    # the fee it was quoted — recorded on its package at checkout — so a shop
+    # raising its price today is never paid the new rate for yesterday's
+    # delivery, and never paid less either.
+    return _delivery_settings_read(store, get_delivery_config(db))

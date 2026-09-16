@@ -123,6 +123,12 @@ class VendorWalletTransaction(Base):
     amount: Mapped[float] = mapped_column(Float, nullable=False)
     gross_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
     commission_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
+    #: The delivery fee passed through to this vendor on a sale settlement.
+    #: Broken out rather than folded silently into `amount` so the vendor's
+    #: wallet can show "goods GH₵X + delivery GH₵Y" -- the whole point of the
+    #: change is that the vendor can see they were paid for the ride.
+    #: Commission never applies to it: it is cost recovery, not revenue.
+    delivery_fee_amount: Mapped[float | None] = mapped_column(Float, nullable=True)
     balance_after: Mapped[float] = mapped_column(Float, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

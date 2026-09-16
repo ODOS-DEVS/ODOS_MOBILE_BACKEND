@@ -28,6 +28,7 @@ from app.controllers.vendor_controller import (
     fetch_my_vendor_application,
     fetch_vendor_dashboard,
     fetch_vendor_profile,
+    fetch_vendor_delivery_settings,
     fetch_vendor_store,
     gift_vendor_voucher,
     get_vendor_order,
@@ -49,6 +50,7 @@ from app.controllers.vendor_controller import (
     reply_to_vendor_review,
     set_vendor_order_dispatch_photo,
     submit_vendor_application,
+    update_vendor_delivery_settings,
     update_vendor_order_status,
     update_vendor_product,
     update_vendor_product_status,
@@ -103,6 +105,8 @@ from app.schemas.vendor import (
     VendorReturnRequestUpdate,
     VendorReviewReplyUpdate,
     VendorReviewRead,
+    VendorDeliverySettingsRead,
+    VendorDeliverySettingsUpdate,
     VendorStoreRead,
     VendorVoucherGiftPayload,
     VendorVoucherRead,
@@ -700,6 +704,30 @@ def post_vendor_request_courier(
     behaviour exactly: they dispatch it to their own rider themselves.
     """
     return request_odos_courier(db, current_user, order_id)
+
+
+@router.get("/delivery-settings", response_model=VendorDeliverySettingsRead)
+def get_vendor_delivery_settings(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    """What this shop charges to deliver, alongside the platform defaults it
+    falls back to."""
+    return fetch_vendor_delivery_settings(db, current_user)
+
+
+@router.patch("/delivery-settings", response_model=VendorDeliverySettingsRead)
+def patch_vendor_delivery_settings(
+    payload: VendorDeliverySettingsUpdate,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    """Set this shop's own delivery prices.
+
+    Only fields present in the body change; send null to clear an override and
+    go back to the ODOS default. New prices apply to future orders only.
+    """
+    return update_vendor_delivery_settings(db, current_user, payload)
 
 
 @router.get("/store", response_model=VendorStoreRead)

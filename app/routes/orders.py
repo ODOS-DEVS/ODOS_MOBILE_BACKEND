@@ -1,4 +1,5 @@
 from typing import Annotated
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Request, Response, status
 from sqlalchemy.orm import Session
@@ -74,7 +75,25 @@ def confirm_existing_order_delivery(
     current_user: Annotated[User, Depends(get_current_user)],
     db: Session = Depends(get_db),
 ):
+    """Confirm the whole order arrived."""
     return confirm_order_delivery(db, current_user, order_id)
+
+
+@router.patch("/{order_id}/packages/{package_id}/deliver", response_model=OrderRead)
+def confirm_order_package_delivery(
+    order_id: str,
+    package_id: UUID,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    """Confirm one shop's package arrived.
+
+    A separate path rather than an optional body field on the route above, so
+    that confirming a single package is a distinct, auditable action in the
+    OpenAPI schema — and so a client cannot accidentally settle three vendors
+    by omitting a parameter.
+    """
+    return confirm_order_delivery(db, current_user, order_id, package_id=package_id)
 
 
 @router.post("/{order_id}/delivery-problem", response_model=OrderRead)
@@ -85,7 +104,12 @@ def report_delivery_problem_route(
     db: Session = Depends(get_db),
 ):
     return report_order_delivery_problem(
-        db, current_user, order_id, reason=payload.reason, details=payload.details
+        db,
+        current_user,
+        order_id,
+        reason=payload.reason,
+        details=payload.details,
+        package_id=payload.package_id,
     )
 
 
@@ -106,7 +130,9 @@ def request_delivery_reschedule(
     current_user: Annotated[User, Depends(get_current_user)],
     db: Session = Depends(get_db),
 ):
-    return request_order_reschedule(db, current_user, order_id, payload.note)
+    return request_order_reschedule(
+        db, current_user, order_id, payload.note, package_id=payload.package_id
+    )
 
 
 @router.post("/{order_id}/returns", response_model=ReturnRequestRead, status_code=status.HTTP_201_CREATED)

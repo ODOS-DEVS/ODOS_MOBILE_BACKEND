@@ -354,15 +354,55 @@ def _vendor_allocation_map(
     )
 
 
+def _delivery_fee_by_vendor(
+    order: Order,
+    *,
+    vendor_scope: set[uuid.UUID] | None = None,
+) -> dict[uuid.UUID, float]:
+    """What each vendor is owed for carrying their own package.
+
+    Reads the fee recorded on the package at checkout rather than re-pricing
+    from the store's current settings: a shop that raises its delivery price
+    on Tuesday must not be paid the new price for a Monday order the customer
+    was charged the old one for.
+    """
+    fees: dict[uuid.UUID, float] = {}
+    for package in getattr(order, "packages", []) or []:
+        vendor_user_id = package.vendor_user_id
+        if not vendor_user_id:
+            continue
+        if vendor_scope and vendor_user_id not in vendor_scope:
+            continue
+        fees[vendor_user_id] = float(package.delivery_fee or 0.0)
+    return fees
+
+
 def settle_vendor_wallets_for_order(
     db: Session,
     order: Order,
     *,
     vendor_scope: set[uuid.UUID] | None = None,
 ) -> set[uuid.UUID]:
+    """Credit each in-scope vendor for their share of an order.
+
+    `vendor_scope` is how a single package settles on its own. It used to be
+    optional in practice as well as in signature -- the delivery lifecycle
+    called this with no scope at all, so confirming receipt of one package on
+    a three-vendor order paid all three, including the two that had shipped
+    nothing. Every caller now passes a scope; the parameter stays optional only
+    for the admin paths that genuinely mean "settle the whole order".
+
+    The delivery fee rides along here. It is added to the vendor's net
+    **after** commission and is never commissioned itself: the vendor paid a
+    rider out of pocket, and taking a cut of a cost reimbursement would just
+    recreate, one level down, the problem that moving the fee to the vendor
+    was meant to solve.
+    """
     allocations = _vendor_allocation_map(order, vendor_scope=vendor_scope, db=db)
     if not allocations:
         return set()
+
+    delivery_fees = _delivery_fee_by_vendor(order, vendor_scope=vendor_scope)
 
     changed_vendor_ids: set[uuid.UUID] = set()
     for vendor_user_id, allocation in allocations.items():
@@ -376,12 +416,15 @@ def settle_vendor_wallets_for_order(
         if existing_transaction:
             continue
 
+        delivery_fee = _round_money(delivery_fees.get(vendor_user_id, 0.0))
+        credited_amount = _round_money(allocation["net_amount"] + delivery_fee)
+
         wallet = _lock_vendor_wallet(db, vendor_user_id)
         wallet.available_balance = _round_money(
-            wallet.available_balance + allocation["net_amount"]
+            wallet.available_balance + credited_amount
         )
         wallet.lifetime_earnings = _round_money(
-            wallet.lifetime_earnings + allocation["net_amount"]
+            wallet.lifetime_earnings + credited_amount
         )
         wallet.total_commission = _round_money(
             wallet.total_commission + allocation["commission_amount"]
@@ -394,9 +437,10 @@ def settle_vendor_wallets_for_order(
                 order_id=order.id,
                 kind="sale_settlement",
                 title=f"Order #{order.order_number} settled",
-                amount=allocation["net_amount"],
+                amount=credited_amount,
                 gross_amount=allocation["gross_amount"],
                 commission_amount=allocation["commission_amount"],
+                delivery_fee_amount=delivery_fee or None,
                 balance_after=wallet.available_balance,
             )
         )
@@ -410,8 +454,17 @@ def settle_vendor_wallets_for_order(
                 kind="wallet_credit",
                 title="Sale settled to your wallet",
                 body=(
-                    f"Order #{order.order_number} added {wallet.currency} "
-                    f"{allocation['net_amount']:.2f} to your vendor wallet."
+                    (
+                        f"Order #{order.order_number} added {wallet.currency} "
+                        f"{credited_amount:.2f} to your vendor wallet "
+                        f"({wallet.currency} {allocation['net_amount']:.2f} for the items "
+                        f"+ {wallet.currency} {delivery_fee:.2f} delivery)."
+                    )
+                    if delivery_fee > 0
+                    else (
+                        f"Order #{order.order_number} added {wallet.currency} "
+                        f"{credited_amount:.2f} to your vendor wallet."
+                    )
                 ),
                 icon="wallet-outline",
                 accent="success",

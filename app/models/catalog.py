@@ -5,6 +5,7 @@ import uuid
 from sqlalchemy import (
     Boolean,
     DateTime,
+    Float,
     ForeignKey,
     Integer,
     String,
@@ -188,6 +189,33 @@ class Store(Base):
     )
     vacation_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
     business_hours: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
+    # --- What this shop charges to deliver ------------------------------
+    # Null means "use whatever the platform default is", which is how every
+    # store starts and how every store that never opens the setting stays.
+    # A shop that never touches them keeps pricing exactly as it does today.
+    #
+    # The shop sets the price because the shop pays the rider. A flat
+    # platform-wide fee is a guess made by the one party that isn't buying the
+    # fuel -- it overcharges the shop delivering two streets away and
+    # underpays the one crossing Accra. See
+    # app/services/delivery_service.py::vendor_delivery_pricing.
+    delivery_fee_economy: Mapped[float | None] = mapped_column(Float, nullable=True)
+    delivery_fee_express: Mapped[float | None] = mapped_column(Float, nullable=True)
+    delivery_fee_same_day: Mapped[float | None] = mapped_column(Float, nullable=True)
+    #: Basket value at or above which this shop delivers free. 0 means always
+    #: free (and earns the "Free delivery" badge); null falls back to the
+    #: platform threshold.
+    free_delivery_threshold: Mapped[float | None] = mapped_column(Float, nullable=True)
+    #: Turned off by a shop that cannot deliver a method at all -- it then
+    #: disappears from checkout for carts containing that shop.
+    express_delivery_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true", nullable=False
+    )
+    same_day_delivery_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true", nullable=False
+    )
+
     sort_order: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     is_active: Mapped[bool] = mapped_column(
         Boolean,

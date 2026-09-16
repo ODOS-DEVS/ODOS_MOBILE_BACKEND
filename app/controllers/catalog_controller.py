@@ -14,6 +14,8 @@ from app.models import (
     Store,
 )
 from app.schemas.catalog import FlashSaleEventRead, ProductRead
+from app.services.delivery_service import get_delivery_config
+from app.services.package_pricing_service import annotate_store_delivery
 from app.services.pricing_service import get_flash_sale_context_map, resolve_effective_product_price
 
 
@@ -292,11 +294,15 @@ def list_stores(
 
     statement = statement.order_by(Store.sort_order.asc(), Store.title.asc())
 
-    return list(db.scalars(statement).all())
+    stores = list(db.scalars(statement).all())
+    # "Free delivery" is the strongest badge a shop can wear on a card, so it
+    # has to reach the browse list, not only the store page.
+    annotate_store_delivery(stores, get_delivery_config(db))
+    return stores
 
 
 def get_store(db: Session, store_id: str) -> Store | None:
-    return db.scalar(
+    store = db.scalar(
         select(Store).where(
             Store.id == store_id,
             Store.is_active.is_(True),
@@ -304,6 +310,8 @@ def get_store(db: Session, store_id: str) -> Store | None:
             Store.is_on_vacation.is_(False),
         )
     )
+    annotate_store_delivery(store, get_delivery_config(db))
+    return store
 
 
 def list_promo_banners(db: Session, *, placement: str | None = None) -> list[PromoBanner]:

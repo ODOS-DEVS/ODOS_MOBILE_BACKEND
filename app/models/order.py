@@ -199,6 +199,13 @@ class Order(Base):
         cascade="all, delete-orphan",
         order_by="OrderStatusEvent.occurred_at.asc()",
     )
+    # One per vendor on the order. Single-vendor orders -- the overwhelming
+    # majority -- have exactly one, and behave identically to before.
+    packages: Mapped[list["OrderPackage"]] = relationship(
+        back_populates="order",
+        cascade="all, delete-orphan",
+        order_by="OrderPackage.package_number.asc()",
+    )
 
 
 class OrderStatusEvent(Base):
@@ -509,4 +516,187 @@ class Review(Base):
             "product_id",
             name="uq_reviews_user_order_product",
         ),
+    )
+
+
+class OrderPackage(Base):
+    """One vendor's share of an order -- the bag that vendor actually carries.
+
+    Why this exists:
+
+    An order is one commercial event for the customer (one number, one receipt,
+    one payment) but it can be several fulfilment events -- a dress from one
+    shop, sneakers from another. Before this table those several events shared
+    a single pair of columns on Order (`vendor_status`, `delivery_status`), and
+    that produced three live faults on any multi-vendor order:
+
+      * the forward-transition guard compared against the *shared* status, so
+        the second vendor to touch the order was rejected with "orders move one
+        stage at a time" and could not progress their own items at all;
+      * the first vendor to tap "out for delivery" dispatched the whole order,
+        told the customer everything was on the way, and started the
+        auto-release clock for items still sitting on other vendors' shelves;
+      * settlement ran with no vendor scope, so confirming receipt of the one
+        package that did arrive paid *every* vendor on the order, including the
+        ones that had shipped nothing.
+
+    Each package owns its own fulfilment stage, its own delivery sub-state, its
+    own auto-release clock, and its own settlement. Order.vendor_status and
+    Order.delivery_status stay exactly where they are and keep being written --
+    they become a derived roll-up of the packages (see
+    `app.services.order_package_service.recompute_order_rollup`) so that every
+    existing reader, query and index keeps working untouched.
+
+    Items are not linked here by foreign key. Ownership is resolved by
+    `vendor_user_id`, which is already how every other part of this codebase
+    decides which items belong to which vendor; a second link would be a second
+    source of truth free to drift from the first.
+
+    `delivery_fee` is the money side of the same idea. The fee is charged per
+    package and paid to the vendor that carries it, because under today's
+    fulfilment model that vendor is the one paying a rider out of pocket. It
+    carries no commission -- it is cost recovery, not revenue.
+    """
+
+    __tablename__ = "order_packages"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    order_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("orders.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # Nullable for the same reason OrderItem.vendor_user_id is: a vendor
+    # account can be removed after the fact and the order must survive it.
+    vendor_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    store_id: Mapped[str | None] = mapped_column(
+        String(50), ForeignKey("stores.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    # Snapshotted so a package still says which shop it came from after a
+    # rename, exactly as Delivery snapshots its pickup address.
+    store_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    #: 1-based, stable, and what the customer sees as "Package 2 of 3".
+    package_number: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+
+    # --- This vendor's own fulfilment stage ------------------------------
+    # Same vocabulary as Order.vendor_status (pending | confirmed | processing
+    # | ready | out_for_delivery | delivered | cancelled) and moved through the
+    # same forward-transition table -- but per package, so one vendor being
+    # fast can no longer lock another one out.
+    vendor_status: Mapped[str] = mapped_column(
+        String(30), nullable=False, default="pending", server_default="pending", index=True
+    )
+    # not_dispatched | out_for_delivery | rescheduled | customer_problem
+    # | delivered | failed
+    delivery_status: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        default="not_dispatched",
+        server_default="not_dispatched",
+        index=True,
+    )
+
+    # --- Money -----------------------------------------------------------
+    #: Sum of this vendor's item line totals, before any discount.
+    items_subtotal: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0, server_default="0"
+    )
+    #: This package's share of the order-level discount. Stored rather than
+    #: re-derived so a voucher's allocation cannot drift after the fact.
+    discount_share: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0, server_default="0"
+    )
+    #: What the customer paid to have *this* bag delivered, and what this
+    #: vendor receives for delivering it. Zero when the package cleared the
+    #: free-delivery threshold.
+    delivery_fee: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0, server_default="0"
+    )
+    #: True when the fee is zero because the threshold was met, as opposed to
+    #: the vendor pricing delivery at zero. Kept apart so the receipt can say
+    #: "Free delivery (over GH₵299)" rather than a bare 0.00.
+    delivery_fee_waived: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    # not_eligible | eligible | settled | held
+    settlement_status: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="not_eligible",
+        server_default="not_eligible",
+        index=True,
+    )
+
+    # --- Delivery progress (per package, mirroring the old Order columns) --
+    dispatched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    dispatch_attempt_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    cancellation_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # customer | auto_release | admin_override
+    confirmation_method: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    #: Indexed range scan for the auto-release sweep, set at dispatch.
+    auto_release_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    auto_released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    delivery_reminder_sent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    delivery_problem_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    delivery_problem_reported_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    reschedule_requested_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    reschedule_note: Mapped[str | None] = mapped_column(String(280), nullable=True)
+    dispatch_photo_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    dispatch_photo_key: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    departure_notified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    tracking_eta: Mapped[str | None] = mapped_column(String(120), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    order: Mapped["Order"] = relationship(back_populates="packages")
+
+    @property
+    def item_ids(self) -> list[uuid.UUID]:
+        """Which of the order's items are in this bag.
+
+        Derived rather than stored, because `order_items.vendor_user_id` is
+        already the codebase's single answer to "whose item is this" and a
+        second link would be free to drift from it. Serialized onto the API so
+        a client can group items under packages without a second request.
+        """
+        order = self.order
+        if order is None:
+            return []
+        return [
+            item.id for item in order.items if item.vendor_user_id == self.vendor_user_id
+        ]
+
+    __table_args__ = (
+        # One package per vendor per order. Two rows would reintroduce exactly
+        # the ambiguity this table exists to remove.
+        UniqueConstraint("order_id", "vendor_user_id", name="uq_order_package_order_vendor"),
     )
