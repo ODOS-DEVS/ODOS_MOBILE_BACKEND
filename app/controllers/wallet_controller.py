@@ -214,17 +214,43 @@ def _serialize_vendor_withdrawal_request(
     )
 
 
-def _serialize_vendor_wallet(wallet: VendorWallet) -> VendorWalletRead:
-    recent_transactions = sorted(
-        wallet.transactions,
-        key=lambda transaction: transaction.created_at,
-        reverse=True,
-    )[:12]
+#: How much history the vendor wallet response carries. The client reveals it
+#: a page at a time; this is the ceiling on what it can reveal.
+VENDOR_WALLET_HISTORY_LIMIT = 12
+
+
+def _recent_vendor_transactions(db: Session, wallet: VendorWallet):
+    """Newest transactions, ordered and limited in SQL rather than in Python.
+
+    `wallet.transactions` is the entire relationship: reading it to show a
+    dozen rows means loading every settlement, refund and payout a vendor has
+    ever had. Harmless on a new store and progressively less so on a busy one.
+    """
+    return list(
+        db.scalars(
+            select(VendorWalletTransaction)
+            .where(VendorWalletTransaction.wallet_id == wallet.id)
+            .order_by(VendorWalletTransaction.created_at.desc())
+            .limit(VENDOR_WALLET_HISTORY_LIMIT)
+        ).all()
+    )
+
+
+def _serialize_vendor_wallet(
+    wallet: VendorWallet,
+    recent_transactions=None,
+) -> VendorWalletRead:
+    if recent_transactions is None:
+        recent_transactions = sorted(
+            wallet.transactions,
+            key=lambda transaction: transaction.created_at,
+            reverse=True,
+        )[:VENDOR_WALLET_HISTORY_LIMIT]
     withdrawal_requests = sorted(
         wallet.withdrawal_requests,
         key=lambda request: request.created_at,
         reverse=True,
-    )[:12]
+    )[:VENDOR_WALLET_HISTORY_LIMIT]
     return VendorWalletRead(
         id=wallet.id,
         vendor_user_id=wallet.vendor_user_id,
@@ -304,7 +330,8 @@ def _load_vendor_wallet(
     wallet = db.scalar(
         select(VendorWallet)
         .options(
-            selectinload(VendorWallet.transactions),
+            # Transactions are fetched separately and bounded; eager-loading the
+            # whole relationship here is what this change exists to stop.
             selectinload(VendorWallet.withdrawal_requests).selectinload(
                 VendorWithdrawalRequest.reviewed_by_user
             ),
@@ -319,7 +346,8 @@ def _load_vendor_wallet(
     wallet = db.scalar(
         select(VendorWallet)
         .options(
-            selectinload(VendorWallet.transactions),
+            # Transactions are fetched separately and bounded; eager-loading the
+            # whole relationship here is what this change exists to stop.
             selectinload(VendorWallet.withdrawal_requests).selectinload(
                 VendorWithdrawalRequest.reviewed_by_user
             ),
@@ -569,7 +597,7 @@ def reverse_vendor_wallet_for_return_request(
 def fetch_vendor_wallet(db: Session, current_user: User) -> VendorWalletRead:
     _require_approved_vendor(current_user)
     wallet = _load_vendor_wallet(db, current_user.id)
-    return _serialize_vendor_wallet(wallet)
+    return _serialize_vendor_wallet(wallet, _recent_vendor_transactions(db, wallet))
 
 
 def list_vendor_payout_institutions(
@@ -644,7 +672,9 @@ def update_vendor_payout_details(
     db.commit()
     refreshed_wallet = _load_vendor_wallet(db, current_user.id)
     publish_vendor_wallet_updates(current_user.id)
-    return _serialize_vendor_wallet(refreshed_wallet)
+    return _serialize_vendor_wallet(
+        refreshed_wallet, _recent_vendor_transactions(db, refreshed_wallet)
+    )
 
 
 def _dispatch_admin_withdrawal_alert(

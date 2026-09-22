@@ -324,12 +324,43 @@ def credit_customer_wallet_for_delivery_delay(db: Session, order: Order) -> Cust
     return wallet
 
 
-def _serialize_wallet(wallet: CustomerWallet) -> CustomerWalletRead:
-    recent_transactions = sorted(
-        wallet.transactions,
-        key=lambda transaction: transaction.created_at,
-        reverse=True,
-    )[:25]
+#: How many transactions the wallet response carries. The client reveals them
+#: a page at a time; this is the ceiling on what it can reveal.
+RECENT_TRANSACTION_LIMIT = 25
+
+
+def _recent_transactions(db: Session, wallet: CustomerWallet) -> list[CustomerWalletTransaction]:
+    """The newest transactions for a wallet, ordered and limited in SQL.
+
+    Previously this read `wallet.transactions` -- the whole relationship --
+    sorted it in Python and kept 25. That loads every transaction a customer
+    has ever had in order to show two dozen: fine for a new account, and
+    quietly worse every time they spend. Postgres can do the ordering and the
+    limit, so it should.
+    """
+    return list(
+        db.scalars(
+            select(CustomerWalletTransaction)
+            .where(CustomerWalletTransaction.wallet_id == wallet.id)
+            .order_by(CustomerWalletTransaction.created_at.desc())
+            .limit(RECENT_TRANSACTION_LIMIT)
+        ).all()
+    )
+
+
+def _serialize_wallet(
+    wallet: CustomerWallet,
+    recent_transactions: list[CustomerWalletTransaction] | None = None,
+) -> CustomerWalletRead:
+    # Callers that already hold the wallet's transactions (a freshly created
+    # one, or a topup flow that just wrote a row) pass None and fall back to
+    # the relationship, which is cheap in exactly those cases.
+    if recent_transactions is None:
+        recent_transactions = sorted(
+            wallet.transactions,
+            key=lambda transaction: transaction.created_at,
+            reverse=True,
+        )[:RECENT_TRANSACTION_LIMIT]
     return CustomerWalletRead(
         id=wallet.id,
         user_id=wallet.user_id,
@@ -355,25 +386,23 @@ def _serialize_wallet(wallet: CustomerWallet) -> CustomerWalletRead:
 
 
 def fetch_customer_wallet(db: Session, current_user: User) -> CustomerWalletRead:
+    # No selectinload of transactions: this endpoint needs the newest 25, not
+    # the customer's entire history, and that is a separate bounded query.
     wallet = db.scalar(
-        select(CustomerWallet)
-        .options(selectinload(CustomerWallet.transactions))
-        .where(CustomerWallet.user_id == current_user.id)
+        select(CustomerWallet).where(CustomerWallet.user_id == current_user.id)
     )
     if not wallet:
         get_or_create_customer_wallet(db, current_user.id)
         db.commit()
         wallet = db.scalar(
-            select(CustomerWallet)
-            .options(selectinload(CustomerWallet.transactions))
-            .where(CustomerWallet.user_id == current_user.id)
+            select(CustomerWallet).where(CustomerWallet.user_id == current_user.id)
         )
     if not wallet:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="We couldn't prepare your wallet.",
         )
-    return _serialize_wallet(wallet)
+    return _serialize_wallet(wallet, _recent_transactions(db, wallet))
 
 
 def initialize_wallet_topup(
