@@ -22,6 +22,7 @@ from app.models import (
     User,
     UserRole,
 )
+from app.schemas.admin import AdminStoreProductRead
 
 SUPPORTED_ACCOUNT_STATUSES = {"active", "blocked", "inactive"}
 SUPPORTED_VENDOR_STATUSES = {"active", "suspended"}
@@ -153,3 +154,20 @@ def _sync_platform_store_avatar(store: Store, avatar_url: str | None) -> None:
     if avatar_url:
         store.image_url = avatar_url
         store.image_banner_url = avatar_url
+
+
+def _serialize_store_product(product: Product) -> AdminStoreProductRead:
+    return AdminStoreProductRead(
+        id=product.id,
+        name=product.title,
+        status=product.status,
+        price=product.price,
+        old_price=product.old_price,
+        discount=product.discount,
+        stock=product.stock,
+        category=product.category or "",
+        subcategory=product.subcategory,
+        images=product.image_urls or ([product.image_url] if product.image_url else []),
+        created_at=product.created_at,
+        updated_at=product.updated_at,
+    )

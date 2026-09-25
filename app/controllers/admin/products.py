@@ -35,7 +35,6 @@ from app.schemas.admin import (
     AdminProductCreate,
     AdminProductRead,
     AdminProductStatusUpdate,
-    AdminStoreProductRead,
 )
 from app.schemas.pagination import AdminPageRead
 from app.services.media_service import save_image_uploads
@@ -60,21 +59,6 @@ def _generate_product_id() -> str:
     return f"admin-product-{uuid.uuid4().hex[:12]}"
 
 
-def _serialize_store_product(product: Product) -> AdminStoreProductRead:
-    return AdminStoreProductRead(
-        id=product.id,
-        name=product.title,
-        status=product.status,
-        price=product.price,
-        old_price=product.old_price,
-        discount=product.discount,
-        stock=product.stock,
-        category=product.category or "",
-        subcategory=product.subcategory,
-        images=product.image_urls or ([product.image_url] if product.image_url else []),
-        created_at=product.created_at,
-        updated_at=product.updated_at,
-    )
 
 
 def _serialize_product(
