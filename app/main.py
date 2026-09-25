@@ -36,6 +36,7 @@ from app.routes import (
     payment_methods,
     payments,
     promo_analytics,
+    public_pages,
     realtime,
     recommendations,
     reviews,
@@ -209,6 +210,10 @@ app.add_middleware(EventLoggingMiddleware)
 uploads_directory = Path(settings.media_root)
 uploads_directory.mkdir(parents=True, exist_ok=True)
 
+# Support, privacy and terms are served at the site root rather than under
+# /api: they are pages a person opens in a browser, and the App Store requires
+# a working Support URL and Privacy Policy URL.
+app.include_router(public_pages.router)
 app.include_router(health.router, prefix="/api")
 app.include_router(auth.router, prefix="/api/auth")
 app.include_router(account.router, prefix="/api")
