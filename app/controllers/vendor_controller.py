@@ -17,6 +17,7 @@ from app.controllers.voucher_controller import (
 from app.controllers.wallet_controller import publish_vendor_wallet_updates
 from app.core.admin_pagination import normalize_page_params, paginate_scalars
 from app.core.admin_permissions import list_admins_with_feature
+from app.core.auth import require_admin
 from app.core.config import settings
 from app.core.product_taxonomy import resolve_product_taxonomy
 from app.models import (
@@ -334,14 +335,6 @@ def _dispatch_vendor_application_approved_email(
         logger.exception(
             "Failed to send vendor application approved email to %s",
             user.email,
-        )
-
-
-def require_admin(user: User) -> None:
-    if user.role != UserRole.ADMIN:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin access is required for this action.",
         )
 
 

@@ -6,12 +6,8 @@ remove.
 """
 
 
-from fastapi import HTTPException, status
 
-from app.models import (
-    User,
-    UserRole,
-)
+from app.core.auth import require_admin  # noqa: F401  (re-exported to the admin domain modules)
 
 SUPPORTED_ACCOUNT_STATUSES = {"active", "blocked", "inactive"}
 SUPPORTED_VENDOR_STATUSES = {"active", "suspended"}
@@ -26,11 +22,3 @@ SUPPORTED_ORDER_STATUSES = {
     "delivered",
     "cancelled",
 }
-
-
-def require_admin(user: User) -> None:
-    if user.role != UserRole.ADMIN:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin access is required for this action.",
-        )

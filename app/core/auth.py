@@ -121,13 +121,20 @@ def require_user(user: User) -> None:
 
 
 def require_admin(user: User) -> None:
-    """Verify user is admin; raise HTTPException if not."""
+    """Raise 403 unless the user is an admin.
+
+    The single definition of this check. It previously existed five times --
+    here, in admin_permissions, and copied into three controllers -- with three
+    different messages, so the same 403 read differently depending on which
+    endpoint produced it. The wording kept is the one the majority of call
+    sites already returned.
+    """
     from app.models.user import UserRole
 
     if user.role != UserRole.ADMIN:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin access required",
+            detail="Admin access is required for this action.",
         )
 
 

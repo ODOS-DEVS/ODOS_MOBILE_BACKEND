@@ -7,6 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.admin_pagination import paginate_scalars
+from app.core.auth import require_admin
 from app.models import (
     Order,
     PaymentTransaction,
@@ -14,7 +15,6 @@ from app.models import (
     PlatformTreasuryAccount,
     ReturnRequest,
     User,
-    UserRole,
     VendorWallet,
     VendorWithdrawalRequest,
 )
@@ -30,14 +30,6 @@ from app.services.finance_math import (
     round_money,
     vendor_allocation_map,
 )
-
-
-def require_admin(user: User) -> None:
-    if user.role != UserRole.ADMIN:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin access is required for this action.",
-        )
 
 
 def get_or_create_platform_treasury_account(

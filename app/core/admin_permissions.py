@@ -7,6 +7,7 @@ from fastapi import Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.core.auth import get_current_user
+from app.core.auth import require_admin as auth_require_admin
 from app.core.database import get_db
 from app.models import User, UserRole
 
@@ -144,11 +145,13 @@ def list_admins_with_feature(db: Session, feature: str) -> list[User]:
 
 
 def require_admin(user: User) -> User:
-    if user.role != UserRole.ADMIN:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin access required.",
-        )
+    """Admin guard that returns the user, for callers that chain off it.
+
+    Delegates the actual check so the rule and its message live in one place;
+    this exists only because require_admin_feature and the audit helpers below
+    use the return value.
+    """
+    auth_require_admin(user)
     return user
 
 

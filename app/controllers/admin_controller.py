@@ -25,6 +25,7 @@ from app.controllers.vendor_controller import (
 )
 from app.core.admin_pagination import paginate_scalars
 from app.core.admin_permissions import AdminPermissionLevel, require_super_admin
+from app.core.auth import require_admin
 from app.core.catalog_taxonomy import ODOS_CATEGORY_TAXONOMY
 from app.core.event_types import USER_LOGIN
 from app.core.promo_banner_config import (
@@ -175,14 +176,6 @@ def _generate_store_id() -> str:
 
 def _generate_product_id() -> str:
     return f"admin-product-{uuid.uuid4().hex[:12]}"
-
-
-def require_admin(user: User) -> None:
-    if user.role != UserRole.ADMIN:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin access is required for this action.",
-        )
 
 
 def max_refund_amount_for(unit_price: float, quantity: int) -> float:
