@@ -40,7 +40,6 @@ from app.schemas.admin import (
     AdminStoreStatsRead,
     AdminStoreStatusUpdate,
     AdminStoreUpsert,
-    AdminUserStoreSummaryRead,
 )
 from app.schemas.pagination import AdminPageRead
 from app.services.media_service import remove_media_file, save_image_upload
@@ -61,21 +60,6 @@ SUPPORTED_ORDER_STATUSES = {
 }
 
 
-def _serialize_user_store_summary(store: Store) -> AdminUserStoreSummaryRead:
-    return AdminUserStoreSummaryRead(
-        id=store.id,
-        name=store.title,
-        slug=store.slug,
-        status=store.status,
-        logo_image=store.image_url,
-        banner_image=store.image_banner_url,
-        market_id=store.market_id,
-        location=store.address,
-        region=store.region or "",
-        city=store.city or "",
-        created_at=store.created_at,
-        updated_at=store.updated_at,
-    )
 
 
 def _serialize_store(store: Store) -> AdminStoreRead:
