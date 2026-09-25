@@ -40,9 +40,7 @@ def campaign_is_live(campaign: MerchandisingCampaign, *, now: datetime | None = 
         return False
     if campaign.starts_at and campaign.starts_at > current:
         return False
-    if campaign.ends_at and campaign.ends_at < current:
-        return False
-    return True
+    return not (campaign.ends_at and campaign.ends_at < current)
 
 
 def derive_campaign_status(

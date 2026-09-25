@@ -82,12 +82,11 @@ async def create_vendor_campaign(
     store = await get_vendor_store(db, vendor_user)
 
     # Validate dates
-    if payload.starts_at and payload.ends_at:
-        if payload.ends_at < payload.starts_at:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="End time must be after start time.",
-            )
+    if payload.starts_at and payload.ends_at and payload.ends_at < payload.starts_at:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="End time must be after start time.",
+        )
 
     # Create campaign
     campaign = MerchandisingCampaign(

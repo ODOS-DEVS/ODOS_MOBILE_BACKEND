@@ -158,14 +158,12 @@ class BackupCodeService:
         Returns:
             List of backup codes
         """
-        codes = [
+        return [
             "".join(random.choices(string.ascii_uppercase + string.digits, k=cls.BACKUP_CODE_LENGTH))
             for _ in range(cls.BACKUP_CODES_COUNT)
         ]
-        return codes
 
     @classmethod
     def format_backup_codes(cls, codes: list[str]) -> str:
         """Format backup codes for display/printing."""
-        formatted = "\n".join([f"{i+1:2d}. {code}" for i, code in enumerate(codes)])
-        return formatted
+        return "\n".join([f"{i+1:2d}. {code}" for i, code in enumerate(codes)])

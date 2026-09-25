@@ -899,45 +899,44 @@ async def stream_gemini_reply(
 
     accumulated = ""
     url = f"{settings.gemini_api_base}/models/{model}:streamGenerateContent"
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        async with client.stream(
-            "POST",
-            url,
-            params={"key": settings.gemini_api_key.strip(), "alt": "sse"},
-            headers={"Content-Type": "application/json"},
-            json=request_body,
-        ) as response:
-            if response.status_code != 200:
-                error_body = (await response.aread()).decode("utf-8", errors="replace")
-                logger.warning(
-                    "Gemini stream HTTP %s for %s: %s",
-                    response.status_code,
-                    model,
-                    error_body[:500],
-                )
-                raise AssistantStreamUnavailable(f"Gemini stream HTTP {response.status_code}")
+    async with httpx.AsyncClient(timeout=60.0) as client, client.stream(
+        "POST",
+        url,
+        params={"key": settings.gemini_api_key.strip(), "alt": "sse"},
+        headers={"Content-Type": "application/json"},
+        json=request_body,
+    ) as response:
+        if response.status_code != 200:
+            error_body = (await response.aread()).decode("utf-8", errors="replace")
+            logger.warning(
+                "Gemini stream HTTP %s for %s: %s",
+                response.status_code,
+                model,
+                error_body[:500],
+            )
+            raise AssistantStreamUnavailable(f"Gemini stream HTTP {response.status_code}")
 
-            async for raw_line in response.aiter_lines():
-                line = raw_line.strip()
-                if not line.startswith("data:"):
-                    continue
-                data = line[len("data:") :].strip()
-                if not data:
-                    continue
-                try:
-                    chunk = json.loads(data)
-                except json.JSONDecodeError:
-                    continue
-                text, function_calls, _ = _parse_gemini_parts(chunk)
-                if function_calls:
-                    # Not expected on the final pass (tools already resolved) — bail
-                    # to the safe fallback rather than guessing how to handle it.
-                    raise AssistantStreamUnavailable(
-                        "Gemini requested a tool call during the streamed final pass."
-                    )
-                if text:
-                    accumulated += text
-                    yield ("token", accumulated)
+        async for raw_line in response.aiter_lines():
+            line = raw_line.strip()
+            if not line.startswith("data:"):
+                continue
+            data = line[len("data:") :].strip()
+            if not data:
+                continue
+            try:
+                chunk = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+            text, function_calls, _ = _parse_gemini_parts(chunk)
+            if function_calls:
+                # Not expected on the final pass (tools already resolved) — bail
+                # to the safe fallback rather than guessing how to handle it.
+                raise AssistantStreamUnavailable(
+                    "Gemini requested a tool call during the streamed final pass."
+                )
+            if text:
+                accumulated += text
+                yield ("token", accumulated)
 
     if not accumulated.strip():
         raise AssistantStreamUnavailable("Gemini stream produced no text.")
@@ -979,7 +978,7 @@ async def _call_gemini(
             url = f"{base_url}/models/{candidate_model}:generateContent"
             retries = (*GEMINI_RETRY_DELAYS_SECONDS, None)
 
-            for attempt_index, delay_seconds in enumerate(retries):
+            for _attempt_index, delay_seconds in enumerate(retries):
                 response = await client.post(
                     url,
                     params={"key": api_key},

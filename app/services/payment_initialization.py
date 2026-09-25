@@ -73,4 +73,4 @@ def initialize_payment_providers() -> None:
 
 def get_configured_payment_providers() -> list[str]:
     """Get list of configured payment providers."""
-    return [provider.value for provider in PaymentProviderFactory.get_all_providers().keys()]
+    return [provider.value for provider in PaymentProviderFactory.get_all_providers()]

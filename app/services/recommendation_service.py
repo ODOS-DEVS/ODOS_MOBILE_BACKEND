@@ -81,9 +81,7 @@ def _humanize_category_key(key: str) -> str:
 def _is_recommendable(product: Product) -> bool:
     if not product.is_active or product.status != "active":
         return False
-    if product.stock is not None and product.stock < MIN_STOCK:
-        return False
-    return True
+    return not (product.stock is not None and product.stock < MIN_STOCK)
 
 
 def _filter_recommendable(products: list[Product]) -> list[Product]:
@@ -339,7 +337,7 @@ def _score_similar_product(
     overlap = anchor_keys.intersection(product_keys)
     score += len(overlap) * 14.0
 
-    if anchor.subcategory and product.subcategory:
+    if anchor.subcategory and product.subcategory:  # noqa: SIM102 (nested for the comment between the conditions)
         if _normalize_token(anchor.subcategory) == _normalize_token(product.subcategory):
             score += 10.0
 

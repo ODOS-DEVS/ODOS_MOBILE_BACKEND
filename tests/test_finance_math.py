@@ -30,7 +30,7 @@ def build_order(lines, *, discount: float = 0.0, subtotal: float | None = None):
     return types.SimpleNamespace(
         items=items,
         discount_amount=discount,
-        subtotal_amount=subtotal if subtotal is not None else sum(l[1] for l in lines),
+        subtotal_amount=subtotal if subtotal is not None else sum(line[1] for line in lines),
     )
 
 
@@ -83,7 +83,7 @@ def test_discount_shares_sum_to_the_discount_pool():
 def test_apportionment_never_creates_or_destroys_money(line_totals, discount):
     vendors = [uuid.uuid4() for _ in line_totals]
     order = build_order(
-        [(v, t, f"s{i}") for i, (v, t) in enumerate(zip(vendors, line_totals))],
+        [(v, t, f"s{i}") for i, (v, t) in enumerate(zip(vendors, line_totals, strict=False))],
         discount=discount,
     )
 
@@ -102,7 +102,7 @@ def test_net_plus_commission_equals_gross_for_each_vendor():
     from the settlement that produced it."""
     vendors = [uuid.uuid4() for _ in range(3)]
     order = build_order(
-        [(v, t, f"s{i}") for i, (v, t) in enumerate(zip(vendors, [10.05, 20.07, 33.33]))],
+        [(v, t, f"s{i}") for i, (v, t) in enumerate(zip(vendors, [10.05, 20.07, 33.33], strict=False))],
         discount=3.33,
     )
 

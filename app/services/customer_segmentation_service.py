@@ -284,10 +284,7 @@ class CustomerSegmentationService:
         }.get(segment, 0.5)
 
         # Frequency-based risk
-        if purchase_frequency_days:
-            frequency_risk = min(1, days_since_last_purchase / purchase_frequency_days)
-        else:
-            frequency_risk = 0.5
+        frequency_risk = min(1, days_since_last_purchase / purchase_frequency_days) if purchase_frequency_days else 0.5
 
         # Weighted risk
         churn_risk = (base_risk * 0.4) + (segment_risk * 0.3) + (frequency_risk * 0.3)

@@ -2711,14 +2711,11 @@ def update_admin_product_status(
 
 def _serialize_admin_vouchers(db: Session, vouchers: list[Voucher]) -> list[AdminVoucherRead]:
     stats_map = _voucher_stats_map(db, [voucher.id for voucher in vouchers])
-    store_name_map = {
-        store_id: title
-        for store_id, title in db.execute(
+    store_name_map = dict(db.execute(
             select(Store.id, Store.title).where(
                 Store.id.in_([voucher.store_id for voucher in vouchers if voucher.store_id])
             )
-        ).all()
-    }
+        ).all())
     return [
         _serialize_voucher(
             voucher,
@@ -3208,12 +3205,9 @@ def _resolve_review_context(
     if not store_ids:
         return products, {}
 
-    store_name_map = {
-        store_id: title
-        for store_id, title in db.execute(
+    store_name_map = dict(db.execute(
             select(Store.id, Store.title).where(Store.id.in_(store_ids))
-        ).all()
-    }
+        ).all())
     return products, store_name_map
 
 

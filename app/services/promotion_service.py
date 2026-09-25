@@ -59,13 +59,12 @@ def build_voucher_reward_text(
     bogo_get_quantity: int | None = None,
     bogo_get_discount_percent: float | None = None,
 ) -> str:
-    if promotion_type == "bogo" or discount_type == "bogo":
-        if bogo_buy_quantity and bogo_get_quantity:
-            pct = bogo_get_discount_percent or 100
-            if pct >= 100:
-                return f"BUY {bogo_buy_quantity} GET {bogo_get_quantity} FREE"
-            pct_val = int(pct) if float(pct).is_integer() else round(pct, 1)
-            return f"BUY {bogo_buy_quantity} GET {bogo_get_quantity} {pct_val}% OFF"
+    if (promotion_type == "bogo" or discount_type == "bogo") and bogo_buy_quantity and bogo_get_quantity:
+        pct = bogo_get_discount_percent or 100
+        if pct >= 100:
+            return f"BUY {bogo_buy_quantity} GET {bogo_get_quantity} FREE"
+        pct_val = int(pct) if float(pct).is_integer() else round(pct, 1)
+        return f"BUY {bogo_buy_quantity} GET {bogo_get_quantity} {pct_val}% OFF"
     if discount_type == "percent":
         value = int(discount_value) if float(discount_value).is_integer() else round(discount_value, 2)
         return f"{value}% OFF"
@@ -212,7 +211,7 @@ def _line_is_eligible(
     owner_type = getattr(voucher, "owner_type", None) or (
         "vendor" if voucher.scope == "store" and voucher.store_id else "platform"
     )
-    if owner_type == "vendor":
+    if owner_type == "vendor":  # noqa: SIM102 (nested for the comment between the conditions)
         # Vendor vouchers may never discount another store's products.
         if not voucher.store_id or store_id != voucher.store_id:
             return False
@@ -482,9 +481,7 @@ def is_voucher_publicly_listable(voucher: Voucher) -> bool:
         return False
     if voucher.availability not in PUBLIC_VOUCHER_AVAILABILITY:
         return False
-    if getattr(voucher, "approval_status", APPROVED_VOUCHER_STATUS) != APPROVED_VOUCHER_STATUS:
-        return False
-    return True
+    return getattr(voucher, "approval_status", APPROVED_VOUCHER_STATUS) == APPROVED_VOUCHER_STATUS
 
 
 def resolve_voucher_owner_type(

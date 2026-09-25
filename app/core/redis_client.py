@@ -1,3 +1,4 @@
+import contextlib
 import logging
 import ssl
 import time
@@ -104,10 +105,8 @@ def close_redis() -> None:
     global _redis_client, _last_redis_error
 
     if _redis_client is not None:
-        try:
+        with contextlib.suppress(Exception):
             _redis_client.close()
-        except Exception:
-            pass
 
     _redis_client = None
     _last_redis_error = None

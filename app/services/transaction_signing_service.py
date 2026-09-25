@@ -39,13 +39,12 @@ class TransactionSigningService:
         canonical_data = json.dumps(transaction_data, sort_keys=True, separators=(",", ":"))
 
         # Generate HMAC-SHA256
-        signature = hmac.new(
+        return hmac.new(
             key.encode(),
             canonical_data.encode(),
             hashlib.sha256
         ).hexdigest()
 
-        return signature
 
     @classmethod
     def verify_transaction_signature(cls, transaction_data: dict[str, Any], provided_signature: str) -> bool:
@@ -76,12 +75,11 @@ class TransactionSigningService:
             Hex-encoded HMAC-SHA256 signature
         """
         key = cls.get_signing_key()
-        signature = hmac.new(
+        return hmac.new(
             key.encode(),
             payload.encode(),
             hashlib.sha256
         ).hexdigest()
-        return signature
 
     @classmethod
     def verify_webhook_signature(cls, payload: str, provided_signature: str) -> bool:
@@ -114,13 +112,12 @@ class TransactionSigningService:
         data = f"{user_id}:{amount}:{recipient}"
         key = cls.get_signing_key()
 
-        idempotency = hmac.new(
+        return hmac.new(
             key.encode(),
             data.encode(),
             hashlib.sha256
         ).hexdigest()
 
-        return idempotency
 
     @classmethod
     def verify_idempotency_key(cls, user_id: str, amount: float, recipient: str, provided_key: str) -> bool:

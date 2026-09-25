@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import logging
+
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, text
 
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 def _schema_has_column(connection, table_name: str, column_name: str) -> bool:
@@ -69,7 +73,7 @@ def recover_alembic_version() -> None:
         has_promotion_schema = _schema_has_promotion_engine(connection)
 
         if current == "k1l2m3n4o5p6" and not has_promotion_schema and "j0k1l2m3n4o5" in available:
-            print(
+            logger.warning(
                 "Alembic recovery: promotion migration marked applied but schema missing; "
                 "stamping 'j0k1l2m3n4o5'"
             )
@@ -89,13 +93,13 @@ def recover_alembic_version() -> None:
             # Stamping a guess (previously: the codebase head) marks every
             # migration applied without running it and corrupts the schema
             # silently. Leave the stamp alone and let alembic fail loudly.
-            print(
+            logger.warning(
                 "Alembic recovery: database references missing revision "
                 f"{current!r} and its schema matches no known revision; "
                 "leaving alembic_version untouched for manual repair."
             )
             return
-        print(
+        logger.warning(
             "Alembic recovery: database references missing revision "
             f"{current!r}; stamping {target!r}"
         )

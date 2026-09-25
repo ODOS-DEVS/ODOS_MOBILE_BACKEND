@@ -1,6 +1,6 @@
 import uuid
+from collections.abc import Iterable
 from datetime import UTC, datetime
-from typing import Iterable
 
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
@@ -75,7 +75,7 @@ def _voucher_store_name_map(db: Session, store_ids: Iterable[str]) -> dict[str, 
         return {}
 
     rows = db.execute(select(Store.id, Store.title).where(Store.id.in_(unique_ids))).all()
-    return {store_id: title for store_id, title in rows}
+    return dict(rows)
 
 
 def _assignment_for_user(db: Session, voucher_id: uuid.UUID, user_id: uuid.UUID) -> VoucherAssignment | None:
@@ -187,7 +187,7 @@ def _product_store_map(db: Session, items: list[OrderItemCreate]) -> dict[str, s
         return {}
 
     rows = db.execute(select(Product.id, Product.store_id).where(Product.id.in_(product_ids))).all()
-    return {product_id: store_id for product_id, store_id in rows}
+    return dict(rows)
 
 
 def _eligible_subtotal_for_voucher(

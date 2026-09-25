@@ -71,8 +71,7 @@ class EncryptionService:
             return "*" * len(account_number)
 
         # Show only last N characters
-        masked = "*" * (len(account_number) - visible_chars) + account_number[-visible_chars:]
-        return masked
+        return "*" * (len(account_number) - visible_chars) + account_number[-visible_chars:]
 
     @classmethod
     def generate_encryption_key(cls) -> str:

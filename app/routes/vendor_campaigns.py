@@ -86,11 +86,13 @@ async def create_my_campaign(
             setattr(campaign_create, key, value)
 
         return await create_vendor_campaign(db, current_user, campaign_create)
-    except ValueError as e:
+    except ValueError as exc:
+        # `from exc` keeps the original traceback attached, so a validation
+        # failure is distinguishable from a fault inside this handler.
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e),
-        )
+            detail=str(exc),
+        ) from exc
 
 
 @router.get("/{campaign_id}")
@@ -138,8 +140,10 @@ async def update_my_campaign(
             setattr(campaign_create, key, value)
 
         return await update_vendor_campaign(db, current_user, campaign_id, campaign_create)
-    except ValueError as e:
+    except ValueError as exc:
+        # `from exc` keeps the original traceback attached, so a validation
+        # failure is distinguishable from a fault inside this handler.
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e),
-        )
+            detail=str(exc),
+        ) from exc

@@ -18,7 +18,7 @@ def get_available_payment_methods(db: Session, current_user: User) -> dict[str, 
 
     return {
         "available_methods": methods,
-        "payment_providers": [provider.value for provider in PaymentProviderFactory.get_all_providers().keys()],
+        "payment_providers": [provider.value for provider in PaymentProviderFactory.get_all_providers()],
         "total_methods": len(methods),
     }
 

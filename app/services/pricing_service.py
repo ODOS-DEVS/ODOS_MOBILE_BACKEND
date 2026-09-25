@@ -39,9 +39,7 @@ def _is_within_sale_window(
 ) -> bool:
     if starts_at and starts_at > now:
         return False
-    if ends_at and ends_at < now:
-        return False
-    return True
+    return not (ends_at and ends_at < now)
 
 
 def _build_discount_label(compare_at: float, sale: float) -> str | None:

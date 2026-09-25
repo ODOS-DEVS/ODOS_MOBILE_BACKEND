@@ -3161,17 +3161,16 @@ def update_vendor_delivery_settings(
     provided = payload.model_dump(exclude_unset=True)
 
     for field in ("economy_fee", "express_fee", "same_day_fee"):
-        if field in provided and provided[field] is not None:
-            if provided[field] > MAX_VENDOR_DELIVERY_FEE:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=(
-                        f"Delivery fees can't be more than GH₵{MAX_VENDOR_DELIVERY_FEE:.0f}. "
-                        "If a delivery really costs more than that, talk to ODOS support."
-                    ),
-                )
+        if field in provided and provided[field] is not None and provided[field] > MAX_VENDOR_DELIVERY_FEE:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    f"Delivery fees can't be more than GH₵{MAX_VENDOR_DELIVERY_FEE:.0f}. "
+                    "If a delivery really costs more than that, talk to ODOS support."
+                ),
+            )
 
-    if provided.get("free_delivery_threshold") is not None:
+    if provided.get("free_delivery_threshold") is not None:  # noqa: SIM102 (nested for the comment between the conditions)
         if provided["free_delivery_threshold"] > MAX_FREE_DELIVERY_THRESHOLD:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,

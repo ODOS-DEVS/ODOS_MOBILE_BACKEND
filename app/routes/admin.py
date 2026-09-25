@@ -120,60 +120,6 @@ from app.core.database import get_db
 from app.core.rate_limit import limit_login
 from app.models import User
 from app.routes.admin_list_params import AdminListParams
-from app.schemas.delivery_settings import (
-    AdminDeliverySettingsRead,
-    AdminDeliverySettingsUpdate,
-)
-from app.schemas.event_log import EventLogPageRead, EventLogStatsRead
-from app.schemas.pagination import AdminPageRead
-from app.schemas.payment import (
-    AdminFinanceOverviewRead,
-    AdminPaymentTransactionRead,
-    AdminPlatformLedgerEntryRead,
-)
-from app.schemas.promo_analytics import (
-    PromoAnalyticsLeaderboardRead,
-    PromoAnalyticsOverviewRead,
-    PromoAnalyticsTimeseriesRead,
-)
-from app.services.promo_analytics_service import (
-    ENTITY_TYPES as PROMO_ENTITY_TYPES,
-)
-from app.services.promo_analytics_service import (
-    build_leaderboard as build_promo_leaderboard,
-)
-from app.services.promo_analytics_service import (
-    build_overview as build_promo_overview,
-)
-from app.services.promo_analytics_service import (
-    build_timeseries as build_promo_timeseries,
-)
-
-
-def _validate_promo_entity_type(entity_type: str) -> None:
-    if entity_type not in PROMO_ENTITY_TYPES:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"entity_type must be one of: {', '.join(PROMO_ENTITY_TYPES)}.",
-        )
-
-
-RequirePromotionsAdmin = Annotated[User, Depends(require_admin_feature("promotions"))]
-RequireUsersAdmin = Annotated[User, Depends(require_admin_feature("users"))]
-RequireVendorsAdmin = Annotated[User, Depends(require_admin_feature("vendors"))]
-RequireFinanceAdmin = Annotated[User, Depends(require_admin_feature("finance"))]
-RequirePayoutsAdmin = Annotated[User, Depends(require_admin_feature("payouts"))]
-RequireOrdersAdmin = Annotated[User, Depends(require_admin_feature("orders"))]
-RequireDashboardAdmin = Annotated[User, Depends(require_admin_feature("dashboard"))]
-RequireReturnsAdmin = Annotated[User, Depends(require_admin_feature("returns"))]
-RequireProductsAdmin = Annotated[User, Depends(require_admin_feature("products"))]
-RequireStoresAdmin = Annotated[User, Depends(require_admin_feature("stores"))]
-RequireMarketsAdmin = Annotated[User, Depends(require_admin_feature("markets"))]
-RequireCategoriesAdmin = Annotated[User, Depends(require_admin_feature("categories"))]
-RequireReviewsAdmin = Annotated[User, Depends(require_admin_feature("reviews"))]
-RequireNotificationsAdmin = Annotated[User, Depends(require_admin_feature("notifications"))]
-RequireDeliveryAdmin = Annotated[User, Depends(require_admin_feature("delivery"))]
-
 from app.schemas.admin import (
     AdminBootstrapStatusRead,
     AdminCategoryRead,
@@ -222,12 +168,66 @@ from app.schemas.admin import (
     AdminVoucherUpsert,
     NotificationMarkReadResponse,
 )
+from app.schemas.delivery_settings import (
+    AdminDeliverySettingsRead,
+    AdminDeliverySettingsUpdate,
+)
+from app.schemas.event_log import EventLogPageRead, EventLogStatsRead
+from app.schemas.pagination import AdminPageRead
+from app.schemas.payment import (
+    AdminFinanceOverviewRead,
+    AdminPaymentTransactionRead,
+    AdminPlatformLedgerEntryRead,
+)
+from app.schemas.promo_analytics import (
+    PromoAnalyticsLeaderboardRead,
+    PromoAnalyticsOverviewRead,
+    PromoAnalyticsTimeseriesRead,
+)
 from app.schemas.user import AuthToken, UserCreate, UserLogin, UserRead
 from app.schemas.vendor import (
     VendorApplicationListItem,
     VendorApplicationRead,
     VendorApplicationReviewPayload,
 )
+from app.services.promo_analytics_service import (
+    ENTITY_TYPES as PROMO_ENTITY_TYPES,
+)
+from app.services.promo_analytics_service import (
+    build_leaderboard as build_promo_leaderboard,
+)
+from app.services.promo_analytics_service import (
+    build_overview as build_promo_overview,
+)
+from app.services.promo_analytics_service import (
+    build_timeseries as build_promo_timeseries,
+)
+
+
+def _validate_promo_entity_type(entity_type: str) -> None:
+    if entity_type not in PROMO_ENTITY_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"entity_type must be one of: {', '.join(PROMO_ENTITY_TYPES)}.",
+        )
+
+
+RequirePromotionsAdmin = Annotated[User, Depends(require_admin_feature("promotions"))]
+RequireUsersAdmin = Annotated[User, Depends(require_admin_feature("users"))]
+RequireVendorsAdmin = Annotated[User, Depends(require_admin_feature("vendors"))]
+RequireFinanceAdmin = Annotated[User, Depends(require_admin_feature("finance"))]
+RequirePayoutsAdmin = Annotated[User, Depends(require_admin_feature("payouts"))]
+RequireOrdersAdmin = Annotated[User, Depends(require_admin_feature("orders"))]
+RequireDashboardAdmin = Annotated[User, Depends(require_admin_feature("dashboard"))]
+RequireReturnsAdmin = Annotated[User, Depends(require_admin_feature("returns"))]
+RequireProductsAdmin = Annotated[User, Depends(require_admin_feature("products"))]
+RequireStoresAdmin = Annotated[User, Depends(require_admin_feature("stores"))]
+RequireMarketsAdmin = Annotated[User, Depends(require_admin_feature("markets"))]
+RequireCategoriesAdmin = Annotated[User, Depends(require_admin_feature("categories"))]
+RequireReviewsAdmin = Annotated[User, Depends(require_admin_feature("reviews"))]
+RequireNotificationsAdmin = Annotated[User, Depends(require_admin_feature("notifications"))]
+RequireDeliveryAdmin = Annotated[User, Depends(require_admin_feature("delivery"))]
+
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 

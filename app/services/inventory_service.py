@@ -200,7 +200,7 @@ def record_stock_change(
 
     product.stock = resolved_stock
 
-    if delta != 0 or reason in {"system", "manual", "bulk"}:
+    if delta != 0 or reason in {"system", "manual", "bulk"}:  # noqa: SIM102 (nested for the comment between the conditions)
         # Always ledger non-zero deltas; also ledger explicit manual/bulk/system
         # when stock is set to the same value only if delta != 0.
         if delta != 0:

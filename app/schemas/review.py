@@ -13,8 +13,7 @@ class ReviewUpsert(BaseModel):
     @field_validator("product_id", "comment", mode="before")
     @classmethod
     def strip_text(cls, value: str) -> str:
-        cleaned = value.strip()
-        return cleaned
+        return value.strip()
 
     @field_validator("rating", mode="before")
     @classmethod

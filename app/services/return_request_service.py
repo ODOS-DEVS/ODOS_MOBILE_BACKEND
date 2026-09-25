@@ -264,11 +264,10 @@ def apply_return_request_status_change(
 
     # Paying out for an item nobody has confirmed came back is the expensive
     # failure mode here, so it has to be chosen rather than fallen into.
-    if status in STATUSES_REQUIRING_GOODS_ACCOUNTED:
-        if not goods_are_accounted_for(
-            received_at=request.received_at, return_waived=request.return_waived
-        ):
-            raise ReturnGoodsNotAccountedError()
+    if status in STATUSES_REQUIRING_GOODS_ACCOUNTED and not goods_are_accounted_for(
+        received_at=request.received_at, return_waived=request.return_waived
+    ):
+        raise ReturnGoodsNotAccountedError()
 
     request.status = status
     if note is not None:

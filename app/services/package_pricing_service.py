@@ -204,10 +204,7 @@ def quote_package(
     waived = not always_free and subtotal >= threshold
     fee = 0.0 if (always_free or waived) else base_fee
 
-    if fee <= 0:
-        remaining = None
-    else:
-        remaining = round(max(threshold - subtotal, 0.0), 2) or None
+    remaining = None if fee <= 0 else round(max(threshold - subtotal, 0.0), 2) or None
 
     return PackageQuote(
         vendor_user_id=group.vendor_user_id,

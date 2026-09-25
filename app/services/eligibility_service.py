@@ -95,26 +95,23 @@ def evaluate_eligibility(
     if rules is None:
         return True, None
 
-    if rules.min_lifetime_order_count is not None:
-        if stats.order_count < rules.min_lifetime_order_count:
-            return (
-                False,
-                f"You need to have at least {rules.min_lifetime_order_count} order(s) to use this promotion.",
-            )
+    if rules.min_lifetime_order_count is not None and stats.order_count < rules.min_lifetime_order_count:
+        return (
+            False,
+            f"You need to have at least {rules.min_lifetime_order_count} order(s) to use this promotion.",
+        )
 
-    if rules.max_lifetime_order_count is not None:
-        if stats.order_count > rules.max_lifetime_order_count:
-            return (
-                False,
-                "This promotion is not available for your account.",
-            )
+    if rules.max_lifetime_order_count is not None and stats.order_count > rules.max_lifetime_order_count:
+        return (
+            False,
+            "This promotion is not available for your account.",
+        )
 
-    if rules.min_lifetime_spend is not None:
-        if stats.lifetime_spend < rules.min_lifetime_spend:
-            return (
-                False,
-                f"You need to have spent at least GH₵{rules.min_lifetime_spend:.0f} to use this promotion.",
-            )
+    if rules.min_lifetime_spend is not None and stats.lifetime_spend < rules.min_lifetime_spend:
+        return (
+            False,
+            f"You need to have spent at least GH₵{rules.min_lifetime_spend:.0f} to use this promotion.",
+        )
 
     if rules.dormant_days_since_last_order is not None:
         if stats.last_order_at is None:

@@ -35,6 +35,19 @@ ignore = [
     # Long messages and SQLAlchemy filter chains read better unbroken than
     # wrapped mid-expression. Genuine offenders are caught at 120 above.
     "E501",
+
+    # `class Status(str, Enum)` and `class Status(StrEnum)` are not
+    # interchangeable: str() and f-strings render the former as "Status.MEMBER"
+    # and the latter as "member". These enums are serialised into API responses
+    # and interpolated into notification copy, so converting them would change
+    # output that clients and customers already see. Verified by running both
+    # forms rather than assuming they matched.
+    "UP042",
+
+    # PEP 695 generic syntax. Cosmetic, and the codebase reads consistently
+    # with the older spelling; not worth a mixed style.
+    "UP046",
+    "UP047",
 ]
 
 [tool.ruff.lint.per-file-ignores]

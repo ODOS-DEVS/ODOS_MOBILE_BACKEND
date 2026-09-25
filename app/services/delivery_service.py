@@ -193,10 +193,7 @@ def is_same_day_order_window_open(
     now: datetime | None = None,
 ) -> bool:
     current = now or datetime.now(ACCRA_TZ)
-    if current.tzinfo is None:
-        current = current.replace(tzinfo=ACCRA_TZ)
-    else:
-        current = current.astimezone(ACCRA_TZ)
+    current = current.replace(tzinfo=ACCRA_TZ) if current.tzinfo is None else current.astimezone(ACCRA_TZ)
     if current.weekday() == 6:
         return False
     return current.hour < config.same_day_cutoff_hour
@@ -240,10 +237,7 @@ def build_delivery_options(
         same_day_eta = "Greater Accra only"
     elif not same_day_window_ok:
         current = now or datetime.now(ACCRA_TZ)
-        if current.tzinfo is None:
-            current = current.replace(tzinfo=ACCRA_TZ)
-        else:
-            current = current.astimezone(ACCRA_TZ)
+        current = current.replace(tzinfo=ACCRA_TZ) if current.tzinfo is None else current.astimezone(ACCRA_TZ)
         same_day_reason = (
             "Same-day resumes Monday before 2:00 PM"
             if current.weekday() == 6

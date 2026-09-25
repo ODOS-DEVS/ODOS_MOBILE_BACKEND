@@ -96,8 +96,18 @@ class Base(DeclarativeBase):
 
 
 def get_db():
+    """Yield a session for one request, rolling back if the request fails.
+
+    The rollback is explicit rather than relying on the connection pool's
+    reset-on-return, which would also discard the transaction. Stating it here
+    means the guarantee lives in the code rather than in a pool default that a
+    later configuration change could quietly alter.
+    """
     db = SessionLocal()
     try:
         yield db
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()

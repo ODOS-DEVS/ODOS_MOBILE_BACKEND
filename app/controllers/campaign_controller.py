@@ -21,7 +21,30 @@ from app.models.catalog import (
     MerchandisingCampaignOptIn,
     MerchandisingCampaignProduct,
 )
+from app.schemas.admin import (
+    AdminMerchandisingCampaignOptInRead,
+    AdminMerchandisingCampaignRead,
+    AdminMerchandisingCampaignUpsert,
+)
+from app.schemas.catalog import MerchandisingCampaignDetailRead, MerchandisingCampaignRead
+from app.schemas.pagination import AdminPageRead
+from app.services.campaign_service import (
+    CAMPAIGN_STATUSES,
+    PRODUCT_SORT_MODES,
+    VISIBILITY_MODES,
+    campaign_is_live,
+    count_campaign_products,
+    derive_campaign_status,
+    get_campaign_by_slug,
+    get_campaign_target_maps,
+    list_live_campaigns,
+    replace_campaign_targets,
+    resolve_campaign_products,
+    slugify_campaign,
+    sync_campaign_schedule_status,
+)
 from app.services.email_service import send_admin_campaign_opt_in_email
+from app.services.media_service import save_image_upload
 from app.services.push_service import build_push_data, send_expo_push_notification
 from app.services.sms_service import notify_admins_by_sms
 
@@ -63,29 +86,6 @@ def _dispatch_admin_campaign_opt_in_alert(
             f"'{campaign_title}' campaign. Review in the admin panel."
         ),
     )
-from app.schemas.admin import (
-    AdminMerchandisingCampaignOptInRead,
-    AdminMerchandisingCampaignRead,
-    AdminMerchandisingCampaignUpsert,
-)
-from app.schemas.catalog import MerchandisingCampaignDetailRead, MerchandisingCampaignRead
-from app.schemas.pagination import AdminPageRead
-from app.services.campaign_service import (
-    CAMPAIGN_STATUSES,
-    PRODUCT_SORT_MODES,
-    VISIBILITY_MODES,
-    campaign_is_live,
-    count_campaign_products,
-    derive_campaign_status,
-    get_campaign_by_slug,
-    get_campaign_target_maps,
-    list_live_campaigns,
-    replace_campaign_targets,
-    resolve_campaign_products,
-    slugify_campaign,
-    sync_campaign_schedule_status,
-)
-from app.services.media_service import save_image_upload
 
 
 def invalidate_merchandising_campaigns() -> None:
@@ -593,51 +593,50 @@ def review_admin_campaign_opt_in(
     campaign = db.get(MerchandisingCampaign, row.campaign_id)
     vendor = db.get(User, row.vendor_user_id)
 
-    if cleaned in {"approved", "rejected"}:
-        if vendor:
-            product_title = product.title if product else "your product"
-            campaign_title = campaign.title if campaign else "the campaign"
-            if cleaned == "approved":
-                title = "Campaign opt-in approved"
-                body = f"{product_title} is now featured in {campaign_title}."
-            else:
-                title = "Campaign opt-in declined"
-                body = f"{product_title} was not selected for {campaign_title}."
-                if review_notes:
-                    body = f"{body} {review_notes}"
+    if cleaned in {"approved", "rejected"} and vendor:
+        product_title = product.title if product else "your product"
+        campaign_title = campaign.title if campaign else "the campaign"
+        if cleaned == "approved":
+            title = "Campaign opt-in approved"
+            body = f"{product_title} is now featured in {campaign_title}."
+        else:
+            title = "Campaign opt-in declined"
+            body = f"{product_title} was not selected for {campaign_title}."
+            if review_notes:
+                body = f"{body} {review_notes}"
 
-            notification_event = create_notification_event(
-                db,
-                vendor,
-                kind=f"vendor_campaign_opt_in_{cleaned}",
-                title=title,
-                body=body,
-                icon="megaphone-outline" if cleaned == "approved" else "close-circle-outline",
-                accent="success" if cleaned == "approved" else "neutral",
-                action_label="View campaigns",
-                route_type="vendor_campaign",
-                route_target_id=str(row.id),
-            )
-            if vendor.expo_push_token and vendor.allow_notifications:
-                try:
-                    send_expo_push_notification(
-                        user=vendor,
-                        title=title,
-                        body=body,
-                        data=build_push_data(
-                            push_type="vendor_campaign_opt_in",
-                            route_type="vendor_campaign",
-                            route_target_id=str(row.id),
-                            notification_event=notification_event,
-                            extra={"optInId": str(row.id)},
-                        ),
-                    )
-                except Exception:
-                    logger.exception(
-                        "Failed to push campaign opt-in review alert to vendor %s",
-                        vendor.id,
-                    )
-            db.commit()
+        notification_event = create_notification_event(
+            db,
+            vendor,
+            kind=f"vendor_campaign_opt_in_{cleaned}",
+            title=title,
+            body=body,
+            icon="megaphone-outline" if cleaned == "approved" else "close-circle-outline",
+            accent="success" if cleaned == "approved" else "neutral",
+            action_label="View campaigns",
+            route_type="vendor_campaign",
+            route_target_id=str(row.id),
+        )
+        if vendor.expo_push_token and vendor.allow_notifications:
+            try:
+                send_expo_push_notification(
+                    user=vendor,
+                    title=title,
+                    body=body,
+                    data=build_push_data(
+                        push_type="vendor_campaign_opt_in",
+                        route_type="vendor_campaign",
+                        route_target_id=str(row.id),
+                        notification_event=notification_event,
+                        extra={"optInId": str(row.id)},
+                    ),
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to push campaign opt-in review alert to vendor %s",
+                    vendor.id,
+                )
+        db.commit()
 
     return AdminMerchandisingCampaignOptInRead(
         id=row.id,

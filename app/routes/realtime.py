@@ -1,3 +1,4 @@
+import contextlib
 import uuid
 
 import jwt
@@ -86,7 +87,5 @@ async def websocket_events(websocket: WebSocket) -> None:
     finally:
         realtime_manager.disconnect(connection_id, websocket)
         if websocket.application_state == WebSocketState.CONNECTED:
-            try:
+            with contextlib.suppress(Exception):
                 await websocket.close()
-            except Exception:
-                pass

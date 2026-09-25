@@ -709,10 +709,7 @@ async def post_chat_message(
         if thread.assigned_admin_at is None:
             thread.assigned_admin_at = datetime.now(UTC)
 
-    if user.id == thread.customer_user_id:
-        recipient_user_id = thread.vendor_user_id
-    else:
-        recipient_user_id = thread.customer_user_id
+    recipient_user_id = thread.vendor_user_id if user.id == thread.customer_user_id else thread.customer_user_id
 
     message = ChatMessage(
         thread_id=thread.id,

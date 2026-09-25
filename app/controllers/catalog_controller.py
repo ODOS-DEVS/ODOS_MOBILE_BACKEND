@@ -208,10 +208,7 @@ def list_catalog_products(
             statement = statement.outerjoin(Store, Product.store_id == Store.id)
             for slug in slug_variants:
                 category_filters.append(Store.audience_slugs.contains([slug]))
-        if category_filters:
-            statement = statement.where(or_(*category_filters)).distinct()
-        else:
-            statement = statement.where(false())
+        statement = statement.where(or_(*category_filters)).distinct() if category_filters else statement.where(false())
 
     if subcategory:
         normalized_subcategory = _normalize_filter_value(subcategory)
@@ -343,9 +340,7 @@ def _flash_event_is_live(event: FlashSaleEvent, now: datetime) -> bool:
         return False
     if event.starts_at and event.starts_at > now:
         return False
-    if event.ends_at <= now:
-        return False
-    return True
+    return not event.ends_at <= now
 
 
 def _normalize_event_slug(value: str) -> str:
@@ -372,14 +367,13 @@ def _get_flash_event_product_ids(db: Session, slug: str) -> list[str]:
         return []
 
     event = events[0]
-    rows = list(
+    return list(
         db.scalars(
             select(FlashSaleEventProduct.product_id)
             .where(FlashSaleEventProduct.event_id == event.id)
             .order_by(FlashSaleEventProduct.sort_order.asc(), FlashSaleEventProduct.product_id.asc())
         ).all()
     )
-    return rows
 
 
 def _get_live_flash_event_product_ids(db: Session) -> list[str]:

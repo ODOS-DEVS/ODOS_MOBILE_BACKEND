@@ -300,7 +300,7 @@ class AdvancedAnalyticsService:
 
         active_vendors = db.scalar(
             select(func.count(func.distinct(Store.vendor_id)))
-            .where(Store.is_active == True)
+            .where(Store.is_active.is_(True))
         ) or 0
 
         # Top vendor by revenue
@@ -327,7 +327,7 @@ class AdvancedAnalyticsService:
 
         avg_rating = db.scalar(
             select(func.avg(Store.rating))
-            .where(Store.is_active == True)
+            .where(Store.is_active.is_(True))
         ) or 0.0
 
         avg_products = db.scalar(
