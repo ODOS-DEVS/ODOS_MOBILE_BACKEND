@@ -4,26 +4,21 @@ import uuid
 from datetime import UTC, datetime
 
 from fastapi import HTTPException, UploadFile, status
-from sqlalchemy import case, func, select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.controllers.auth_controller import build_auth_token, login_user
 from app.controllers.vendor_controller import (
-    broadcast_catalog_product_change,
     broadcast_catalog_store_change,
-    fetch_vendor_dashboard,
     list_vendor_applications,
-    serialize_vendor_product,
 )
 from app.core.admin_pagination import paginate_scalars
 from app.core.admin_permissions import AdminPermissionLevel, require_super_admin
 from app.core.auth import require_admin
-from app.core.catalog_taxonomy import ODOS_CATEGORY_TAXONOMY
 from app.core.event_types import USER_LOGIN
 from app.core.security import hash_password
 from app.helpers.admin_audit import (
-    log_admin_product_mutation,
     log_admin_role_change,
     log_admin_user_status_change,
     log_admin_vendor_status_change,
@@ -58,12 +53,8 @@ from app.schemas.admin import (
     AdminMarketRead,
     AdminMarketUpsert,
     AdminPermissionUpdate,
-    AdminProductCreate,
-    AdminProductRead,
-    AdminProductStatusUpdate,
     AdminStaffCreate,
     AdminStoreDetailRead,
-    AdminStoreProductRead,
     AdminStoreRead,
     AdminStoreStatsRead,
     AdminStoreStatusUpdate,
@@ -88,7 +79,7 @@ from app.schemas.user import AuthToken, UserCreate, UserLogin
 from app.services.event_log_service import record_admin_event
 from app.services.finance_math import round_money
 from app.services.inventory_service import LOW_STOCK_THRESHOLD
-from app.services.media_service import remove_media_file, save_image_upload, save_image_uploads
+from app.services.media_service import remove_media_file, save_image_upload
 from app.services.realtime_service import realtime_manager
 
 SUPPORTED_ACCOUNT_STATUSES = {"active", "blocked", "inactive"}
@@ -106,24 +97,12 @@ SUPPORTED_ORDER_STATUSES = {
 }
 
 
-def _slugify(value: str) -> str:
-    cleaned = "".join(character if character.isalnum() else "-" for character in value.lower().strip())
-    return "-".join(segment for segment in cleaned.split("-") if segment)[:80]
 
 
-def _normalize_list(values: list[str] | None) -> list[str] | None:
-    if not values:
-        return None
-    cleaned = [value.strip() for value in values if value and value.strip()]
-    return cleaned or None
 
 
-def _generate_store_id() -> str:
-    return f"store-{uuid.uuid4().hex[:10]}"
 
 
-def _generate_product_id() -> str:
-    return f"admin-product-{uuid.uuid4().hex[:12]}"
 
 
 
@@ -411,21 +390,6 @@ def _serialize_store(store: Store) -> AdminStoreRead:
     )
 
 
-def _serialize_store_product(product: Product) -> AdminStoreProductRead:
-    return AdminStoreProductRead(
-        id=product.id,
-        name=product.title,
-        status=product.status,
-        price=product.price,
-        old_price=product.old_price,
-        discount=product.discount,
-        stock=product.stock,
-        category=product.category or "",
-        subcategory=product.subcategory,
-        images=product.image_urls or ([product.image_url] if product.image_url else []),
-        created_at=product.created_at,
-        updated_at=product.updated_at,
-    )
 
 
 def _store_activity_summary(
@@ -548,48 +512,6 @@ def broadcast_catalog_category_change(category: Category) -> None:
     )
 
 
-def _serialize_product(
-    product: Product,
-    *,
-    store: Store | None = None,
-    vendor: User | None = None,
-) -> AdminProductRead:
-    return AdminProductRead(
-        id=product.id,
-        store_id=product.store_id,
-        store_name=store.title if store else None,
-        store_slug=store.slug if store else None,
-        store_category=store.category if store else None,
-        store_location=store.address if store else None,
-        store_region=store.region if store else None,
-        store_city=store.city if store else None,
-        vendor_id=str(product.vendor_user_id) if product.vendor_user_id else None,
-        vendor_name=vendor.full_name if vendor else None,
-        vendor_email=vendor.email if vendor else None,
-        name=product.title,
-        description=product.description or "",
-        images=product.image_urls or ([product.image_url] if product.image_url else []),
-        image_key=product.image_key,
-        category=product.category or "",
-        subcategory=product.subcategory,
-        category_slugs=product.category_slugs,
-        subcategory_slugs=product.subcategory_slugs,
-        audience_slug=product.audience_slug,
-        section=product.section,
-        placement_tags=product.placement_tags,
-        price=product.price,
-        old_price=product.old_price,
-        discount=product.discount,
-        rating=product.rating,
-        reviews=product.reviews,
-        color_options=product.color_options,
-        size_options=product.size_options,
-        specifications=product.specifications,
-        stock=product.stock,
-        status=product.status,
-        created_at=product.created_at,
-        updated_at=product.updated_at,
-    )
 
 
 
@@ -657,133 +579,16 @@ def _serialize_vendor(db: Session, user: User) -> AdminVendorRead:
     )
 
 
-def _build_discount(price: int, old_price: int | None) -> str | None:
-    if old_price is None or old_price <= 0 or old_price <= price:
-        return None
-
-    percentage = round(((old_price - price) / old_price) * 100)
-    return f"{percentage}% off"
 
 
-def _taxonomy_lookup_by_slug() -> dict[str, dict]:
-    return {entry["slug"]: entry for entry in ODOS_CATEGORY_TAXONOMY}
 
 
-def _resolve_product_taxonomy(
-    *,
-    category: str,
-    subcategory: str | None,
-    category_slugs: list[str] | None,
-    subcategory_slugs: list[str] | None,
-) -> tuple[str, str | None, list[str] | None, list[str] | None]:
-    normalized_category_slugs = _normalize_list(
-        category_slugs or [_slugify(category)]
-    )
-    normalized_subcategory_slugs = _normalize_list(
-        subcategory_slugs or ([_slugify(subcategory)] if subcategory else None)
-    )
-    primary_category = category.strip()
-    primary_subcategory = subcategory.strip() if subcategory else None
-
-    taxonomy_lookup = _taxonomy_lookup_by_slug()
-    if normalized_category_slugs:
-        primary_entry = taxonomy_lookup.get(normalized_category_slugs[0])
-        if primary_entry:
-            primary_category = primary_entry["title"]
-
-    if normalized_subcategory_slugs and normalized_category_slugs:
-        for category_slug in normalized_category_slugs:
-            entry = taxonomy_lookup.get(category_slug)
-            if not entry:
-                continue
-            slug_to_title = {
-                _slugify(item): item for item in entry.get("subcategories", [])
-            }
-            for sub_slug in normalized_subcategory_slugs:
-                if sub_slug in slug_to_title:
-                    primary_subcategory = slug_to_title[sub_slug]
-                    return (
-                        primary_category,
-                        primary_subcategory,
-                        normalized_category_slugs,
-                        normalized_subcategory_slugs,
-                    )
-
-    return (
-        primary_category,
-        primary_subcategory,
-        normalized_category_slugs,
-        normalized_subcategory_slugs,
-    )
 
 
-def _infer_image_key(category: str) -> str:
-    normalized = category.strip().lower()
-    if "bag" in normalized:
-        return "bag"
-    if "shoe" in normalized or "sandal" in normalized or "slipper" in normalized:
-        return "shoe5"
-    if "dress" in normalized or "fashion" in normalized or "clothing" in normalized:
-        return "dress"
-    if "men" in normalized or "gents" in normalized:
-        return "gents"
-    if "beauty" in normalized or "cosmetic" in normalized:
-        return "cosmetics"
-    if "sport" in normalized:
-        return "sports"
-    return "bag"
 
 
-def _ensure_platform_store(db: Session) -> Store:
-    admin_avatar_url = db.scalar(
-        select(User.avatar_url)
-        .where(
-            User.role == UserRole.ADMIN,
-            User.avatar_url.is_not(None),
-        )
-        .order_by(User.updated_at.desc())
-        .limit(1)
-    )
-    existing = db.scalar(select(Store).where(Store.slug == "odos-official"))
-    if existing:
-        if admin_avatar_url:
-            _sync_platform_store_avatar(existing, admin_avatar_url)
-        return existing
-
-    store = Store(
-        id=_generate_store_id(),
-        slug="odos-official",
-        title="ODOS Official",
-        category="Marketplace",
-        market_id=None,
-        market_slug=None,
-        image_key="bag",
-        image_url=admin_avatar_url,
-        rating=4.8,
-        address="ODOS Marketplace",
-        phone=None,
-        email="support@odos.app",
-        city="Accra",
-        region="Greater Accra",
-        distance_km=None,
-        travel_minutes=None,
-        description="Platform-managed catalog products curated by ODOS.",
-        image_banner_key=None,
-        image_banner_url=admin_avatar_url,
-        status="active",
-        vendor_user_id=None,
-        sort_order=0,
-        is_active=True,
-    )
-    db.add(store)
-    db.flush()
-    return store
 
 
-def _sync_platform_store_avatar(store: Store, avatar_url: str | None) -> None:
-    if avatar_url:
-        store.image_url = avatar_url
-        store.image_banner_url = avatar_url
 
 
 def login_admin_user(db: Session, credentials: UserLogin, request=None) -> AuthToken:
@@ -1569,318 +1374,18 @@ def delete_admin_category(
     broadcast_catalog_category_change(category)
 
 
-def _serialize_admin_products(db: Session, products: list[Product]) -> list[AdminProductRead]:
-    store_ids = {product.store_id for product in products if product.store_id}
-    vendor_ids = {product.vendor_user_id for product in products if product.vendor_user_id}
-    store_lookup = {
-        store.id: store
-        for store in db.scalars(select(Store).where(Store.id.in_(store_ids))).all()
-    } if store_ids else {}
-    vendor_lookup = {
-        vendor.id: vendor
-        for vendor in db.scalars(select(User).where(User.id.in_(vendor_ids))).all()
-    } if vendor_ids else {}
-    return [
-        _serialize_product(
-            product,
-            store=store_lookup.get(product.store_id),
-            vendor=vendor_lookup.get(product.vendor_user_id) if product.vendor_user_id else None,
-        )
-        for product in products
-    ]
 
 
-def list_admin_products(
-    db: Session,
-    current_user: User,
-    *,
-    limit: int = 30,
-    offset: int = 0,
-) -> AdminPageRead[AdminProductRead]:
-    require_admin(current_user)
-    statement = select(Product).order_by(
-        case((Product.status == "pending", 0), else_=1),
-        Product.updated_at.desc(),
-        Product.created_at.desc(),
-    )
-    products, has_more = paginate_scalars(db, statement, limit=limit, offset=offset)
-    return AdminPageRead(
-        items=_serialize_admin_products(db, products),
-        has_more=has_more,
-    )
 
 
-def get_admin_product(db: Session, current_user: User, product_id: str) -> AdminProductRead:
-    require_admin(current_user)
-    product = db.scalar(select(Product).where(Product.id == product_id))
-    if not product:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found.")
-    store = None
-    if product.store_id:
-        store = db.scalar(select(Store).where(Store.id == product.store_id))
-    vendor = None
-    if product.vendor_user_id:
-        vendor = db.scalar(select(User).where(User.id == product.vendor_user_id))
-    return _serialize_product(
-        product,
-        store=store,
-        vendor=vendor,
-    )
 
 
-def _get_store_for_admin_product(db: Session, store_id: str | None) -> Store:
-    if store_id:
-        store = db.scalar(select(Store).where(Store.id == store_id))
-        if not store:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Store not found.")
-        return store
-
-    return _ensure_platform_store(db)
 
 
-async def create_admin_product(
-    db: Session,
-    current_user: User,
-    payload: AdminProductCreate,
-    images: list[UploadFile] | None,
-) -> AdminProductRead:
-    require_admin(current_user)
-    if payload.status not in SUPPORTED_PRODUCT_STATUSES:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported product status.")
-
-    store = _get_store_for_admin_product(db, payload.store_id)
-
-    image_urls = await save_image_uploads(images, folder="products")
-    image_url = image_urls[0] if image_urls else None
-    (
-        primary_category,
-        primary_subcategory,
-        normalized_category_slugs,
-        normalized_subcategory_slugs,
-    ) = _resolve_product_taxonomy(
-        category=payload.category,
-        subcategory=payload.subcategory,
-        category_slugs=payload.category_slugs,
-        subcategory_slugs=payload.subcategory_slugs,
-    )
-    product = Product(
-        id=_generate_product_id(),
-        audience_slug=payload.audience_slug or ((store.audience_slugs or [None])[0] if store else None),
-        section=payload.section,
-        title=payload.name,
-        category=primary_category,
-        subcategory=primary_subcategory,
-        category_slugs=normalized_category_slugs,
-        subcategory_slugs=normalized_subcategory_slugs,
-        price=payload.price,
-        old_price=payload.old_price,
-        discount=_build_discount(payload.price, payload.old_price),
-        rating=payload.rating,
-        reviews=payload.reviews,
-        image_key=payload.image_key or _infer_image_key(primary_category),
-        image_url=image_url,
-        image_urls=image_urls or None,
-        color_options=_normalize_list(payload.color_options),
-        size_options=_normalize_list(payload.size_options),
-        specifications=_normalize_list(payload.specifications),
-        placement_tags=_normalize_list(payload.placement_tags),
-        description=payload.description,
-        stock=payload.stock,
-        status=payload.status,
-        store_id=store.id,
-        vendor_user_id=store.vendor_user_id,
-        sort_order=0,
-        is_active=payload.status == "active",
-    )
-    db.add(product)
-    db.commit()
-    db.refresh(product)
-    log_admin_product_mutation(
-        db,
-        admin_user=current_user,
-        action="product.created",
-        product_id=product.id,
-        after_state={
-            "price": product.price,
-            "stock": product.stock,
-            "status": product.status,
-        },
-        metadata={"title": product.title, "store_id": product.store_id},
-    )
-    broadcast_catalog_product_change(product)
-    vendor = None
-    if product.vendor_user_id:
-        vendor = db.scalar(select(User).where(User.id == product.vendor_user_id))
-        if vendor:
-            realtime_manager.publish_user_event_sync(
-                str(vendor.id),
-                "vendor.product.updated",
-                serialize_vendor_product(product).model_dump(mode="json"),
-            )
-            dashboard = fetch_vendor_dashboard(db, vendor)
-            realtime_manager.publish_user_event_sync(
-                str(vendor.id),
-                "vendor.dashboard.updated",
-                dashboard.model_dump(mode="json"),
-            )
-    return _serialize_product(product, store=store, vendor=vendor)
 
 
-async def update_admin_product(
-    db: Session,
-    current_user: User,
-    product_id: str,
-    payload: AdminProductCreate,
-    images: list[UploadFile] | None,
-) -> AdminProductRead:
-    require_admin(current_user)
-    if payload.status not in SUPPORTED_PRODUCT_STATUSES:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported product status.")
-
-    product = db.scalar(select(Product).where(Product.id == product_id))
-    if not product:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found.")
-
-    before_state = {
-        "price": product.price,
-        "stock": product.stock,
-        "status": product.status,
-    }
-    store = _get_store_for_admin_product(db, payload.store_id)
-    uploaded_image_urls = await save_image_uploads(images, folder="products")
-    existing_image_urls = list(product.image_urls or ([] if not product.image_url else [product.image_url]))
-    next_image_urls = existing_image_urls + uploaded_image_urls if uploaded_image_urls else existing_image_urls
-
-    (
-        primary_category,
-        primary_subcategory,
-        normalized_category_slugs,
-        normalized_subcategory_slugs,
-    ) = _resolve_product_taxonomy(
-        category=payload.category,
-        subcategory=payload.subcategory,
-        category_slugs=payload.category_slugs,
-        subcategory_slugs=payload.subcategory_slugs,
-    )
-
-    product.audience_slug = payload.audience_slug or ((store.audience_slugs or [None])[0] if store else None)
-    product.section = payload.section
-    product.title = payload.name
-    product.category = primary_category
-    product.subcategory = primary_subcategory
-    product.category_slugs = normalized_category_slugs
-    product.subcategory_slugs = normalized_subcategory_slugs
-    product.price = payload.price
-    product.old_price = payload.old_price
-    product.discount = _build_discount(payload.price, payload.old_price)
-    product.rating = payload.rating
-    product.reviews = payload.reviews
-    product.image_key = payload.image_key or product.image_key or _infer_image_key(primary_category)
-    product.image_urls = next_image_urls or None
-    product.image_url = next_image_urls[0] if next_image_urls else None
-    product.color_options = _normalize_list(payload.color_options)
-    product.size_options = _normalize_list(payload.size_options)
-    product.specifications = _normalize_list(payload.specifications)
-    product.placement_tags = _normalize_list(payload.placement_tags)
-    product.description = payload.description
-    if int(product.stock or 0) != int(payload.stock):
-        from app.services.inventory_service import record_stock_change
-
-        record_stock_change(
-            db,
-            product,
-            new_stock=int(payload.stock),
-            reason="system",
-            note="Updated by admin",
-            actor=current_user,
-        )
-    else:
-        product.stock = payload.stock
-    product.status = payload.status
-    product.store_id = store.id
-    product.vendor_user_id = store.vendor_user_id
-    product.is_active = payload.status == "active"
-
-    db.commit()
-    db.refresh(product)
-    log_admin_product_mutation(
-        db,
-        admin_user=current_user,
-        action="product.updated",
-        product_id=product.id,
-        before_state=before_state,
-        after_state={
-            "price": product.price,
-            "stock": product.stock,
-            "status": product.status,
-        },
-        metadata={"title": product.title, "store_id": product.store_id},
-    )
-    broadcast_catalog_product_change(product)
-    vendor = None
-    if product.vendor_user_id:
-        vendor = db.scalar(select(User).where(User.id == product.vendor_user_id))
-        if vendor:
-            realtime_manager.publish_user_event_sync(
-                str(vendor.id),
-                "vendor.product.updated",
-                serialize_vendor_product(product).model_dump(mode="json"),
-            )
-            dashboard = fetch_vendor_dashboard(db, vendor)
-            realtime_manager.publish_user_event_sync(
-                str(vendor.id),
-                "vendor.dashboard.updated",
-                dashboard.model_dump(mode="json"),
-            )
-    return _serialize_product(
-        product,
-        store=store,
-        vendor=vendor,
-    )
 
 
-def update_admin_product_status(
-    db: Session,
-    current_user: User,
-    product_id: str,
-    payload: AdminProductStatusUpdate,
-) -> AdminProductRead:
-    require_admin(current_user)
-    if payload.status not in SUPPORTED_PRODUCT_STATUSES:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported product status.")
-
-    product = db.scalar(select(Product).where(Product.id == product_id))
-    if not product:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found.")
-
-    product.status = payload.status
-    product.is_active = payload.status == "active"
-    db.commit()
-    db.refresh(product)
-    broadcast_catalog_product_change(product)
-    store = None
-    if product.store_id:
-        store = db.scalar(select(Store).where(Store.id == product.store_id))
-    vendor = None
-    if product.vendor_user_id:
-        vendor = db.scalar(select(User).where(User.id == product.vendor_user_id))
-        if vendor:
-            realtime_manager.publish_user_event_sync(
-                str(vendor.id),
-                "vendor.product.updated",
-                serialize_vendor_product(product).model_dump(mode="json"),
-            )
-            dashboard = fetch_vendor_dashboard(db, vendor)
-            realtime_manager.publish_user_event_sync(
-                str(vendor.id),
-                "vendor.dashboard.updated",
-                dashboard.model_dump(mode="json"),
-            )
-    return _serialize_product(
-        product,
-        store=store,
-        vendor=vendor,
-    )
 
 
 
@@ -2092,9 +1597,17 @@ def update_admin_user_permission(
 # names are re-exported because routes/admin.py and several controllers import
 # them from this module; moving the code should not force every caller to
 # change its imports.
-from app.controllers.admin._shared import (  # noqa: E402,F401  (re-exported)
+from app.controllers.admin._shared import (  # noqa: E402,F401  (re-exported)  # noqa: E402,F401  (re-exported)  # noqa: E402,F401  (re-exported)
+    _build_discount,
+    _ensure_platform_store,
+    _generate_store_id,
+    _infer_image_key,
+    _normalize_list,
     _payment_status,
+    _slugify,
     _store_name_lookup,
+    _sync_platform_store_avatar,
+    _taxonomy_lookup_by_slug,
 )
 from app.controllers.admin.commerce import (  # noqa: E402,F401  (re-exported)
     _build_admin_review_read,
@@ -2124,6 +1637,19 @@ from app.controllers.admin.commerce import (  # noqa: E402,F401  (re-exported)
     moderate_admin_review,
     update_admin_order_status,
     update_admin_return_request,
+)
+from app.controllers.admin.products import (  # noqa: E402,F401  (re-exported)
+    _generate_product_id,
+    _get_store_for_admin_product,
+    _resolve_product_taxonomy,
+    _serialize_admin_products,
+    _serialize_product,
+    _serialize_store_product,
+    create_admin_product,
+    get_admin_product,
+    list_admin_products,
+    update_admin_product,
+    update_admin_product_status,
 )
 from app.controllers.admin.promotions import (  # noqa: E402,F401  (re-exported)
     _normalize_flash_event_slug,
