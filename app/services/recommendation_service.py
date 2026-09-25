@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.controllers.catalog_controller import list_catalog_products, serialize_catalog_products
@@ -18,7 +18,6 @@ from app.models import (
     UserBehaviorEvent,
     WishlistItem,
 )
-from app.schemas.catalog import ProductRead
 from app.schemas.recommendation import RecommendationFeedRead
 
 EVENT_WEIGHTS: dict[str, float] = {

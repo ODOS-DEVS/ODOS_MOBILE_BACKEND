@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select, func, and_, desc
 from sqlalchemy.orm import Session
 
-from app.models import User, Order, Product, Store, Review, UserBehaviorEvent
+from app.models import User, Order, Product, Store, UserBehaviorEvent
 
 
 class AdvancedAnalyticsService:

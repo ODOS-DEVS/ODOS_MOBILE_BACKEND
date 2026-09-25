@@ -1,17 +1,16 @@
 """Email marketing service with SendGrid integration."""
 
 import os
-import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from enum import Enum
 from dataclasses import dataclass
 import logging
 
-from sqlalchemy import select, and_
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import User
+from app.models import Order, User
 
 logger = logging.getLogger(__name__)
 
@@ -246,15 +245,27 @@ class EmailSegmentationService:
         db: Session,
         days_inactive: int = 30,
     ) -> list[EmailRecipient]:
-        """Get inactive users for reengagement."""
-        # Filter users with no purchases in X days
-        cutoff_date = datetime.now(timezone.utc)
+        """Return customers who have ordered before but not within the window.
+
+        Previously this selected every active user, because the cutoff was set
+        to "now" without subtracting the window and no date filter was ever
+        applied. The reengagement campaign that calls this therefore mailed
+        "We Miss You" to the entire active user base, daily customers included.
+
+        Users who have never ordered are deliberately excluded: they have
+        nothing to be reengaged about, and a welcome campaign is the right
+        message for them.
+        """
+        cutoff_date = datetime.now(timezone.utc) - timedelta(days=days_inactive)
+
+        ordered_at_all = select(Order.user_id)
+        ordered_recently = select(Order.user_id).where(Order.created_at >= cutoff_date)
 
         users = db.scalars(
             select(User).where(
-                User.status == "active",
-                # Add condition for last_purchase_date < cutoff_date
-                # Depends on your User model structure
+                User.is_active.is_(True),
+                User.id.in_(ordered_at_all),
+                User.id.not_in(ordered_recently),
             )
         ).all()
 
@@ -282,13 +293,18 @@ class EmailSegmentationService:
         db: Session,
         days_since_signup: int = 7,
     ) -> list[EmailRecipient]:
-        """Get new users for welcome campaigns."""
-        cutoff_date = datetime.now(timezone.utc)
+        """Return users who signed up within the window.
+
+        As with get_inactive_users, the cutoff was previously "now" with no
+        filter applied, so the welcome campaign went to every active user
+        rather than to new ones.
+        """
+        cutoff_date = datetime.now(timezone.utc) - timedelta(days=days_since_signup)
 
         users = db.scalars(
             select(User).where(
-                User.status == "active",
-                # Add condition for created_at >= cutoff_date
+                User.is_active.is_(True),
+                User.created_at >= cutoff_date,
             )
         ).all()
 

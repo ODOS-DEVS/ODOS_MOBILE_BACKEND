@@ -1,7 +1,7 @@
 """Home feed personalization service."""
 
 from datetime import datetime, timedelta, timezone
-from sqlalchemy import and_, func, select, or_
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import (

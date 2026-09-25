@@ -17,7 +17,9 @@ def get_loyalty_account(db: Session, current_user: User) -> dict:
     """Get user's loyalty account with benefits."""
     require_user(current_user)
 
-    account = get_or_create_loyalty_account(db, current_user)
+    # Called for its side effect: it creates the account when the user does not
+    # have one yet, which get_account_with_benefits below assumes exists.
+    get_or_create_loyalty_account(db, current_user)
     return get_account_with_benefits(db, str(current_user.id))
 
 

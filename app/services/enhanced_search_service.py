@@ -11,7 +11,7 @@ Features:
 from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
 
-from sqlalchemy import func, select, or_
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import (

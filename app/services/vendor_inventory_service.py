@@ -2,10 +2,10 @@
 
 from datetime import datetime, timezone
 from typing import Optional
-from sqlalchemy import and_, or_, select, func
+from sqlalchemy import or_, select, func
 from sqlalchemy.orm import Session
 
-from app.models import Product, Store, User, UserBehaviorEvent
+from app.models import Product, Store, UserBehaviorEvent
 
 
 class InventoryService:

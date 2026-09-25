@@ -17,9 +17,7 @@ from app.models import (
     MerchandisingCampaign,
     MerchandisingCampaignStore,
 )
-from app.schemas.catalog import MerchandisingCampaignRead
 from app.services.campaign_service import campaign_is_live, derive_campaign_status
-from app.services.eligibility_service import EligibilityRules
 
 
 class VendorCampaignCreate:

@@ -3,7 +3,7 @@
 from datetime import datetime, timedelta, timezone
 from sqlalchemy import select, and_, func
 from sqlalchemy.orm import Session
-from typing import Optional, Tuple
+from typing import Tuple
 import logging
 
 logger = logging.getLogger(__name__)
@@ -45,7 +45,7 @@ class WithdrawalLimiterService:
         # Get daily total (last 24 hours)
         daily_cutoff = now - timedelta(days=1)
         daily_total = db.scalar(
-            select(func.coalesce(func.sum(VendorerWithdrawalRequest.amount), 0))
+            select(func.coalesce(func.sum(VendorWithdrawalRequest.amount), 0))
             .where(
                 and_(
                     VendorWithdrawalRequest.vendor_id == vendor_id,

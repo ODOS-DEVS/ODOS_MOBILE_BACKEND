@@ -2,7 +2,6 @@
 
 from datetime import datetime, timedelta, timezone
 from typing import Tuple
-import os
 import logging
 
 logger = logging.getLogger(__name__)

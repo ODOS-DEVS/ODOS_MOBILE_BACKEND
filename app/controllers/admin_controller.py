@@ -43,19 +43,13 @@ from app.services.push_service import (
 )
 from app.core.catalog_taxonomy import ODOS_CATEGORY_TAXONOMY
 from app.controllers.vendor_controller import (
-    approve_vendor_application,
     broadcast_catalog_product_change,
     broadcast_catalog_store_change,
     fetch_vendor_dashboard,
     list_vendor_applications,
-    reject_vendor_application,
     serialize_vendor_product,
 )
 from app.controllers.review_controller import recompute_product_review_metrics
-from app.controllers.wallet_controller import (
-    list_admin_vendor_withdrawal_requests,
-    update_admin_vendor_withdrawal_request,
-)
 from app.services.return_request_service import (
     ReturnRequestError,
     apply_return_request_status_change,
@@ -68,7 +62,6 @@ from app.controllers.voucher_controller import (
 from app.services.media_service import remove_media_file, save_image_upload, save_image_uploads
 from app.services.realtime_service import realtime_manager
 from app.models import (
-    CartItem,
     Category,
     CustomerWallet,
     Market,
@@ -87,13 +80,11 @@ from app.models import (
     SavedPaymentMethod,
     Store,
     User,
-    UserAuthAccount,
     UserRole,
     VendorApplication,
     VendorStatus,
     Voucher,
     VoucherRedemption,
-    WishlistItem,
 )
 from app.models.chat import ChatThread, ChatThreadType, SupportChatStatus
 from app.models.wallet import VendorWithdrawalRequest
@@ -116,8 +107,6 @@ from app.schemas.admin import (
     AdminOrderStatusUpdate,
     AdminReturnRequestRead,
     AdminReturnRequestUpdate,
-    AdminVendorWithdrawalRequestRead,
-    AdminVendorWithdrawalUpdate,
     AdminProductCreate,
     AdminProductRead,
     AdminProductStatusUpdate,
@@ -159,7 +148,6 @@ from app.schemas.admin import (
 from app.schemas.payment import (
     AdminFinanceOverviewRead,
     AdminPaymentTransactionRead,
-    AdminPlatformLedgerEntryRead,
 )
 from app.schemas.user import AuthToken, UserCreate, UserLogin
 from app.services.delivery_service import delivery_method_label, get_delivery_config

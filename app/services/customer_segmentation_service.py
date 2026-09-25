@@ -1,14 +1,14 @@
 """Customer segmentation service for targeted campaigns."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Optional
 from enum import Enum
 from dataclasses import dataclass
 
-from sqlalchemy import select, func, and_
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import User, Order, UserBehaviorEvent
+from app.models import User, Order
 
 
 class CustomerSegment(str, Enum):
@@ -142,7 +142,7 @@ class CustomerSegmentationService:
         limit: int = 1000,
     ) -> list[CustomerProfile]:
         """Get all users in a specific segment."""
-        users = db.scalars(select(User).where(User.status == "active").limit(limit)).all()
+        users = db.scalars(select(User).where(User.is_active.is_(True)).limit(limit)).all()
 
         profiles = []
         for user in users:
@@ -158,7 +158,7 @@ class CustomerSegmentationService:
         threshold: float = 0.7,
     ) -> list[CustomerProfile]:
         """Get users at high risk of churning."""
-        users = db.scalars(select(User).where(User.status == "active")).all()
+        users = db.scalars(select(User).where(User.is_active.is_(True))).all()
 
         high_risk_profiles = []
         for user in users:

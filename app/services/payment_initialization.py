@@ -1,7 +1,6 @@
 """Initialize payment providers based on environment configuration."""
 
 import os
-from typing import Optional
 
 from app.services.bank_transfer_provider import BankTransferProvider
 from app.services.momo_provider import MomoProvider

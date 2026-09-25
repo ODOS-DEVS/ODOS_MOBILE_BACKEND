@@ -1827,7 +1827,6 @@ def patch_vendor_return_request(
     return_request_id: str,
     payload: "VendorReturnRequestUpdate",
 ) -> VendorReturnRequestRead:
-    from app.schemas.vendor import VendorReturnRequestUpdate
     from app.services.return_request_service import update_vendor_return_request
 
     require_vendor_access(user)

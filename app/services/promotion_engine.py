@@ -6,7 +6,6 @@ All checkout discount decisions flow through calculate_best_discount().
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import HTTPException, status

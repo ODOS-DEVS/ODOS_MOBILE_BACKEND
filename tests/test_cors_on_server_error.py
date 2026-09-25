@@ -13,7 +13,6 @@ down. The 500 was reaching the browser; the browser just could not read it.
 
 from __future__ import annotations
 
-import pytest
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.testclient import TestClient

@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 import re
 import uuid
-from collections import defaultdict
 from datetime import UTC, datetime
 
 from fastapi import HTTPException, status

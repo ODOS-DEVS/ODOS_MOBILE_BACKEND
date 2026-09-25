@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import LoyaltyAccount, LoyaltyTransaction, LoyaltyTierBenefit, User, Order
+from app.models import LoyaltyAccount, LoyaltyTransaction, User, Order
 
 
 # Tier configuration (can be moved to database later)

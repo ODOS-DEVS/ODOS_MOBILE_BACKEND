@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.core.event_types import ACTOR_ADMIN, ACTOR_ANONYMOUS, ACTOR_SYSTEM, ACTOR_USER
 from app.models import SystemEventLog, User, UserRole
-from app.schemas.event_log import EventLogCreate, EventLogRead, EventLogStatsRead
+from app.schemas.event_log import EventLogRead, EventLogStatsRead
 from app.services.realtime_service import realtime_manager
 
 logger = logging.getLogger(__name__)

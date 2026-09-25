@@ -1,6 +1,6 @@
 """Bank transfer payment provider."""
 
-from typing import Any, Optional
+from typing import Any
 
 import httpx
 

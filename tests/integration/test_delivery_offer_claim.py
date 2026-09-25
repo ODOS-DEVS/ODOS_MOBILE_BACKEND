@@ -115,7 +115,7 @@ def test_claiming_an_offer_marks_it_claimed_and_assigns_the_order(
     db, make_buyer,
 ):
     from app.controllers.courier_controller import claim_delivery_offer
-    from app.models import DeliveryOffer, Order
+    from app.models import Order
 
     buyer = make_buyer()
     order = Order(
@@ -153,7 +153,7 @@ def test_claiming_an_already_claimed_offer_is_rejected(db, make_buyer):
     from fastapi import HTTPException
 
     from app.controllers.courier_controller import claim_delivery_offer
-    from app.models import DeliveryOffer, Order
+    from app.models import Order
 
     buyer = make_buyer()
     order = Order(

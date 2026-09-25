@@ -1,7 +1,6 @@
 """Email preferences service for managing user email subscriptions."""
 
 from datetime import datetime, timezone
-from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -105,22 +104,18 @@ class EmailPreferencesService:
         limit: int = 10000,
     ) -> list[str]:
         """Get list of user emails subscribed to a campaign type."""
-        email_type_mapping = {
-            "promotional": "promotional_emails",
-            "order_update": "order_updates",
-            "loyalty": "loyalty_rewards",
-            "cart_reminder": "cart_reminders",
-            "newsletter": "weekly_newsletter",
-            "recommendation": "product_recommendations",
-            "exclusive_offer": "exclusive_offers",
-        }
-
-        pref_key = email_type_mapping.get(campaign_type, campaign_type)
-
-        # In production, this would query for users where email_preferences[pref_key] is True
-        # For now, return users with default preferences
+        # Preference filtering is done per user by should_send_email below rather
+        # than in SQL. That is a deliberate trade: preferences are stored as a
+        # JSON blob, so filtering in the query would mean indexing into it in
+        # Postgres for every campaign type. At the volumes involved -- a capped
+        # candidate list, one campaign at a time -- the row-by-row check is
+        # simpler and fast enough.
+        #
+        # A key-mapping table used to be built here and then never read, which
+        # made it look as though SQL-level filtering was happening when it was
+        # not.
         users = db.scalars(
-            select(User).where(User.role == "customer", User.status == "active").limit(limit)
+            select(User).where(User.role == "customer", User.is_active.is_(True)).limit(limit)
         ).all()
 
         emails = []

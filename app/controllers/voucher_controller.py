@@ -1,4 +1,3 @@
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Iterable
 import uuid
@@ -25,9 +24,14 @@ from app.services.promotion_engine import (
     calculate_voucher_quote,
     suggest_best_promotions,
 )
+# build_voucher_reward_text and validate_voucher_configuration are not used in
+# this module -- they are re-exported, because the admin, vendor and deals
+# controllers and the vouchers router all import them from here rather than
+# from the service. Removing them as "unused" breaks nine test modules at
+# collection time, so the noqa marks them as deliberate.
 from app.services.promotion_service import (
-    build_voucher_reward_text,
-    validate_voucher_configuration,
+    build_voucher_reward_text,  # noqa: F401  (re-exported)
+    validate_voucher_configuration,  # noqa: F401  (re-exported)
     voucher_status,
     VoucherQuote,
 )
@@ -45,33 +49,6 @@ def _normalize_code(value: str | None) -> str | None:
     return cleaned or None
 
 
-def build_voucher_reward_text(
-    discount_type: str,
-    discount_value: float,
-    *,
-    promotion_type: str = "coupon",
-    bogo_buy_quantity: int | None = None,
-    bogo_get_quantity: int | None = None,
-    bogo_get_discount_percent: float | None = None,
-) -> str:
-    from app.services.promotion_service import build_voucher_reward_text as _build
-
-    return _build(
-        discount_type,
-        discount_value,
-        promotion_type=promotion_type,
-        bogo_buy_quantity=bogo_buy_quantity,
-        bogo_get_quantity=bogo_get_quantity,
-        bogo_get_discount_percent=bogo_get_discount_percent,
-    )
-
-
-def validate_voucher_configuration(**kwargs) -> None:
-    from app.services.promotion_service import validate_voucher_configuration as _validate
-
-    _validate(**kwargs)
-
-
 def _counts_for_voucher(db: Session, voucher_id, user_id) -> tuple[int, int]:
     overall = db.scalar(
         select(func.count(VoucherRedemption.id)).where(VoucherRedemption.voucher_id == voucher_id)
@@ -83,12 +60,6 @@ def _counts_for_voucher(db: Session, voucher_id, user_id) -> tuple[int, int]:
         )
     )
     return int(overall or 0), int(user_count or 0)
-
-
-def voucher_status(voucher: Voucher, *, now: datetime, overall_count: int) -> str:
-    from app.services.promotion_service import voucher_status as _status
-
-    return _status(voucher, now=now, overall_count=overall_count)
 
 
 def _discount_for_voucher(voucher: Voucher, eligible_subtotal: float, shipping_amount: float) -> float:

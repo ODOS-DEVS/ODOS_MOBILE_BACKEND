@@ -35,8 +35,6 @@ from app.models import (
     Delivery,
     DeliveryEvent,
     DeliveryOffer,
-    DeliveryStatus,
-    Order,
     OrderItem,
     Store,
     TERMINAL_STATUSES,

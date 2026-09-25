@@ -1,8 +1,6 @@
 """MTN Momo payment provider integration."""
 
-import asyncio
-import os
-from typing import Any, Optional
+from typing import Any
 
 import httpx
 

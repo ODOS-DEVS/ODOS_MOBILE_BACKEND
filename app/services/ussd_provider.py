@@ -1,6 +1,6 @@
 """USSD (Unstructured Supplementary Service Data) payment provider."""
 
-from typing import Any, Optional
+from typing import Any
 
 import httpx
 

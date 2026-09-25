@@ -543,7 +543,6 @@ async def search_products(
 ) -> dict:
     """Search products using enhanced search with multiple ranking signals."""
     from app.services.enhanced_search_service import search_products as search_enhanced
-    from app.schemas.catalog import SearchResultRead, SearchResponseRead
 
     if not query or not query.strip():
         return {

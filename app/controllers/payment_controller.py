@@ -26,7 +26,7 @@ from app.controllers.wallet_controller import (
     reconcile_paystack_transfer_event,
 )
 from app.core.config import settings
-from app.core.event_types import CHECKOUT_STARTED, ORDER_CREATED, PAYMENT_ATTEMPT
+from app.core.event_types import CHECKOUT_STARTED, PAYMENT_ATTEMPT
 from app.helpers.event_context import request_ip, request_user_agent
 from app.models import Order, PaymentTransaction, PaymentWebhookEvent, User
 from app.services.event_log_service import record_user_event

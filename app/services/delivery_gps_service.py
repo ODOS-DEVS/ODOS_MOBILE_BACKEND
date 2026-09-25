@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from math import radians, sin, cos, sqrt, atan2
 import logging
 
-from sqlalchemy import select, and_, desc
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)

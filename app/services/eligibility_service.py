@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models import Order, User
+from app.models import Order
 
 COMPLETED_ORDER_STATUSES = ("paid", "processing", "shipped", "delivered", "completed")
 
