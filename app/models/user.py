@@ -285,6 +285,15 @@ class User(Base):
         DateTime(timezone=True),
         nullable=True,
     )
+    # Set when the person deletes their own account. The row stays because the
+    # orders hanging off it are a vendor's sales record too; see the migration
+    # acc7d3l3t10n for why a hard delete is not available here.
+    deleted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        index=True,
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

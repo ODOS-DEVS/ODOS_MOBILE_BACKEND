@@ -14,6 +14,12 @@ from app.controllers.account_controller import (
     set_default_payment_method,
     update_address,
 )
+from app.controllers.account_deletion_controller import (
+    AccountDeletionEligibility,
+    AccountDeletionRequest,
+    delete_own_account,
+    get_account_deletion_eligibility,
+)
 from app.controllers.email_preferences_controller import (
     EmailPreferencesUpdate,
     get_email_preferences,
@@ -127,3 +133,26 @@ def update_preferences(
 ):
     """Update email preferences for current user."""
     return update_email_preferences(db, current_user, payload)
+
+
+@router.get("/deletion-eligibility", response_model=AccountDeletionEligibility)
+def read_account_deletion_eligibility(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """What stands between this account and deletion, if anything."""
+    return get_account_deletion_eligibility(db, current_user)
+
+
+@router.delete("", status_code=status.HTTP_204_NO_CONTENT)
+def delete_account_endpoint(
+    payload: AccountDeletionRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Delete the signed-in user's own account.
+
+    Required by App Store Guideline 5.1.1(v): an app that creates accounts must
+    let people delete theirs from inside the app.
+    """
+    delete_own_account(db, current_user, payload)
