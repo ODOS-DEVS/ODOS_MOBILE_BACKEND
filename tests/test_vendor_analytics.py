@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -18,7 +18,7 @@ from app.controllers.vendor_controller import (
 def _order(**overrides):
     base = {
         "placed_at": None,
-        "created_at": datetime.now(timezone.utc),
+        "created_at": datetime.now(UTC),
         "status": "delivered",
         "total_amount": 100.0,
     }
@@ -43,7 +43,7 @@ def test_parse_analytics_period_rejects_unsupported_value():
 
 
 def test_build_daily_points_creates_one_bucket_per_day():
-    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    today = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
     period_start = today - timedelta(days=6)
 
     points = _build_vendor_daily_points([], period_start=period_start, days=7)
@@ -56,7 +56,7 @@ def test_build_daily_points_creates_one_bucket_per_day():
 
 
 def test_build_daily_points_aggregates_sales_for_matching_day():
-    today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    today = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
     period_start = today - timedelta(days=6)
 
     assert "delivered" in VENDOR_ANALYTICS_ORDER_STATUSES

@@ -1,8 +1,7 @@
 """Service for rate limiting payment endpoints to prevent abuse."""
 
-from datetime import datetime, timedelta, timezone
-from typing import Tuple
 import logging
+from datetime import UTC, datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +25,7 @@ class RateLimiterService:
         key: str,
         limit: int,
         window_seconds: int = 60,
-    ) -> Tuple[bool, int, int]:
+    ) -> tuple[bool, int, int]:
         """
         Check if an action is within rate limit.
 
@@ -38,7 +37,7 @@ class RateLimiterService:
         Returns:
             (allowed, remaining, retry_after)
         """
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         if key not in cls._rate_limits:
             cls._rate_limits[key] = []
@@ -63,7 +62,7 @@ class RateLimiterService:
         return True, limit - requests_in_window - 1, 0
 
     @classmethod
-    def check_payment_initiation(cls, user_id: str) -> Tuple[bool, str]:
+    def check_payment_initiation(cls, user_id: str) -> tuple[bool, str]:
         """Check rate limit for payment initiation."""
         allowed, remaining, retry = cls.check_rate_limit(
             f"payment_init:{user_id}",
@@ -75,7 +74,7 @@ class RateLimiterService:
         return True, f"{remaining} payment attempts remaining"
 
     @classmethod
-    def check_payment_verification(cls, user_id: str) -> Tuple[bool, str]:
+    def check_payment_verification(cls, user_id: str) -> tuple[bool, str]:
         """Check rate limit for payment verification."""
         allowed, remaining, retry = cls.check_rate_limit(
             f"payment_verify:{user_id}",
@@ -87,7 +86,7 @@ class RateLimiterService:
         return True, f"{remaining} verification attempts remaining"
 
     @classmethod
-    def check_withdrawal_request(cls, vendor_id: str) -> Tuple[bool, str]:
+    def check_withdrawal_request(cls, vendor_id: str) -> tuple[bool, str]:
         """Check rate limit for withdrawal requests."""
         allowed, remaining, retry = cls.check_rate_limit(
             f"withdrawal:{vendor_id}",
@@ -99,7 +98,7 @@ class RateLimiterService:
         return True, f"{remaining} withdrawal requests remaining"
 
     @classmethod
-    def check_login_attempt(cls, ip_address: str) -> Tuple[bool, str]:
+    def check_login_attempt(cls, ip_address: str) -> tuple[bool, str]:
         """Check rate limit for login attempts."""
         allowed, remaining, retry = cls.check_rate_limit(
             f"login:{ip_address}",
@@ -111,7 +110,7 @@ class RateLimiterService:
         return True, ""
 
     @classmethod
-    def check_otp_attempt(cls, user_id: str) -> Tuple[bool, str]:
+    def check_otp_attempt(cls, user_id: str) -> tuple[bool, str]:
         """Check rate limit for OTP verification attempts."""
         allowed, remaining, retry = cls.check_rate_limit(
             f"otp:{user_id}",
@@ -134,7 +133,7 @@ class RateLimiterService:
         if key not in cls._rate_limits:
             return {"key": key, "requests": 0, "expires": None}
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         requests = [
             (now - ts).total_seconds() for ts in cls._rate_limits[key]
         ]

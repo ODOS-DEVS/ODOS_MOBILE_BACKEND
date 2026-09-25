@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
@@ -12,12 +12,12 @@ from app.core.event_types import (
     SEARCH_QUERY,
 )
 from app.models import Order, OrderItem, User, UserBehaviorEvent
-from app.services.event_log_service import record_user_event
 from app.schemas.behavior import (
     SUPPORTED_BEHAVIOR_EVENT_TYPES,
     BehaviorEventBatchCreate,
     BehaviorEventBatchRead,
 )
+from app.services.event_log_service import record_user_event
 
 
 def _normalize_search_query(value: str | None) -> str | None:
@@ -41,7 +41,7 @@ def record_behavior_event_batch(
         )
 
     accepted = 0
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     behavior_to_audit = {
         "product_view": (PRODUCT_VIEW, "commerce.product_view"),
@@ -108,7 +108,7 @@ def record_purchase_events_for_order(db: Session, user: User, order: Order) -> N
     if not items:
         items = list(db.scalars(select(OrderItem).where(OrderItem.order_id == order.id)).all())
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     for item in items:
         db.add(
             UserBehaviorEvent(

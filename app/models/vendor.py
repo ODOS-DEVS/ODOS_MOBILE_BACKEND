@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import DateTime, Enum, ForeignKey, String, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID
@@ -7,6 +8,14 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
 from app.models.user import VendorStatus
+
+# Imported for type checking only. SQLAlchemy resolves these relationship
+# targets from the string annotations at mapper-configuration time, so a
+# runtime import would be both unnecessary and circular. Declaring them here
+# gives type checkers and editors the real types without that cost.
+
+if TYPE_CHECKING:
+    from app.models.user import User
 
 
 class VendorApplication(Base):

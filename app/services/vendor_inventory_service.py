@@ -1,8 +1,8 @@
 """Vendor inventory management service."""
 
-from datetime import datetime, timezone
-from typing import Optional
-from sqlalchemy import or_, select, func
+from datetime import UTC, datetime
+
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models import Product, Store, UserBehaviorEvent
@@ -18,8 +18,8 @@ class InventoryService:
         store_id: str,
         skip: int = 0,
         limit: int = 50,
-        search: Optional[str] = None,
-        status: Optional[str] = None,
+        search: str | None = None,
+        status: str | None = None,
     ) -> tuple[list[dict], int]:
         """Get vendor's products with inventory info."""
         # Verify store ownership
@@ -116,7 +116,7 @@ class InventoryService:
             return False
 
         product.stock = max(0, new_stock)
-        product.updated_at = datetime.now(timezone.utc)
+        product.updated_at = datetime.now(UTC)
         db.commit()
         return True
 
@@ -126,7 +126,7 @@ class InventoryService:
         vendor_id: str,
         product_id: str,
         new_price: float,
-        old_price: Optional[float] = None,
+        old_price: float | None = None,
     ) -> bool:
         """Update product pricing."""
         product = db.scalar(
@@ -144,7 +144,7 @@ class InventoryService:
         product.price = max(0, new_price)
         if old_price is not None:
             product.old_price = max(0, old_price)
-        product.updated_at = datetime.now(timezone.utc)
+        product.updated_at = datetime.now(UTC)
         db.commit()
         return True
 

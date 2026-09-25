@@ -17,7 +17,6 @@ from app.services.store_section_service import (
     starter_sections_for_category,
 )
 
-
 # --- slugs decide what counts as the same shelf ---
 
 

@@ -5,7 +5,7 @@ expire with zero redemptions so they can extend or retire it."""
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 
@@ -173,7 +173,7 @@ def _process_vendor_voucher_expiry_reminders(db, now: datetime) -> None:
 def process_promo_expiry_reminders() -> None:
     db = SessionLocal()
     try:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         _process_shopper_voucher_expiry_reminders(db, now)
         _process_vendor_voucher_expiry_reminders(db, now)
     finally:

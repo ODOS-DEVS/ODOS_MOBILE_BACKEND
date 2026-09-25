@@ -1,12 +1,12 @@
 """Service for signing and verifying payment transactions."""
 
-import hmac
 import hashlib
+import hmac
 import json
-import os
 import logging
-from datetime import datetime, timedelta, timezone
-from typing import Dict, Any
+import os
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +23,7 @@ class TransactionSigningService:
         return key
 
     @classmethod
-    def sign_transaction(cls, transaction_data: Dict[str, Any]) -> str:
+    def sign_transaction(cls, transaction_data: dict[str, Any]) -> str:
         """
         Create an HMAC-SHA256 signature for a transaction.
 
@@ -48,7 +48,7 @@ class TransactionSigningService:
         return signature
 
     @classmethod
-    def verify_transaction_signature(cls, transaction_data: Dict[str, Any], provided_signature: str) -> bool:
+    def verify_transaction_signature(cls, transaction_data: dict[str, Any], provided_signature: str) -> bool:
         """
         Verify that a transaction signature is valid.
 
@@ -208,7 +208,7 @@ class TokenManager:
         Returns:
             Tuple of (token, expiry_time)
         """
-        data = f"{vendor_id}:{amount}:{datetime.now(timezone.utc).isoformat()}"
+        data = f"{vendor_id}:{amount}:{datetime.now(UTC).isoformat()}"
         key = os.getenv("TRANSACTION_SIGNING_KEY", "default-key")
 
         token = hmac.new(
@@ -217,7 +217,7 @@ class TokenManager:
             hashlib.sha256
         ).hexdigest()
 
-        expiry = datetime.now(timezone.utc) + timedelta(hours=valid_hours)
+        expiry = datetime.now(UTC) + timedelta(hours=valid_hours)
 
         return token, expiry
 
@@ -236,7 +236,7 @@ class TokenManager:
             True if token is valid, False otherwise
         """
         # Check if token has expired (24 hour window)
-        if datetime.now(timezone.utc) - created_time > timedelta(hours=24):
+        if datetime.now(UTC) - created_time > timedelta(hours=24):
             return False
 
         # Verify token signature

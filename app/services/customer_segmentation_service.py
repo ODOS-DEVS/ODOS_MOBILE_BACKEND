@@ -1,14 +1,13 @@
 """Customer segmentation service for targeted campaigns."""
 
-from datetime import datetime, timezone
-from typing import Optional
-from enum import Enum
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from enum import Enum
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import User, Order
+from app.models import Order, User
 
 
 class CustomerSegment(str, Enum):
@@ -32,9 +31,9 @@ class CustomerProfile:
     total_orders: int
     days_since_last_purchase: int
     average_order_value: float
-    purchase_frequency_days: Optional[float]
-    last_purchase_date: Optional[datetime]
-    first_purchase_date: Optional[datetime]
+    purchase_frequency_days: float | None
+    last_purchase_date: datetime | None
+    first_purchase_date: datetime | None
     engagement_score: float
     churn_risk_score: float
 
@@ -53,7 +52,7 @@ class CustomerSegmentationService:
     def get_customer_profile(
         db: Session,
         user_id: str,
-    ) -> Optional[CustomerProfile]:
+    ) -> CustomerProfile | None:
         """Get customer profile with engagement metrics."""
         user = db.scalar(select(User).where(User.id == user_id))
         if not user:
@@ -88,7 +87,7 @@ class CustomerSegmentationService:
         first_purchase = orders[-1].created_at
 
         # Calculate days since last purchase
-        days_since_last = (datetime.now(timezone.utc) - last_purchase).days
+        days_since_last = (datetime.now(UTC) - last_purchase).days
 
         # Calculate purchase frequency
         if len(orders) > 1:
@@ -214,7 +213,7 @@ class CustomerSegmentationService:
         signup_date: datetime,
     ) -> CustomerSegment:
         """Determine customer segment based on metrics."""
-        days_since_signup = (datetime.now(timezone.utc) - signup_date).days
+        days_since_signup = (datetime.now(UTC) - signup_date).days
 
         # VIP check
         if lifetime_spend >= CustomerSegmentationService.VIP_LIFETIME_SPEND:
@@ -267,7 +266,7 @@ class CustomerSegmentationService:
     @staticmethod
     def _calculate_churn_risk(
         days_since_last_purchase: int,
-        purchase_frequency_days: Optional[float],
+        purchase_frequency_days: float | None,
         segment: CustomerSegment,
     ) -> float:
         """Calculate churn risk score (0-1, higher = more risk)."""

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import and_, delete, or_, select
 from sqlalchemy.orm import Session
@@ -31,7 +31,7 @@ def slugify_campaign(value: str) -> str:
 
 
 def campaign_is_live(campaign: MerchandisingCampaign, *, now: datetime | None = None) -> bool:
-    current = now or datetime.now(timezone.utc)
+    current = now or datetime.now(UTC)
     if not campaign.is_active:
         return False
     if campaign.visibility != "public":
@@ -56,7 +56,7 @@ def derive_campaign_status(
     if campaign.status == "draft" or not campaign.is_active:
         return "draft" if campaign.status == "draft" else campaign.status
 
-    current = now or datetime.now(timezone.utc)
+    current = now or datetime.now(UTC)
     if campaign.ends_at and campaign.ends_at < current:
         return "ended"
     if campaign.starts_at and campaign.starts_at > current:
@@ -86,12 +86,16 @@ def campaign_is_eligible_for_user(
     eligibility_rules_dict = getattr(campaign, "eligibility_rules", None)
     if not eligibility_rules_dict:
         return True
-    from app.services.eligibility_service import parse_eligibility_rules, compute_user_eligibility_stats, evaluate_eligibility
+    from app.services.eligibility_service import (
+        compute_user_eligibility_stats,
+        evaluate_eligibility,
+        parse_eligibility_rules,
+    )
     rules = parse_eligibility_rules(eligibility_rules_dict)
     if not rules:
         return True
     stats = compute_user_eligibility_stats(db, user_id)
-    ok, _ = evaluate_eligibility(rules, stats, now=datetime.now(timezone.utc))
+    ok, _ = evaluate_eligibility(rules, stats, now=datetime.now(UTC))
     return ok
 
 
@@ -102,7 +106,7 @@ def list_live_campaigns(
     limit: int = 40,
     user_id: str | None = None,
 ) -> list[MerchandisingCampaign]:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     rows = list(
         db.scalars(
             select(MerchandisingCampaign)

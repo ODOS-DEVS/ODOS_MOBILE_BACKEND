@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi import HTTPException
@@ -52,7 +52,7 @@ def test_daily_series_is_chronological_and_ends_today():
     dates = [point.date for point in series]
     assert dates == sorted(dates), "chart data must be oldest-first"
 
-    today = datetime.now(timezone.utc).date()
+    today = datetime.now(UTC).date()
     assert series[-1].date == today.isoformat()
     assert series[0].date == (today - timedelta(days=days)).isoformat()
 

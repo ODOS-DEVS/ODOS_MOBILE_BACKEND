@@ -25,7 +25,8 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from fastapi import HTTPException, status as http_status
+from fastapi import HTTPException
+from fastapi import status as http_status
 from sqlalchemy.orm import Session
 
 from app.models import Delivery, DeliveryEvent, DeliveryStatus

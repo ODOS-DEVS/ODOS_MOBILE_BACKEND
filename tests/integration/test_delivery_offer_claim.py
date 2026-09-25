@@ -237,8 +237,9 @@ def test_two_couriers_claiming_the_same_offer_concurrently_exactly_one_wins():
     barrier = threading.Barrier(2)
 
     def attempt_claim(user_id) -> None:
-        from app.controllers.courier_controller import claim_delivery_offer
         from fastapi import HTTPException
+
+        from app.controllers.courier_controller import claim_delivery_offer
 
         worker_engine = create_engine(TEST_DATABASE_URL, future=True)
         with Session(worker_engine) as session:

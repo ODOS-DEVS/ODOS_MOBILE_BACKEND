@@ -66,12 +66,11 @@ class BankTransferProvider(PaymentProvider):
                         },
                         next_action="bank_transfer",
                     )
-                else:
-                    return PaymentInitiationResponse(
-                        provider=self.provider_type,
-                        success=False,
-                        message="Failed to generate bank transfer details",
-                    )
+                return PaymentInitiationResponse(
+                    provider=self.provider_type,
+                    success=False,
+                    message="Failed to generate bank transfer details",
+                )
 
         except httpx.TimeoutException:
             return PaymentInitiationResponse(
@@ -125,13 +124,12 @@ class BankTransferProvider(PaymentProvider):
                         gateway_response=result.get("message"),
                         raw_response=result,
                     )
-                else:
-                    return PaymentVerificationResponse(
-                        provider=self.provider_type,
-                        order_id=request.order_id,
-                        status="pending",
-                        gateway_response="Unable to verify bank transfer status",
-                    )
+                return PaymentVerificationResponse(
+                    provider=self.provider_type,
+                    order_id=request.order_id,
+                    status="pending",
+                    gateway_response="Unable to verify bank transfer status",
+                )
 
         except Exception as e:
             return PaymentVerificationResponse(

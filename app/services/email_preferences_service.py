@@ -1,6 +1,6 @@
 """Email preferences service for managing user email subscriptions."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -35,7 +35,7 @@ class EmailPreferencesService:
         return {
             "user_id": str(user.id),
             **prefs,
-            "updated_at": getattr(user, "email_preferences_updated_at", datetime.now(timezone.utc)).isoformat(),
+            "updated_at": getattr(user, "email_preferences_updated_at", datetime.now(UTC)).isoformat(),
         }
 
     @staticmethod
@@ -63,7 +63,7 @@ class EmailPreferencesService:
         else:
             user.email_preferences.update(updates)
 
-        user.email_preferences_updated_at = datetime.now(timezone.utc)
+        user.email_preferences_updated_at = datetime.now(UTC)
         db.commit()
 
         return EmailPreferencesService.get_preferences(db, user_id)

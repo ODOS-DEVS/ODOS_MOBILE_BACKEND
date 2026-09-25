@@ -5,24 +5,22 @@ from app.controllers.campaign_controller import (
     get_public_campaign_detail,
     list_public_campaigns,
 )
-from app.controllers.deals_controller import get_deals_hub
-from app.core.auth import get_optional_current_user
-from app.core.promo_banner_config import PROMO_CAMPAIGN_TAGS
-from app.models import User
 from app.controllers.catalog_controller import (
     get_catalog_product,
     get_store,
     list_active_flash_sale_events,
-    list_flash_sale_event_products,
-    list_markets,
     list_catalog_categories,
     list_catalog_products,
+    list_flash_sale_event_products,
+    list_markets,
     list_promo_banners,
     list_stores,
+    search_products,
     serialize_catalog_product,
     serialize_catalog_products,
-    search_products,
 )
+from app.controllers.deals_controller import get_deals_hub
+from app.core.auth import get_optional_current_user
 from app.core.cache import (
     TTL_CATEGORIES,
     TTL_FLASH_SALE_EVENTS,
@@ -41,20 +39,22 @@ from app.core.cache import (
     set_cache_control,
 )
 from app.core.database import get_db
-from app.services.deal_catalog_service import list_deal_products
-from app.services.store_section_service import list_sections, products_in_section
+from app.core.promo_banner_config import PROMO_CAMPAIGN_TAGS
+from app.models import User
 from app.schemas.catalog import (
-    StoreSectionRead,
     CategoryRead,
+    DealsHubRead,
     FlashSaleEventRead,
     MarketRead,
-    DealsHubRead,
     MerchandisingCampaignDetailRead,
     MerchandisingCampaignRead,
     ProductRead,
     PromoBannerRead,
     StoreRead,
+    StoreSectionRead,
 )
+from app.services.deal_catalog_service import list_deal_products
+from app.services.store_section_service import list_sections, products_in_section
 
 router = APIRouter(prefix="/catalog", tags=["catalog"])
 

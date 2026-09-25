@@ -1,11 +1,10 @@
 """Email marketing service with SendGrid integration."""
 
-import os
-from datetime import datetime, timedelta, timezone
-from typing import Optional
-from enum import Enum
-from dataclasses import dataclass
 import logging
+import os
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from enum import Enum
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -41,8 +40,8 @@ class EmailRecipient:
     """Email recipient data."""
     email: str
     name: str
-    user_id: Optional[str] = None
-    metadata: Optional[dict] = None
+    user_id: str | None = None
+    metadata: dict | None = None
 
 
 @dataclass
@@ -256,7 +255,7 @@ class EmailSegmentationService:
         nothing to be reengaged about, and a welcome campaign is the right
         message for them.
         """
-        cutoff_date = datetime.now(timezone.utc) - timedelta(days=days_inactive)
+        cutoff_date = datetime.now(UTC) - timedelta(days=days_inactive)
 
         ordered_at_all = select(Order.user_id)
         ordered_recently = select(Order.user_id).where(Order.created_at >= cutoff_date)
@@ -299,7 +298,7 @@ class EmailSegmentationService:
         filter applied, so the welcome campaign went to every active user
         rather than to new ones.
         """
-        cutoff_date = datetime.now(timezone.utc) - timedelta(days=days_since_signup)
+        cutoff_date = datetime.now(UTC) - timedelta(days=days_since_signup)
 
         users = db.scalars(
             select(User).where(

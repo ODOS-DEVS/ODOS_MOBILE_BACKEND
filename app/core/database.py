@@ -6,7 +6,6 @@ from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 from app.core.config import settings
 
-
 # Bare hostnames that always mean "a database next to us", regardless of shape.
 _LOCAL_HOSTNAMES = {"localhost", "postgres", "postgresql", "db", "database"}
 

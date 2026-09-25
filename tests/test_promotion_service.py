@@ -2,20 +2,20 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
 import uuid
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
 
 from app.schemas.order import OrderItemCreate
 from app.services.promotion_service import (
+    _line_is_eligible,
     discount_for_voucher,
     eligible_subtotal_for_voucher,
     validate_voucher_configuration,
     voucher_status,
-    _line_is_eligible,
 )
 
 
@@ -64,19 +64,19 @@ def _item(product_id: str, unit_price: float, quantity: int = 1) -> OrderItemCre
 
 
 def test_voucher_status_expired():
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     voucher = _voucher(ends_at=now - timedelta(hours=1))
     assert voucher_status(voucher, now=now, overall_count=0) == "expired"
 
 
 def test_voucher_status_inactive():
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     voucher = _voucher(is_active=False)
     assert voucher_status(voucher, now=now, overall_count=0) == "disabled"
 
 
 def test_voucher_status_usage_limit():
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     voucher = _voucher(usage_limit=2)
     assert voucher_status(voucher, now=now, overall_count=2) == "limit_reached"
 
@@ -221,7 +221,7 @@ def test_vendor_cannot_target_other_stores():
 
 
 def test_configuration_rejects_bad_date_window():
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     with pytest.raises(HTTPException):
         validate_voucher_configuration(
             scope="odos",

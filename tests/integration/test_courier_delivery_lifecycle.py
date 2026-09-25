@@ -192,9 +192,10 @@ def test_out_of_order_transitions_are_rejected(db):
 
 
 def test_a_legal_transition_moves_and_records_an_event(db):
+    from sqlalchemy import select
+
     from app.controllers.courier_controller import advance_delivery
     from app.models import DeliveryEvent
-    from sqlalchemy import select
 
     user, courier = _courier(db)
     delivery = _delivery(db, _order(db), status="accepted", courier=courier)

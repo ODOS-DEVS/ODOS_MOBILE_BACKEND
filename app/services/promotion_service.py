@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timezone
 import uuid
+from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from fastapi import HTTPException, status
 from sqlalchemy import func, select, text
@@ -64,9 +64,8 @@ def build_voucher_reward_text(
             pct = bogo_get_discount_percent or 100
             if pct >= 100:
                 return f"BUY {bogo_buy_quantity} GET {bogo_get_quantity} FREE"
-            else:
-                pct_val = int(pct) if float(pct).is_integer() else round(pct, 1)
-                return f"BUY {bogo_buy_quantity} GET {bogo_get_quantity} {pct_val}% OFF"
+            pct_val = int(pct) if float(pct).is_integer() else round(pct, 1)
+            return f"BUY {bogo_buy_quantity} GET {bogo_get_quantity} {pct_val}% OFF"
     if discount_type == "percent":
         value = int(discount_value) if float(discount_value).is_integer() else round(discount_value, 2)
         return f"{value}% OFF"
@@ -127,7 +126,7 @@ def reserve_voucher_usage(db: Session, user_id: uuid.UUID, voucher: Voucher) -> 
         ) from exc
     if locked is None:
         return
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     overall_count, user_count = _counts_for_voucher(db, locked.id, user_id)
     current_status = voucher_status(locked, now=now, overall_count=overall_count)
     if current_status in {"expired", "limit_reached", "disabled", "pending_review"}:
@@ -372,7 +371,7 @@ def validate_voucher_for_checkout(
     items: list[OrderItemCreate],
     shipping_amount: float,
 ) -> VoucherQuote:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     overall_count, user_count = _counts_for_voucher(db, voucher.id, user.id)
     current_status = voucher_status(voucher, now=now, overall_count=overall_count)
     assignment = _assignment_for_user(db, voucher.id, user.id)
@@ -410,7 +409,11 @@ def validate_voucher_for_checkout(
 
     eligibility_rules_dict = getattr(voucher, "eligibility_rules", None)
     if eligibility_rules_dict:
-        from app.services.eligibility_service import parse_eligibility_rules, compute_user_eligibility_stats, evaluate_eligibility
+        from app.services.eligibility_service import (
+            compute_user_eligibility_stats,
+            evaluate_eligibility,
+            parse_eligibility_rules,
+        )
         rules = parse_eligibility_rules(eligibility_rules_dict)
         if rules:
             stats = compute_user_eligibility_stats(db, user.id)

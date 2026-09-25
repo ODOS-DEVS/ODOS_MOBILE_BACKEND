@@ -1,10 +1,10 @@
 """Service for managing withdrawal limits and preventing fraud."""
 
-from datetime import datetime, timedelta, timezone
-from sqlalchemy import select, and_, func
-from sqlalchemy.orm import Session
-from typing import Tuple
 import logging
+from datetime import UTC, datetime, timedelta
+
+from sqlalchemy import and_, func, select
+from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +24,7 @@ class WithdrawalLimiterService:
         db: Session,
         vendor_id: str,
         requested_amount: float,
-    ) -> Tuple[bool, str, dict]:
+    ) -> tuple[bool, str, dict]:
         """
         Check if a withdrawal request is within allowed limits.
 
@@ -33,7 +33,7 @@ class WithdrawalLimiterService:
         """
         from app.models import VendorWithdrawalRequest
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         # Check single withdrawal limit
         if requested_amount > WithdrawalLimiterService.MAXIMUM_SINGLE_WITHDRAWAL_GHS:
@@ -144,7 +144,7 @@ class WithdrawalLimiterService:
         """Get current withdrawal limit status for a vendor."""
         from app.models import VendorWithdrawalRequest
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         # Daily
         daily_cutoff = now - timedelta(days=1)
@@ -212,7 +212,7 @@ class WithdrawalLimiterService:
     def check_suspicious_activity(
         db: Session,
         vendor_id: str,
-    ) -> Tuple[bool, str]:
+    ) -> tuple[bool, str]:
         """
         Check for suspicious withdrawal patterns.
 
@@ -221,7 +221,7 @@ class WithdrawalLimiterService:
         """
         from app.models import VendorWithdrawalRequest
 
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         # Check for multiple withdrawals in short time (last hour)
         hourly_cutoff = now - timedelta(hours=1)

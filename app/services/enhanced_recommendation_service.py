@@ -7,18 +7,18 @@ This improves on the basic behavioral model by adding:
 4. Admin-tunable weights (adjust recommendation strength)
 """
 
-from datetime import datetime, timedelta, timezone
-from dataclasses import dataclass
 import uuid
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import (
-    Product,
-    User,
     Order,
     OrderItem,
+    Product,
+    User,
     UserBehaviorEvent,
 )
 
@@ -37,7 +37,7 @@ class RecommendationScore:
 
 def get_user_behavior_profile(db: Session, user_id: uuid.UUID, days: int = 90) -> dict:
     """Build user's behavior profile from recent events."""
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    cutoff = datetime.now(UTC) - timedelta(days=days)
 
     # Event weights (tunable, for now hardcoded)
     event_weights = {
@@ -74,7 +74,7 @@ def get_user_behavior_profile(db: Session, user_id: uuid.UUID, days: int = 90) -
     # Build preference profile
     category_scores = {}
     product_affinities = {}
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     for event_type, product_id, category, count, latest in events:
         weight = event_weights.get(event_type, 0)
@@ -169,7 +169,7 @@ def get_collaborative_recommendations(
 
 def get_trending_products(db: Session, days: int = 7, limit: int = 100) -> dict:
     """Find what's trending right now (high purchase velocity)."""
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    cutoff = datetime.now(UTC) - timedelta(days=days)
 
     # Count purchases in the last N days
     trending = db.execute(

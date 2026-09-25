@@ -2,8 +2,8 @@
 
 from sqlalchemy.orm import Session
 
-from app.models import User
 from app.core.auth import require_vendor
+from app.models import User
 from app.services.vendor_inventory_service import InventoryService
 
 
@@ -73,11 +73,10 @@ def update_product_stock(
             "success": True,
             "message": f"Updated stock to {new_stock}",
         }
-    else:
-        return {
-            "success": False,
-            "message": "Product not found or unauthorized",
-        }
+    return {
+        "success": False,
+        "message": "Product not found or unauthorized",
+    }
 
 
 def update_product_price(
@@ -109,11 +108,10 @@ def update_product_price(
             "success": True,
             "message": f"Updated price to {new_price}",
         }
-    else:
-        return {
-            "success": False,
-            "message": "Product not found or unauthorized",
-        }
+    return {
+        "success": False,
+        "message": "Product not found or unauthorized",
+    }
 
 
 def bulk_update_inventory(

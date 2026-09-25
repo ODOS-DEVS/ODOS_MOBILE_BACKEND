@@ -12,9 +12,9 @@ reported alongside the funnel rather than inferred from conversion counts.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta, timezone
 import uuid
+from dataclasses import dataclass, field
+from datetime import UTC, date, datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -70,7 +70,7 @@ class EntityPerformance:
 
 
 def window_start(days: int) -> datetime:
-    return datetime.now(timezone.utc) - timedelta(days=days)
+    return datetime.now(UTC) - timedelta(days=days)
 
 
 def _apply_scope(stmt, entity_type: str, entity_ids: list[str] | None, start: datetime):
@@ -149,7 +149,7 @@ def daily_series(
             elif event_type == "conversion":
                 funnel.conversions = int(count or 0)
 
-    today = datetime.now(timezone.utc).date()
+    today = datetime.now(UTC).date()
     series: list[PromoAnalyticsDatapoint] = []
     for offset in range(days, -1, -1):
         current = today - timedelta(days=offset)
@@ -436,7 +436,7 @@ def build_overview(
 
     return PromoAnalyticsOverviewRead(
         days=days,
-        generated_at=datetime.now(timezone.utc),
+        generated_at=datetime.now(UTC),
         scope="store" if store_id else "marketplace",
         channels=channels,
         total_discount_given=round(sum(value[2] for value in money.values()), 2),

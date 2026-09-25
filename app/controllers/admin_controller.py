@@ -8,40 +8,14 @@ from sqlalchemy import case, func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
-from app.core.promo_banner_config import (
-    PROMO_CAMPAIGN_TAGS,
-    describe_promo_destination,
-    normalize_promo_link_type,
-    normalize_promo_placement,
-)
 from app.controllers.auth_controller import build_auth_token, login_user
-from app.core.admin_pagination import paginate_scalars
-from app.core.admin_permissions import AdminPermissionLevel, require_super_admin
-from app.core.event_types import PROMO_CREATED, PROMO_DELETED, PROMO_UPDATED, USER_LOGIN
-from app.helpers.admin_audit import (
-    log_admin_order_status_change,
-    log_admin_return_resolution,
-    log_admin_product_mutation,
-    log_admin_user_status_change,
-    log_admin_vendor_status_change,
-    log_admin_role_change,
-)
-from app.helpers.promo_audit import log_admin_promo_mutation
-from app.services.event_log_service import record_admin_event
-from app.schemas.pagination import AdminPageRead
-from app.schemas.order import OrderStatusEventRead
 from app.controllers.finance_controller import (
     get_admin_finance_overview,
     list_admin_payment_transactions,
     list_admin_platform_ledger_entries,
 )
 from app.controllers.notification_controller import create_notification_event, order_notification_image
-from app.core.security import hash_password
-from app.services.push_service import (
-    customer_order_status_push_copy,
-    dispatch_customer_order_push,
-)
-from app.core.catalog_taxonomy import ODOS_CATEGORY_TAXONOMY
+from app.controllers.review_controller import recompute_product_review_metrics
 from app.controllers.vendor_controller import (
     broadcast_catalog_product_change,
     broadcast_catalog_store_change,
@@ -49,21 +23,36 @@ from app.controllers.vendor_controller import (
     list_vendor_applications,
     serialize_vendor_product,
 )
-from app.controllers.review_controller import recompute_product_review_metrics
-from app.services.return_request_service import (
-    ReturnRequestError,
-    apply_return_request_status_change,
-)
 from app.controllers.voucher_controller import (
     build_voucher_reward_text,
     validate_voucher_configuration,
     voucher_status,
 )
-from app.services.media_service import remove_media_file, save_image_upload, save_image_uploads
-from app.services.realtime_service import realtime_manager
+from app.core.admin_pagination import paginate_scalars
+from app.core.admin_permissions import AdminPermissionLevel, require_super_admin
+from app.core.catalog_taxonomy import ODOS_CATEGORY_TAXONOMY
+from app.core.event_types import PROMO_CREATED, PROMO_DELETED, PROMO_UPDATED, USER_LOGIN
+from app.core.promo_banner_config import (
+    PROMO_CAMPAIGN_TAGS,
+    describe_promo_destination,
+    normalize_promo_link_type,
+    normalize_promo_placement,
+)
+from app.core.security import hash_password
+from app.helpers.admin_audit import (
+    log_admin_order_status_change,
+    log_admin_product_mutation,
+    log_admin_return_resolution,
+    log_admin_role_change,
+    log_admin_user_status_change,
+    log_admin_vendor_status_change,
+)
+from app.helpers.promo_audit import log_admin_promo_mutation
 from app.models import (
     Category,
     CustomerWallet,
+    FlashSaleEvent,
+    FlashSaleEventProduct,
     Market,
     NotificationEvent,
     NotificationRead,
@@ -72,8 +61,6 @@ from app.models import (
     PaymentTransaction,
     Product,
     PromoBanner,
-    FlashSaleEvent,
-    FlashSaleEventProduct,
     ReturnRequest,
     Review,
     SavedAddress,
@@ -87,9 +74,8 @@ from app.models import (
     VoucherRedemption,
 )
 from app.models.chat import ChatThread, ChatThreadType, SupportChatStatus
-from app.models.wallet import VendorWithdrawalRequest
-from app.services.inventory_service import LOW_STOCK_THRESHOLD
 from app.models.user_behavior import UserBehaviorEvent
+from app.models.wallet import VendorWithdrawalRequest
 from app.schemas.admin import (
     AdminBootstrapStatusRead,
     AdminCategoryRead,
@@ -98,6 +84,8 @@ from app.schemas.admin import (
     AdminDashboardStatsRead,
     AdminDeliveryOpsOrderRead,
     AdminDeliveryOpsRead,
+    AdminFlashSaleEventRead,
+    AdminFlashSaleEventUpsert,
     AdminMarketRead,
     AdminMarketUpsert,
     AdminNotificationRead,
@@ -105,55 +93,67 @@ from app.schemas.admin import (
     AdminOrderItemRead,
     AdminOrderRead,
     AdminOrderStatusUpdate,
-    AdminReturnRequestRead,
-    AdminReturnRequestUpdate,
+    AdminPermissionUpdate,
     AdminProductCreate,
     AdminProductRead,
     AdminProductStatusUpdate,
     AdminPromoBannerRead,
     AdminPromoBannerUpsert,
-    AdminFlashSaleEventRead,
-    AdminFlashSaleEventUpsert,
+    AdminPromotionAnalyticsRead,
+    AdminReturnRequestRead,
+    AdminReturnRequestUpdate,
+    AdminReviewModerationUpdate,
+    AdminReviewRead,
+    AdminStaffCreate,
+    AdminStoreDetailRead,
+    AdminStoreProductRead,
+    AdminStoreRead,
+    AdminStoreStatsRead,
+    AdminStoreStatusUpdate,
+    AdminStoreUpsert,
     AdminUserAddressRead,
     AdminUserCartItemRead,
     AdminUserDetailRead,
     AdminUserNotificationRead,
     AdminUserPaymentMethodRead,
+    AdminUserRead,
+    AdminUserStatsRead,
+    AdminUserStatusUpdate,
+    AdminUserStoreSummaryRead,
+    AdminUserVendorApplicationRead,
     AdminUserWalletSummaryRead,
     AdminUserWishlistItemRead,
-    AdminReviewModerationUpdate,
-    AdminReviewRead,
-    AdminStoreDetailRead,
-    AdminStoreProductRead,
-    AdminStoreRead,
-    AdminStoreStatsRead,
-    AdminUserStatsRead,
-    AdminStoreUpsert,
-    AdminStoreStatusUpdate,
-    AdminUserStoreSummaryRead,
-    AdminUserRead,
-    AdminUserStatusUpdate,
-    AdminPermissionUpdate,
-    AdminStaffCreate,
-    AdminUserVendorApplicationRead,
     AdminVendorRead,
     AdminVendorStatusUpdate,
+    AdminVoucherBulkGenerate,
     AdminVoucherRead,
     AdminVoucherReview,
     AdminVoucherUpsert,
-    AdminVoucherBulkGenerate,
-    AdminPromotionAnalyticsRead,
     NotificationMarkReadResponse,
 )
+from app.schemas.order import OrderStatusEventRead
+from app.schemas.pagination import AdminPageRead
 from app.schemas.payment import (
     AdminFinanceOverviewRead,
     AdminPaymentTransactionRead,
 )
 from app.schemas.user import AuthToken, UserCreate, UserLogin
-from app.services.delivery_service import delivery_method_label, get_delivery_config
 from app.services.delivery_lifecycle_service import admin_override_deliver, dispatch_order
-from app.services.order_timeline_service import record_order_status_event
+from app.services.delivery_service import delivery_method_label, get_delivery_config
+from app.services.event_log_service import record_admin_event
 from app.services.finance_math import amount_from_subunit, round_money
+from app.services.inventory_service import LOW_STOCK_THRESHOLD
+from app.services.media_service import remove_media_file, save_image_upload, save_image_uploads
+from app.services.order_timeline_service import record_order_status_event
+from app.services.push_service import (
+    customer_order_status_push_copy,
+    dispatch_customer_order_push,
+)
+from app.services.realtime_service import realtime_manager
+from app.services.return_request_service import (
+    ReturnRequestError,
+    apply_return_request_status_change,
+)
 
 SUPPORTED_ACCOUNT_STATUSES = {"active", "blocked", "inactive"}
 SUPPORTED_VENDOR_STATUSES = {"active", "suspended"}
@@ -3388,7 +3388,7 @@ def compute_delivery_ops_snapshot(db: Session) -> AdminDeliveryOpsRead:
     )
     orders = list(db.scalars(statement).all())
     now = datetime.now(UTC)
-    stage_counts: dict[str, int] = {stage: 0 for stage in DELIVERY_OPS_ACTIVE_STATUSES}
+    stage_counts: dict[str, int] = dict.fromkeys(DELIVERY_OPS_ACTIVE_STATUSES, 0)
     delayed_count = 0
     exceptions_count = 0
     rows: list[AdminDeliveryOpsOrderRead] = []

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
@@ -20,7 +20,7 @@ def record_promo_analytics_batch(
 ) -> PromoAnalyticsBatchRead:
     """Ingest a batch of promo analytics events."""
     accepted = 0
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     for event_data in payload.events:
         if event_data.entity_type not in {"campaign", "voucher", "banner"}:

@@ -7,21 +7,18 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
-from app.core.admin_pagination import normalize_page_params, paginate_scalars
-from app.schemas.pagination import AdminPageRead
 from app.controllers.notification_controller import create_notification_event, order_notification_image
-from app.services.push_service import (
-    customer_order_status_push_copy,
-    dispatch_customer_order_push,
-)
-from app.core.product_taxonomy import resolve_product_taxonomy
 from app.controllers.voucher_controller import (
-    build_voucher_reward_text,
     assign_voucher_to_user,
+    build_voucher_reward_text,
     validate_voucher_configuration,
     voucher_status,
 )
 from app.controllers.wallet_controller import publish_vendor_wallet_updates
+from app.core.admin_pagination import normalize_page_params, paginate_scalars
+from app.core.admin_permissions import list_admins_with_feature
+from app.core.config import settings
+from app.core.product_taxonomy import resolve_product_taxonomy
 from app.models import (
     Market,
     MerchandisingCampaign,
@@ -41,8 +38,8 @@ from app.models import (
     Voucher,
     VoucherRedemption,
 )
-from app.services.inventory_service import LOW_STOCK_THRESHOLD
-from app.services.finance_math import vendor_allocation_map
+from app.schemas.order import OrderRead, OrderStatusEventRead
+from app.schemas.pagination import AdminPageRead
 from app.schemas.vendor import (
     VendorAnalyticsDailyPoint,
     VendorAnalyticsRead,
@@ -50,60 +47,64 @@ from app.schemas.vendor import (
     VendorApplicationRead,
     VendorCustomerRead,
     VendorDashboardRead,
+    VendorDeliverySettingsRead,
+    VendorDeliverySettingsUpdate,
+    VendorInventoryMovementRead,
     VendorOrderItemRead,
     VendorOrderRead,
     VendorOrderStatusUpdate,
-    VendorReturnRequestRead,
-    VendorReviewReplyUpdate,
-    VendorReviewRead,
-    VendorTopProductRead,
     VendorProductCreate,
     VendorProductRead,
-    VendorInventoryMovementRead,
     VendorProductUpdate,
     VendorProfileRead,
-    VendorDeliverySettingsRead,
-    VendorDeliverySettingsUpdate,
+    VendorReturnRequestRead,
+    VendorReturnRequestUpdate,
+    VendorReviewRead,
+    VendorReviewReplyUpdate,
     VendorStoreRead,
+    VendorTopProductRead,
     VendorVoucherGiftPayload,
     VendorVoucherRead,
     VendorVoucherRedemptionRead,
     VendorVoucherUpsert,
 )
-from app.schemas.order import OrderRead, OrderStatusEventRead
-from app.core.admin_permissions import list_admins_with_feature
-from app.core.config import settings
+from app.services.delivery_dispatch_service import (
+    offer_ready_order,
+    request_courier_for_order,
+)
+from app.services.delivery_lifecycle_service import dispatch_package
+from app.services.delivery_service import (
+    get_delivery_config,
+    tracking_eta_for_vendor_status,
+)
 from app.services.email_service import (
     send_admin_vendor_application_email,
     send_admin_voucher_review_email,
     send_vendor_application_approved_email,
     send_vendor_application_pending_email,
 )
+from app.services.finance_math import vendor_allocation_map
+from app.services.inventory_service import LOW_STOCK_THRESHOLD
 from app.services.media_service import remove_media_file, save_image_upload, save_image_uploads
-from app.services.realtime_service import realtime_manager
-from app.services.sms_service import notify_admins_by_sms
-from app.services.delivery_service import (
-    get_delivery_config,
-    tracking_eta_for_vendor_status,
-)
-from app.services.delivery_lifecycle_service import dispatch_package
-from app.services.package_pricing_service import (
-    MAX_FREE_DELIVERY_THRESHOLD,
-    MAX_VENDOR_DELIVERY_FEE,
-    store_delivery_badge,
-    vendor_delivery_pricing,
-)
 from app.services.order_package_service import (
     VENDOR_STAGE_PROGRESS,
     ensure_packages,
     package_for_vendor,
     recompute_order_rollup,
 )
-from app.services.delivery_dispatch_service import (
-    offer_ready_order,
-    request_courier_for_order,
-)
 from app.services.order_timeline_service import record_order_status_event
+from app.services.package_pricing_service import (
+    MAX_FREE_DELIVERY_THRESHOLD,
+    MAX_VENDOR_DELIVERY_FEE,
+    store_delivery_badge,
+    vendor_delivery_pricing,
+)
+from app.services.push_service import (
+    customer_order_status_push_copy,
+    dispatch_customer_order_push,
+)
+from app.services.realtime_service import realtime_manager
+from app.services.sms_service import notify_admins_by_sms
 
 logger = logging.getLogger(__name__)
 VENDOR_ACTIVE_ORDER_STATUSES = {"pending", "confirmed", "processing", "ready", "out_for_delivery"}
@@ -1825,7 +1826,7 @@ def patch_vendor_return_request(
     db: Session,
     user: User,
     return_request_id: str,
-    payload: "VendorReturnRequestUpdate",
+    payload: VendorReturnRequestUpdate,
 ) -> VendorReturnRequestRead:
     from app.services.return_request_service import update_vendor_return_request
 

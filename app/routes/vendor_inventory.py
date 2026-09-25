@@ -1,19 +1,19 @@
 """Vendor inventory management routes."""
 
-from pydantic import BaseModel
 from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from app.controllers.vendor_inventory_controller import (
+    bulk_update_inventory,
+    get_inventory_stats,
+    get_low_stock_alerts,
+    list_vendor_inventory,
+    update_product_price,
+    update_product_stock,
+)
 from app.core.auth import get_current_user
 from app.core.database import get_db
-from app.controllers.vendor_inventory_controller import (
-    list_vendor_inventory,
-    get_inventory_stats,
-    update_product_stock,
-    update_product_price,
-    bulk_update_inventory,
-    get_low_stock_alerts,
-)
 from app.models import User
 
 

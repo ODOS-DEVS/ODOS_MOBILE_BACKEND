@@ -1,5 +1,5 @@
+from datetime import UTC, date, datetime
 from typing import Annotated
-from datetime import date, datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, status
@@ -7,53 +7,48 @@ from fastapi.exceptions import RequestValidationError
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
-from app.controllers.admin_metrics_controller import (
-    get_sales_chart_timeseries,
-    get_top_vendors,
-    get_kpi_metrics,
-)
 from app.controllers.admin_controller import (
-    archive_admin_voucher,
-    archive_admin_promo_banner,
     archive_admin_flash_sale_event,
+    archive_admin_promo_banner,
+    archive_admin_voucher,
     bootstrap_first_admin,
     bulk_generate_admin_vouchers,
     create_admin_category,
-    create_admin_product,
-    create_admin_market,
-    create_admin_promo_banner,
     create_admin_flash_sale_event,
+    create_admin_market,
+    create_admin_product,
+    create_admin_promo_banner,
+    create_admin_staff,
     create_admin_store,
     create_admin_voucher,
-    duplicate_admin_voucher,
-    pause_admin_voucher,
-    resume_admin_voucher,
     delete_admin_category,
     delete_admin_market,
+    duplicate_admin_voucher,
     get_admin_bootstrap_status,
     get_admin_dashboard,
-    get_admin_me,
     get_admin_finance_overview_payload,
-    get_admin_promotion_analytics,
+    get_admin_me,
     get_admin_order,
     get_admin_product,
     get_admin_promo_banner,
+    get_admin_promotion_analytics,
     get_admin_return_request,
     get_admin_store,
     get_admin_user,
     get_admin_vendor,
     list_admin_categories,
-    list_admin_markets,
-    list_admin_promo_banners,
-    list_admin_flash_sale_events,
     list_admin_delivery_ops,
+    list_admin_flash_sale_events,
+    list_admin_markets,
     list_admin_notifications,
     list_admin_orders,
     list_admin_payment_transactions_payload,
     list_admin_platform_ledger_entries_payload,
     list_admin_products,
+    list_admin_promo_banners,
     list_admin_return_requests,
     list_admin_reviews,
+    list_admin_staff,
     list_admin_stores,
     list_admin_users,
     list_admin_vendors,
@@ -61,38 +56,28 @@ from app.controllers.admin_controller import (
     login_admin_user,
     mark_admin_notification_read,
     moderate_admin_review,
+    pause_admin_voucher,
+    resume_admin_voucher,
+    review_admin_voucher,
     update_admin_category,
-    update_admin_market,
-    update_admin_promo_banner,
     update_admin_flash_sale_event,
+    update_admin_market,
     update_admin_order_status,
-    update_admin_profile,
     update_admin_product,
     update_admin_product_status,
+    update_admin_profile,
+    update_admin_promo_banner,
     update_admin_return_request,
     update_admin_store_status,
-    update_admin_user_status,
-    create_admin_staff,
-    list_admin_staff,
     update_admin_user_permission,
+    update_admin_user_status,
     update_admin_vendor_status,
     update_admin_voucher,
-    review_admin_voucher,
 )
-from app.controllers.event_log_controller import (
-    admin_event_log_list_dependency,
-    get_admin_event_log_stats,
-)
-from app.core.admin_permissions import (
-    require_admin_feature,
-    require_audit_access,
-    require_super_admin,
-)
-from app.core.rate_limit import limit_login
-from app.schemas.event_log import EventLogPageRead, EventLogStatsRead
-from app.controllers.delivery_settings_controller import (
-    get_admin_delivery_settings,
-    update_admin_delivery_settings,
+from app.controllers.admin_metrics_controller import (
+    get_kpi_metrics,
+    get_sales_chart_timeseries,
+    get_top_vendors,
 )
 from app.controllers.campaign_controller import (
     archive_admin_campaign,
@@ -104,14 +89,17 @@ from app.controllers.campaign_controller import (
     review_admin_campaign_opt_in,
     update_admin_campaign,
 )
+from app.controllers.delivery_settings_controller import (
+    get_admin_delivery_settings,
+    update_admin_delivery_settings,
+)
+from app.controllers.event_log_controller import (
+    admin_event_log_list_dependency,
+    get_admin_event_log_stats,
+)
 from app.controllers.flash_sale_nominations_controller import (
     list_admin_flash_sale_nominations,
     review_admin_flash_sale_nomination,
-)
-from app.schemas.payment import (
-    AdminFinanceOverviewRead,
-    AdminPaymentTransactionRead,
-    AdminPlatformLedgerEntryRead,
 )
 from app.controllers.vendor_controller import (
     approve_vendor_application,
@@ -122,26 +110,45 @@ from app.controllers.wallet_controller import (
     list_admin_vendor_withdrawal_requests,
     update_admin_vendor_withdrawal_request,
 )
+from app.core.admin_permissions import (
+    require_admin_feature,
+    require_audit_access,
+    require_super_admin,
+)
 from app.core.auth import get_current_user
-from app.services.promo_analytics_service import (
-    ENTITY_TYPES as PROMO_ENTITY_TYPES,
-    build_leaderboard as build_promo_leaderboard,
-    build_overview as build_promo_overview,
-    build_timeseries as build_promo_timeseries,
+from app.core.database import get_db
+from app.core.rate_limit import limit_login
+from app.models import User
+from app.routes.admin_list_params import AdminListParams
+from app.schemas.delivery_settings import (
+    AdminDeliverySettingsRead,
+    AdminDeliverySettingsUpdate,
+)
+from app.schemas.event_log import EventLogPageRead, EventLogStatsRead
+from app.schemas.pagination import AdminPageRead
+from app.schemas.payment import (
+    AdminFinanceOverviewRead,
+    AdminPaymentTransactionRead,
+    AdminPlatformLedgerEntryRead,
 )
 from app.schemas.promo_analytics import (
     PromoAnalyticsLeaderboardRead,
     PromoAnalyticsOverviewRead,
     PromoAnalyticsTimeseriesRead,
 )
-from app.core.database import get_db
-from app.routes.admin_list_params import AdminListParams
-from app.schemas.delivery_settings import (
-    AdminDeliverySettingsRead,
-    AdminDeliverySettingsUpdate,
+from app.services.promo_analytics_service import (
+    ENTITY_TYPES as PROMO_ENTITY_TYPES,
 )
-from app.schemas.pagination import AdminPageRead
-from app.models import User
+from app.services.promo_analytics_service import (
+    build_leaderboard as build_promo_leaderboard,
+)
+from app.services.promo_analytics_service import (
+    build_overview as build_promo_overview,
+)
+from app.services.promo_analytics_service import (
+    build_timeseries as build_promo_timeseries,
+)
+
 
 def _validate_promo_entity_type(entity_type: str) -> None:
     if entity_type not in PROMO_ENTITY_TYPES:
@@ -172,47 +179,47 @@ from app.schemas.admin import (
     AdminCategoryRead,
     AdminCategoryUpsert,
     AdminDashboardRead,
-    AdminMarketRead,
-    AdminMarketUpsert,
-    AdminNotificationRead,
-    AdminPromoBannerRead,
-    AdminPromoBannerUpsert,
+    AdminDeliveryOpsRead,
     AdminFlashSaleEventRead,
     AdminFlashSaleEventUpsert,
+    AdminFlashSaleNominationRead,
+    AdminFlashSaleNominationReview,
+    AdminMarketRead,
+    AdminMarketUpsert,
     AdminMerchandisingCampaignOptInRead,
     AdminMerchandisingCampaignRead,
     AdminMerchandisingCampaignUpsert,
-    AdminDeliveryOpsRead,
+    AdminNotificationRead,
     AdminOrderDetailRead,
     AdminOrderRead,
     AdminOrderStatusUpdate,
+    AdminPermissionUpdate,
     AdminProductCreate,
     AdminProductRead,
     AdminProductStatusUpdate,
+    AdminPromoBannerRead,
+    AdminPromoBannerUpsert,
+    AdminPromotionAnalyticsRead,
     AdminReturnRequestRead,
     AdminReturnRequestUpdate,
     AdminReviewModerationUpdate,
     AdminReviewRead,
+    AdminStaffCreate,
     AdminStoreDetailRead,
     AdminStoreRead,
-    AdminStoreUpsert,
     AdminStoreStatusUpdate,
+    AdminStoreUpsert,
     AdminUserDetailRead,
     AdminUserRead,
     AdminUserStatusUpdate,
-    AdminPermissionUpdate,
-    AdminStaffCreate,
-    AdminVendorWithdrawalRequestRead,
-    AdminVendorWithdrawalUpdate,
     AdminVendorRead,
     AdminVendorStatusUpdate,
+    AdminVendorWithdrawalRequestRead,
+    AdminVendorWithdrawalUpdate,
+    AdminVoucherBulkGenerate,
     AdminVoucherRead,
     AdminVoucherReview,
     AdminVoucherUpsert,
-    AdminVoucherBulkGenerate,
-    AdminPromotionAnalyticsRead,
-    AdminFlashSaleNominationRead,
-    AdminFlashSaleNominationReview,
     NotificationMarkReadResponse,
 )
 from app.schemas.user import AuthToken, UserCreate, UserLogin, UserRead
@@ -1284,7 +1291,7 @@ def get_finance_reconciliation(
         collected_total_for_day,
     )
 
-    target_day = day or datetime.now(timezone.utc).date()
+    target_day = day or datetime.now(UTC).date()
     discrepancies = check_vendor_wallet_balances(db) + check_customer_wallet_balances(db)
     return {
         "collected": collected_total_for_day(db, target_day),

@@ -17,10 +17,10 @@ from app.core.database import get_db
 from app.models import User
 from app.schemas.chat import (
     ChatMessageRead,
-    SupportChatStatusUpdate,
-    SupportChatThreadEnsurePayload,
     ChatThreadEnsurePayload,
     ChatThreadRead,
+    SupportChatStatusUpdate,
+    SupportChatThreadEnsurePayload,
 )
 
 router = APIRouter(prefix="/chat", tags=["chat"])

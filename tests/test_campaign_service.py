@@ -1,6 +1,6 @@
 """Unit tests for merchandising campaign resolution helpers."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -12,7 +12,7 @@ from app.services.campaign_service import (
 
 
 def _campaign(**overrides):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     base = {
         "id": uuid4(),
         "slug": "summer-sale",
@@ -33,7 +33,7 @@ def test_slugify_campaign_normalizes_title():
 
 
 def test_campaign_is_live_respects_schedule_and_visibility():
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     assert campaign_is_live(_campaign()) is True
     assert campaign_is_live(_campaign(is_active=False)) is False
     assert campaign_is_live(_campaign(visibility="hidden")) is False
@@ -43,7 +43,7 @@ def test_campaign_is_live_respects_schedule_and_visibility():
 
 
 def test_derive_campaign_status_from_schedule():
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     assert derive_campaign_status(_campaign(status="archived")) == "archived"
     assert derive_campaign_status(_campaign(status="draft")) == "draft"
     assert (

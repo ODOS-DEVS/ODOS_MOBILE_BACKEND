@@ -9,15 +9,15 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from app.core.admin_pagination import paginate_scalars
-from app.schemas.pagination import AdminPageRead
+from app.controllers.finance_controller import record_vendor_payout_paid
 from app.controllers.notification_controller import (
     create_notification_event,
     order_notification_image,
 )
-from app.controllers.finance_controller import record_vendor_payout_paid
+from app.core.admin_pagination import paginate_scalars
 from app.core.admin_permissions import list_admins_with_feature
 from app.core.config import settings
+from app.helpers.admin_audit import log_admin_withdrawal_decision
 from app.models import (
     Order,
     ReturnRequest,
@@ -28,6 +28,7 @@ from app.models import (
     VendorWalletTransaction,
     VendorWithdrawalRequest,
 )
+from app.schemas.pagination import AdminPageRead
 from app.services.email_service import send_admin_withdrawal_request_email
 from app.services.push_service import vendor_wants_payout_notify
 from app.services.sms_service import notify_admins_by_sms
@@ -45,8 +46,8 @@ from app.schemas.vendor import (
     VendorWithdrawalCreate,
     VendorWithdrawalRequestRead,
 )
-from app.services.finance_math import round_money as _round_money
 from app.services.finance_math import return_reversal_breakdown, vendor_allocation_map
+from app.services.finance_math import round_money as _round_money
 from app.services.paystack_service import (
     create_transfer_recipient,
     initiate_transfer,

@@ -3,16 +3,16 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from app.core.auth import get_current_user
-from app.core.database import get_db
 from app.controllers.advanced_analytics_controller import (
-    get_customer_metrics,
-    get_revenue_metrics,
-    get_product_metrics,
-    get_inventory_metrics,
     get_category_performance,
+    get_customer_metrics,
+    get_inventory_metrics,
+    get_product_metrics,
+    get_revenue_metrics,
     get_vendor_metrics,
 )
+from app.core.auth import get_current_user
+from app.core.database import get_db
 from app.models import User
 
 router = APIRouter(prefix="/admin/analytics", tags=["admin-analytics"])

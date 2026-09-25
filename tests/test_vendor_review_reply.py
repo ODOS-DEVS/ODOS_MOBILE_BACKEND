@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import uuid
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock
-import uuid
 
 import pytest
 from fastapi import HTTPException
@@ -33,7 +33,7 @@ def _review_row(vendor_user_id: uuid.UUID):
         rating=4.5,
         comment="Great product!",
         is_hidden=False,
-        created_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
     )
     product = SimpleNamespace(
         id="prod-1",

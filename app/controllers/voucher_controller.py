@@ -1,6 +1,6 @@
-from datetime import datetime, timezone
-from typing import Iterable
 import uuid
+from datetime import UTC, datetime
+from typing import Iterable
 
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
@@ -24,16 +24,17 @@ from app.services.promotion_engine import (
     calculate_voucher_quote,
     suggest_best_promotions,
 )
+
 # build_voucher_reward_text and validate_voucher_configuration are not used in
 # this module -- they are re-exported, because the admin, vendor and deals
 # controllers and the vouchers router all import them from here rather than
 # from the service. Removing them as "unused" breaks nine test modules at
 # collection time, so the noqa marks them as deliberate.
 from app.services.promotion_service import (
+    VoucherQuote,
     build_voucher_reward_text,  # noqa: F401  (re-exported)
     validate_voucher_configuration,  # noqa: F401  (re-exported)
     voucher_status,
-    VoucherQuote,
 )
 
 
@@ -267,7 +268,7 @@ def list_user_vouchers(db: Session, user: User) -> list[VoucherWalletRead]:
         db,
         [voucher.store_id for voucher in vouchers if voucher.store_id],
     )
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     payloads: list[VoucherWalletRead] = []
     for voucher in vouchers:
@@ -312,7 +313,7 @@ def list_public_promotions(db: Session, user_id: str | None = None) -> list[Stor
         .group_by(VoucherRedemption.voucher_id)
     ).all()
     overall_map = {voucher_id: int(count) for voucher_id, count in usage_rows}
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     payloads: list[StoreVoucherRead] = []
     for voucher in vouchers:
@@ -333,7 +334,11 @@ def list_public_promotions(db: Session, user_id: str | None = None) -> list[Stor
                         continue
             eligibility_rules_dict = getattr(voucher, "eligibility_rules", None)
             if eligibility_rules_dict:
-                from app.services.eligibility_service import parse_eligibility_rules, compute_user_eligibility_stats, evaluate_eligibility
+                from app.services.eligibility_service import (
+                    compute_user_eligibility_stats,
+                    evaluate_eligibility,
+                    parse_eligibility_rules,
+                )
                 rules = parse_eligibility_rules(eligibility_rules_dict)
                 if rules:
                     stats = compute_user_eligibility_stats(db, user_id)
@@ -385,7 +390,7 @@ def list_store_vouchers(
         .group_by(VoucherRedemption.voucher_id)
     ).all()
     overall_map = {voucher_id: int(count) for voucher_id, count in usage_rows}
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     payloads: list[StoreVoucherRead] = []
     for voucher in vouchers:
@@ -407,7 +412,7 @@ def list_store_vouchers(
 def claim_voucher(db: Session, user: User, voucher_id: str) -> VoucherWalletRead:
     voucher = _voucher_by_id(db, voucher_id)
     overall_count, user_count = _counts_for_voucher(db, voucher.id, user.id)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     if voucher_status(voucher, now=now, overall_count=overall_count) != "active":
         raise HTTPException(

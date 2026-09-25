@@ -6,13 +6,14 @@ from fastapi import HTTPException, UploadFile, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
+from app.controllers.notification_controller import create_notification_event
 from app.models import (
     ChatMessage,
     ChatThread,
-    SupportChatStatus,
     ChatThreadType,
     Product,
     Store,
+    SupportChatStatus,
     User,
     UserRole,
     VendorStatus,
@@ -22,13 +23,12 @@ from app.schemas.chat import (
     ChatMessageRead,
     ChatProductSummaryRead,
     ChatStoreSummaryRead,
-    SupportChatStatusUpdate,
-    SupportChatThreadEnsurePayload,
     ChatThreadEnsurePayload,
     ChatThreadRead,
+    SupportChatStatusUpdate,
+    SupportChatThreadEnsurePayload,
 )
 from app.services.media_service import save_chat_attachment_upload
-from app.controllers.notification_controller import create_notification_event
 from app.services.push_service import (
     build_push_data,
     send_customer_chat_push,

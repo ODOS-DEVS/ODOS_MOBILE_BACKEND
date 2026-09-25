@@ -1,11 +1,12 @@
 """Admin dashboard metrics and KPI endpoints."""
 
 from datetime import UTC, datetime, timedelta
+
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models import Order, OrderItem, Store, User, VendorStatus
 from app.core.admin_permissions import require_admin
+from app.models import Order, OrderItem, Store, User, VendorStatus
 
 
 def get_sales_chart_timeseries(

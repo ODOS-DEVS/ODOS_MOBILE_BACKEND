@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import desc, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
+from app.controllers.vendor_controller import fetch_vendor_dashboard
 from app.models import CartItem, Order, ReturnRequest, Store, User, Voucher, VoucherAssignment
 from app.models.account import SavedAddress
 from app.models.chat import ChatThread, ChatThreadType, SupportChatStatus
-from app.controllers.vendor_controller import fetch_vendor_dashboard
 
 
 @dataclass
@@ -159,7 +159,7 @@ def build_assistant_user_context(
                 str(first_item.vendor_user_id) if first_item.vendor_user_id else None
             )
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     wallet_vouchers = list(
         db.scalars(
             select(Voucher)
@@ -178,7 +178,7 @@ def build_assistant_user_context(
         lines.append("Saved vouchers:")
         for voucher in wallet_vouchers:
             expiry = (
-                voucher.ends_at.astimezone(timezone.utc).strftime("%Y-%m-%d")
+                voucher.ends_at.astimezone(UTC).strftime("%Y-%m-%d")
                 if voucher.ends_at
                 else "no expiry"
             )

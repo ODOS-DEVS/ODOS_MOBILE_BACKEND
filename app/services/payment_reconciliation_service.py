@@ -6,7 +6,7 @@ depend on either of those two things happening."""
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
@@ -88,7 +88,7 @@ def _process_stuck_wallet_topups(db, now: datetime) -> None:
 def process_stuck_payment_reconciliation() -> None:
     db = SessionLocal()
     try:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         _process_stuck_order_payments(db, now)
         _process_stuck_wallet_topups(db, now)
     finally:

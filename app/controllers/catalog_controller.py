@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import TypedDict
 
 from sqlalchemy import Select, false, func, or_, select
@@ -230,7 +230,7 @@ def list_catalog_products(
         statement = statement.where(Product.store_id == store_id)
 
     if max_age_days is not None:
-        cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+        cutoff = datetime.now(UTC) - timedelta(days=max_age_days)
         statement = statement.where(Product.created_at >= cutoff)
 
     if placement == "flash-sale":
@@ -315,7 +315,7 @@ def get_store(db: Session, store_id: str) -> Store | None:
 
 
 def list_promo_banners(db: Session, *, placement: str | None = None) -> list[PromoBanner]:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     statement = (
         select(PromoBanner)
         .where(PromoBanner.is_active.is_(True))
@@ -354,7 +354,7 @@ def _normalize_event_slug(value: str) -> str:
 
 
 def _get_live_flash_events(db: Session, *, slug: str | None = None) -> list[FlashSaleEvent]:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     statement = select(FlashSaleEvent).order_by(
         FlashSaleEvent.sort_order.asc(),
         FlashSaleEvent.ends_at.asc(),
@@ -413,7 +413,7 @@ def build_flash_product_context_map(
     if not product_ids:
         return {}
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     rows = db.execute(
         select(
             FlashSaleEventProduct.product_id,
@@ -449,7 +449,7 @@ def serialize_catalog_products(db: Session, products: list[Product]) -> list[Pro
 
     product_ids = [product.id for product in products]
     flash_map = get_flash_sale_context_map(db, product_ids)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     serialized: list[ProductRead] = []
     for product in products:
         pricing = resolve_effective_product_price(
@@ -482,7 +482,7 @@ def serialize_catalog_product(db: Session, product: Product | None) -> ProductRe
 
 
 def list_active_flash_sale_events(db: Session) -> list[FlashSaleEventRead]:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     events = _get_live_flash_events(db)
     if not events:
         return []

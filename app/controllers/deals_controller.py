@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -16,7 +16,7 @@ from app.schemas.catalog import DealsHubRead, DealsHubSectionRead
 
 
 def _active_deal_products(db: Session, *, limit: int = 24) -> list:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     products = list(
         db.scalars(
             select(Product)

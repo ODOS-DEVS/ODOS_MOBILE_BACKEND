@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 
 from sqlalchemy import func, select
 
@@ -129,7 +129,7 @@ def collected_total_for_day(db, day: date) -> dict[str, float | int]:
     Answering "Paystack says GHS 50,000 today — do we agree?" is currently
     impossible without it.
     """
-    start = datetime.combine(day, datetime.min.time(), tzinfo=timezone.utc)
+    start = datetime.combine(day, datetime.min.time(), tzinfo=UTC)
     end = start + timedelta(days=1)
 
     row = db.execute(

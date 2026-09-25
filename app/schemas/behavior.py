@@ -3,7 +3,6 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
-
 SUPPORTED_BEHAVIOR_EVENT_TYPES = frozenset(
     {
         "product_view",

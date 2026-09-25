@@ -1,6 +1,6 @@
-from pathlib import Path
 import asyncio
 import logging
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -10,11 +10,12 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.core.config import settings
+from app.core.redis_client import close_redis, get_redis
 from app.middleware.event_logging import EventLoggingMiddleware
 from app.middleware.unhandled_errors import UnhandledExceptionMiddleware
 from app.routes import (
-    admin,
     account,
+    admin,
     advanced_analytics,
     assistant,
     auth,
@@ -22,6 +23,7 @@ from app.routes import (
     cart,
     catalog,
     chat,
+    courier,
     customer_segmentation,
     customer_wallet,
     delivery,
@@ -37,21 +39,19 @@ from app.routes import (
     realtime,
     recommendations,
     reviews,
-    vouchers,
     vendor,
-    courier,
     vendor_analytics,
     vendor_campaigns,
     vendor_inventory,
+    vouchers,
     wishlist,
 )
-from app.core.redis_client import close_redis, get_redis
-from app.services.realtime_service import realtime_manager
 from app.services.delivery_auto_release_service import process_delivery_auto_release
 from app.services.delivery_ops_monitor_service import process_delivery_sla_alerts
 from app.services.financial_integrity_service import run_financial_integrity_check
 from app.services.payment_reconciliation_service import process_stuck_payment_reconciliation
 from app.services.promo_reminder_service import process_promo_expiry_reminders
+from app.services.realtime_service import realtime_manager
 from app.services.vendor_order_reminder_service import process_vendor_order_reminders
 
 app = FastAPI(title="ODOS Mobile Backend")

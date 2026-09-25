@@ -3,16 +3,16 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from app.core.auth import get_current_user
-from app.core.database import get_db
 from app.controllers.customer_segmentation_controller import (
+    export_segment_for_campaign,
+    get_all_segments_overview,
+    get_churn_risk_users,
     get_customer_profile,
     get_segment_members,
     get_segment_statistics,
-    get_all_segments_overview,
-    get_churn_risk_users,
-    export_segment_for_campaign,
 )
+from app.core.auth import get_current_user
+from app.core.database import get_db
 from app.models import User
 
 router = APIRouter(prefix="/customer-segmentation", tags=["customer-segmentation"])

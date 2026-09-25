@@ -3,14 +3,14 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from app.core.auth import get_current_user
-from app.core.database import get_db
 from app.controllers.loyalty_controller import (
+    award_bonus,
     get_loyalty_account,
     get_loyalty_history,
     redeem_loyalty_points,
-    award_bonus,
 )
+from app.core.auth import get_current_user
+from app.core.database import get_db
 from app.models import User
 
 router = APIRouter(prefix="/loyalty", tags=["loyalty"])

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -62,7 +62,7 @@ def get_flash_sale_context_map(
     if not product_ids:
         return {}
 
-    current = now or datetime.now(timezone.utc)
+    current = now or datetime.now(UTC)
     rows = db.execute(
         select(
             FlashSaleEventProduct.product_id,
@@ -113,7 +113,7 @@ def resolve_effective_product_price(
     flash_context: dict[str, object] | None = None,
     now: datetime | None = None,
 ) -> EffectiveProductPrice:
-    current = now or datetime.now(timezone.utc)
+    current = now or datetime.now(UTC)
     catalog_price = float(product.price)
     regular = float(product.regular_price if product.regular_price is not None else product.price)
     compare_at = float(product.old_price) if product.old_price is not None else None
@@ -202,7 +202,7 @@ def resolve_cart_line_prices(
         for product in db.scalars(select(Product).where(Product.id.in_(product_ids))).all()
     }
     flash_map = get_flash_sale_context_map(db, product_ids)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     resolved: dict[str, EffectiveProductPrice] = {}
     for product_id in product_ids:

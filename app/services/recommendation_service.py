@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -93,7 +93,7 @@ def _filter_recommendable(products: list[Product]) -> list[Product]:
 def _event_recency_multiplier(occurred_at: datetime | None) -> float:
     if not occurred_at:
         return 1.0
-    age_days = max(0, (datetime.now(timezone.utc) - occurred_at).days)
+    age_days = max(0, (datetime.now(UTC) - occurred_at).days)
     return max(0.2, 1.0 - (age_days / SIGNAL_WINDOW_DAYS) * 0.8)
 
 
@@ -123,7 +123,7 @@ def _boost_map(target: dict[str, float], keys: list[str], amount: float) -> None
 
 def _load_user_affinity(db: Session, user: User) -> UserAffinity:
     affinity = UserAffinity()
-    since = datetime.now(timezone.utc) - timedelta(days=SIGNAL_WINDOW_DAYS)
+    since = datetime.now(UTC) - timedelta(days=SIGNAL_WINDOW_DAYS)
 
     events = list(
         db.scalars(
@@ -216,7 +216,7 @@ def _co_purchase_scores(db: Session, seed_product_ids: set[str]) -> dict[str, fl
     if not seed_product_ids:
         return {}
 
-    since = datetime.now(timezone.utc) - timedelta(days=180)
+    since = datetime.now(UTC) - timedelta(days=180)
     rows = db.execute(
         select(
             OrderItem.product_id,
@@ -241,7 +241,7 @@ def _co_purchase_scores(db: Session, seed_product_ids: set[str]) -> dict[str, fl
         return {}
 
     max_count = max(int(row.purchase_count) for row in rows) or 1
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     scores: dict[str, float] = {}
 
     for row in rows:
@@ -267,7 +267,7 @@ def _catalog_quality_score(product: Product) -> float:
     else:
         score -= 8.0
     if product.updated_at:
-        age_days = (datetime.now(timezone.utc) - product.updated_at).days
+        age_days = (datetime.now(UTC) - product.updated_at).days
         score += max(0.0, 8.0 - age_days * 0.08)
     return score
 
@@ -402,7 +402,7 @@ def _cold_start_products(db: Session, limit: int) -> list[Product]:
         merged.values(),
         key=lambda product: (
             _catalog_quality_score(product),
-            product.updated_at or datetime.min.replace(tzinfo=timezone.utc),
+            product.updated_at or datetime.min.replace(tzinfo=UTC),
         ),
         reverse=True,
     )

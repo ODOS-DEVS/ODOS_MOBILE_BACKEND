@@ -1,9 +1,9 @@
 """Encryption service for sensitive data like payment account numbers."""
 
-import os
-from cryptography.fernet import Fernet
-from typing import Optional
 import logging
+import os
+
+from cryptography.fernet import Fernet
 
 logger = logging.getLogger(__name__)
 
@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 class EncryptionService:
     """Service for encrypting and decrypting sensitive financial data."""
 
-    _cipher: Optional[Fernet] = None
+    _cipher: Fernet | None = None
 
     @classmethod
     def _get_cipher(cls) -> Fernet:

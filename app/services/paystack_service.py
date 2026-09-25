@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-from urllib.parse import urlencode
 from typing import Any
+from urllib.parse import urlencode
 
 import requests
 from fastapi import HTTPException, status

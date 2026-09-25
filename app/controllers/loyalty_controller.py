@@ -5,11 +5,11 @@ from sqlalchemy.orm import Session
 from app.core.auth import require_user
 from app.models import User
 from app.services.loyalty_service import (
-    get_or_create_loyalty_account,
+    award_bonus_points,
     get_account_with_benefits,
     get_loyalty_transactions,
+    get_or_create_loyalty_account,
     redeem_points,
-    award_bonus_points,
 )
 
 
@@ -76,11 +76,10 @@ def redeem_loyalty_points(
             "account": account,
             "discount_amount_ghs": points_to_redeem / 100,  # 100 points = 1 GHS
         }
-    else:
-        return {
-            "success": False,
-            "message": "Insufficient loyalty points",
-        }
+    return {
+        "success": False,
+        "message": "Insufficient loyalty points",
+    }
 
 
 def award_bonus(
@@ -102,8 +101,7 @@ def award_bonus(
             "success": True,
             "message": f"Awarded {points} bonus points",
         }
-    else:
-        return {
-            "success": False,
-            "message": "Failed to award bonus points",
-        }
+    return {
+        "success": False,
+        "message": "Failed to award bonus points",
+    }

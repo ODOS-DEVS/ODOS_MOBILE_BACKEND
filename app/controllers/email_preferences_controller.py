@@ -1,8 +1,9 @@
 """Email preferences controller."""
 
-from sqlalchemy.orm import Session
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
+from app.core.auth import require_user
 from app.models import User
 from app.services.email_preferences_service import EmailPreferencesService
 
@@ -32,7 +33,7 @@ def update_email_preferences(
     updates: EmailPreferencesUpdate,
 ) -> dict:
     """Update current user's email preferences."""
-    require_auth(current_user)
+    require_user(current_user)
 
     # Convert to dict and remove None values
     update_dict = {k: v for k, v in updates.dict().items() if v is not None}

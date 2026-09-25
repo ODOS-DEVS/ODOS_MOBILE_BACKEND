@@ -8,16 +8,16 @@ Features:
 5. Real-time trending boost
 """
 
-from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import (
     Product,
-    UserBehaviorEvent,
     Store,
+    UserBehaviorEvent,
 )
 
 
@@ -166,7 +166,7 @@ async def search_products(
 
         # 7. RECENCY (products added in last 30 days)
         if product.created_at:
-            days_old = (datetime.now(timezone.utc) - product.created_at).days
+            days_old = (datetime.now(UTC) - product.created_at).days
             if days_old < 30:
                 product_score += weights.recency_boost * (30 - days_old)
                 matched_fields.append("new")
@@ -216,7 +216,7 @@ async def get_trending_search_terms(db: Session, hours: int = 24) -> list[str]:
 
     Helps admin understand customer interest.
     """
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    cutoff = datetime.now(UTC) - timedelta(hours=hours)
 
     trending = db.execute(
         select(

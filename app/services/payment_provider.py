@@ -3,7 +3,7 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 
 class PaymentProviderType(str, Enum):
@@ -34,9 +34,9 @@ class PaymentInitiationRequest:
     user_id: str
     amount_subunit: int  # Amount in pesewas (1 GHS = 100 pesewas)
     currency: str = "GHS"
-    phone_number: Optional[str] = None
-    email: Optional[str] = None
-    metadata: Optional[dict[str, Any]] = None
+    phone_number: str | None = None
+    email: str | None = None
+    metadata: dict[str, Any] | None = None
 
 
 @dataclass(slots=True)
@@ -46,10 +46,10 @@ class PaymentInitiationResponse:
     provider: PaymentProviderType
     success: bool
     message: str
-    authorization_url: Optional[str] = None
-    provider_reference: Optional[str] = None
-    next_action: Optional[str] = None  # "redirect", "submit_otp", "wait_for_callback", etc.
-    metadata: Optional[dict[str, Any]] = None
+    authorization_url: str | None = None
+    provider_reference: str | None = None
+    next_action: str | None = None  # "redirect", "submit_otp", "wait_for_callback", etc.
+    metadata: dict[str, Any] | None = None
 
 
 @dataclass(slots=True)
@@ -57,8 +57,8 @@ class PaymentVerificationRequest:
     """Request to verify payment status."""
 
     order_id: str
-    provider_reference: Optional[str] = None
-    metadata: Optional[dict[str, Any]] = None
+    provider_reference: str | None = None
+    metadata: dict[str, Any] | None = None
 
 
 @dataclass(slots=True)
@@ -68,12 +68,12 @@ class PaymentVerificationResponse:
     provider: PaymentProviderType
     order_id: str
     status: str  # "pending", "success", "failed", "cancelled"
-    amount_subunit: Optional[int] = None
-    transaction_id: Optional[str] = None
-    gateway_response: Optional[str] = None
-    processor_fee_subunit: Optional[int] = None
-    authorization_data: Optional[dict[str, Any]] = None
-    raw_response: Optional[dict[str, Any]] = None
+    amount_subunit: int | None = None
+    transaction_id: str | None = None
+    gateway_response: str | None = None
+    processor_fee_subunit: int | None = None
+    authorization_data: dict[str, Any] | None = None
+    raw_response: dict[str, Any] | None = None
 
 
 class PaymentProvider(ABC):
@@ -108,7 +108,7 @@ class PaymentProviderFactory:
         cls._providers[provider.provider_type] = provider
 
     @classmethod
-    def get_provider(cls, provider_type: PaymentProviderType) -> Optional[PaymentProvider]:
+    def get_provider(cls, provider_type: PaymentProviderType) -> PaymentProvider | None:
         """Get a registered payment provider."""
         return cls._providers.get(provider_type)
 

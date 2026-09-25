@@ -29,12 +29,6 @@ from app.core.security import (
 )
 from app.helpers.event_context import request_ip, request_user_agent
 from app.models import AuthProvider, User, UserAuthAccount, UserRole
-from app.services.media_service import (
-    import_avatar_from_url,
-    is_google_avatar_url,
-    is_managed_avatar_url,
-    normalize_remote_avatar_url,
-)
 from app.schemas.user import (
     AuthToken,
     ForgotPasswordRequest,
@@ -42,27 +36,35 @@ from app.schemas.user import (
     MessageResponse,
     PasswordResetTokenResponse,
     ResetPasswordRequest,
+    SendPhoneVerificationRequest,
     UserCreate,
     UserLogin,
     UserUpdate,
-    VerifyPasswordResetCodeRequest,
-    SendPhoneVerificationRequest,
     VerifyEmailRequest,
+    VerifyPasswordResetCodeRequest,
     VerifyPhoneRequest,
 )
-from app.services.email_service import send_email_verification_code, send_password_reset_code
-from app.services.arkesel_service import ArkeselSmsError, verify_otp as verify_arkesel_otp
+from app.services.arkesel_service import ArkeselSmsError
+from app.services.arkesel_service import verify_otp as verify_arkesel_otp
+from app.services.email_service import (
+    send_email_verification_code,
+    send_email_verified_success,
+    send_password_changed_success,
+    send_password_reset_code,
+)
+from app.services.event_log_service import record_anonymous_security_event, record_user_event
+from app.services.media_service import (
+    import_avatar_from_url,
+    is_google_avatar_url,
+    is_managed_avatar_url,
+    normalize_remote_avatar_url,
+)
 from app.services.phone_verification_service import (
     is_phone_verified_for_user,
     list_verified_phones,
     record_verified_phone,
 )
 from app.services.sms_service import send_phone_verification_code
-from app.services.event_log_service import record_anonymous_security_event, record_user_event
-from app.services.email_service import (
-    send_email_verified_success,
-    send_password_changed_success,
-)
 
 logger = logging.getLogger(__name__)
 EMAIL_VERIFICATION_CODE_LENGTH = 6
@@ -95,7 +97,7 @@ def _generate_email_verification_code() -> str:
 
 def _hash_email_verification_code(email: str, code: str) -> str:
     return hashlib.sha256(
-        f"{settings.secret_key}:{email.lower()}:{code}".encode("utf-8")
+        f"{settings.secret_key}:{email.lower()}:{code}".encode()
     ).hexdigest()
 
 
@@ -133,7 +135,7 @@ def _clear_password_reset_code(user: User) -> None:
 
 def _hash_phone_verification_code(phone_number: str, code: str) -> str:
     return hashlib.sha256(
-        f"{settings.secret_key}:{phone_number}:{code}".encode("utf-8")
+        f"{settings.secret_key}:{phone_number}:{code}".encode()
     ).hexdigest()
 
 

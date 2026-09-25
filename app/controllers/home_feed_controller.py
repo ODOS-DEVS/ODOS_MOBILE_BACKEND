@@ -3,7 +3,7 @@
 from sqlalchemy.orm import Session
 
 from app.models import User
-from app.services.home_feed_service import get_home_feed, get_feed_section_products
+from app.services.home_feed_service import get_feed_section_products, get_home_feed
 
 
 async def get_home_feed_structure(

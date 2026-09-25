@@ -8,11 +8,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.controllers.vendor_analytics_controller import (
-    get_vendor_voucher_analytics_endpoint,
     get_vendor_campaign_analytics_endpoint,
     get_vendor_promo_leaderboard_endpoint,
     get_vendor_promo_overview_endpoint,
     get_vendor_promo_timeseries_endpoint,
+    get_vendor_voucher_analytics_endpoint,
 )
 from app.core.auth import get_current_user
 from app.core.database import get_db

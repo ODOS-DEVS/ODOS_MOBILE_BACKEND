@@ -4,21 +4,21 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.admin_pagination import paginate_scalars
-from app.core.admin_permissions import list_admins_with_feature
-from app.core.config import settings
-from app.schemas.pagination import AdminPageRead
 from app.controllers.admin_controller import broadcast_catalog_flash_sale_event_change
 from app.controllers.notification_controller import create_notification_event
 from app.controllers.vendor_controller import get_vendor_store, require_vendor_access
+from app.core.admin_pagination import paginate_scalars
+from app.core.admin_permissions import list_admins_with_feature
+from app.core.config import settings
 from app.models import FlashSaleEvent, FlashSaleEventProduct, FlashSaleNomination, Product, User
 from app.schemas.admin import AdminFlashSaleNominationRead, AdminFlashSaleNominationReview
+from app.schemas.pagination import AdminPageRead
 from app.schemas.vendor import VendorFlashSaleNominationCreate, VendorFlashSaleNominationRead
 from app.services.email_service import send_admin_flash_sale_nomination_email
 from app.services.push_service import build_push_data, send_expo_push_notification
@@ -45,7 +45,7 @@ def _dispatch_admin_flash_sale_nomination_alert(
                 to_name=admin.full_name,
                 store_name=store_title,
                 product_title=product_title,
-                submitted_at_label=datetime.now(timezone.utc).strftime("%d %b %Y, %I:%M %p UTC"),
+                submitted_at_label=datetime.now(UTC).strftime("%d %b %Y, %I:%M %p UTC"),
                 admin_panel_url=settings.admin_panel_url,
             )
         except Exception:

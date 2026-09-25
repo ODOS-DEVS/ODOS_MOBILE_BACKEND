@@ -9,8 +9,8 @@ from sqlalchemy.orm import Session
 
 from app.models import User
 from app.services.vendor_analytics_service import (
-    get_vendor_voucher_analytics,
     get_vendor_campaign_analytics,
+    get_vendor_voucher_analytics,
 )
 
 

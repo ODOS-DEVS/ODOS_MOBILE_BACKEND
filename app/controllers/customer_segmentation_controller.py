@@ -2,11 +2,11 @@
 
 from sqlalchemy.orm import Session
 
-from app.models import User
 from app.core.auth import require_admin
+from app.models import User
 from app.services.customer_segmentation_service import (
-    CustomerSegmentationService,
     CustomerSegment,
+    CustomerSegmentationService,
 )
 
 

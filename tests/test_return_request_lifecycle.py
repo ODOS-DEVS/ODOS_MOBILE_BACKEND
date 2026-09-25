@@ -38,7 +38,7 @@ def test_terminal_statuses_have_no_outgoing_transitions():
 
 
 def test_terminal_statuses_are_exactly_rejected_refunded_exchanged():
-    assert TERMINAL_RETURN_STATUSES == {"rejected", "refunded", "exchanged"}
+    assert {"rejected", "refunded", "exchanged"} == TERMINAL_RETURN_STATUSES
 
 
 def test_open_statuses_may_stay_put():
@@ -121,7 +121,7 @@ def test_refund_allowed_when_the_return_is_deliberately_waived():
 def test_only_refund_and_exchange_are_gated_on_custody():
     """Rejecting a request, or moving it through review, moves no money and must
     not require the goods."""
-    assert STATUSES_REQUIRING_GOODS_ACCOUNTED == {"refunded", "exchanged"}
+    assert {"refunded", "exchanged"} == STATUSES_REQUIRING_GOODS_ACCOUNTED
     for status in ("requested", "under_review", "approved", "awaiting_return", "rejected"):
         assert status not in STATUSES_REQUIRING_GOODS_ACCOUNTED
 

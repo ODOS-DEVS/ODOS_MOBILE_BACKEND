@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import delete, desc, select
 from sqlalchemy.orm import Session
@@ -25,7 +25,6 @@ from app.schemas.assistant import (
 )
 from app.services.assistant_context import build_assistant_user_context
 from app.services.assistant_reference import normalize_reference_context, resolve_store_reference
-
 
 MAX_STORED_MESSAGES = 20
 
@@ -206,7 +205,7 @@ def append_conversation_message(
         metadata_json=metadata,
     )
     db.add(message)
-    conversation.updated_at = datetime.now(timezone.utc)
+    conversation.updated_at = datetime.now(UTC)
     db.flush()
     _trim_conversation_messages(db, conversation.id)
     return message
@@ -351,7 +350,7 @@ def build_proactive_nudge(db: Session, user: User | None) -> AssistantNudgeRead 
         return None
 
     _, snapshot = build_assistant_user_context(db, user)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     tomorrow = now + timedelta(days=1)
 
     cart_item = db.scalar(
@@ -363,7 +362,7 @@ def build_proactive_nudge(db: Session, user: User | None) -> AssistantNudgeRead 
     if cart_item is not None:
         return AssistantNudgeRead(
             message=f"Still thinking about {cart_item.title}? I can help you checkout or find a voucher.",
-            prompt=f"Is my cart ready for checkout?",
+            prompt="Is my cart ready for checkout?",
             kind="cart",
         )
 

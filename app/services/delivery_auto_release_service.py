@@ -16,7 +16,7 @@ waiting on the shop that didn't.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
@@ -77,7 +77,7 @@ def _reminder_candidates(db, now: datetime) -> list[OrderPackage]:
 def process_delivery_auto_release() -> None:
     db = SessionLocal()
     try:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         for order_id, package_id in _release_candidates(db, now):
             try:

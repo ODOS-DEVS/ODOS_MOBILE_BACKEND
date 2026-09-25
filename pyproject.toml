@@ -1,0 +1,52 @@
+[project]
+name = "odos-backend"
+version = "1.0.0"
+description = "ODOS marketplace API"
+requires-python = ">=3.13"
+
+[tool.ruff]
+# The code sits comfortably under 100 columns (p99 is 96). 120 is the ceiling
+# that flags genuinely unreadable lines without demanding a reformat of files
+# that are already fine.
+line-length = 120
+target-version = "py313"
+exclude = ["alembic/versions", ".venv"]
+
+[tool.ruff.lint]
+select = [
+    "F",    # pyflakes -- undefined names, unused imports, unused locals
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "I",    # import sorting
+    "UP",   # pyupgrade -- modern syntax for the target Python
+    "B",    # bugbear -- likely bugs
+    "C4",   # comprehension simplifications
+    "RET",  # return-statement hygiene
+    "SIM",  # simplifications
+]
+
+ignore = [
+    # FastAPI's dependency injection is expressed as a call in a default
+    # argument -- `db: Session = Depends(get_db)`. B008 exists to catch mutable
+    # defaults, but here the pattern is the framework's entire contract and
+    # appears ~360 times. Enforcing it would mean rewriting every endpoint.
+    "B008",
+
+    # Long messages and SQLAlchemy filter chains read better unbroken than
+    # wrapped mid-expression. Genuine offenders are caught at 120 above.
+    "E501",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Re-exports are the point of a package __init__.
+"app/models/__init__.py" = ["F401"]
+# Tests favour readability over import hygiene, and fixtures legitimately
+# shadow names.
+"tests/*" = ["F811", "ARG"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]

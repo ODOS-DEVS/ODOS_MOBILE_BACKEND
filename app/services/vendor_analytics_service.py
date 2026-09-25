@@ -8,17 +8,16 @@ the admin view cannot report different numbers for the same events; this module
 only decides *which* entities a vendor is allowed to see and shapes the reply.
 """
 
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.models import MerchandisingCampaign, Voucher
 from app.services.promo_analytics_service import (
     EntityPerformance,
     build_performance,
     campaign_ids_for_store,
     voucher_ids_for_store,
 )
-
-from sqlalchemy import select
-from sqlalchemy.orm import Session
-
-from app.models import MerchandisingCampaign, Voucher
 
 
 def _funnel_payload(row: EntityPerformance) -> dict:

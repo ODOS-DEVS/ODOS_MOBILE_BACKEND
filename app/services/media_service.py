@@ -125,7 +125,7 @@ def _sign_cloudinary_payload(payload: dict[str, str]) -> str:
         f"{key}={filtered_items[key]}" for key in sorted(filtered_items)
     )
     return hashlib.sha1(
-        f"{payload_to_sign}{settings.cloudinary_api_secret}".encode("utf-8")
+        f"{payload_to_sign}{settings.cloudinary_api_secret}".encode()
     ).hexdigest()
 
 

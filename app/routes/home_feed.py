@@ -3,13 +3,13 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
+from app.controllers.home_feed_controller import (
+    get_feed_section,
+    get_home_feed_full,
+    get_home_feed_structure,
+)
 from app.core.auth import get_optional_current_user
 from app.core.database import get_db
-from app.controllers.home_feed_controller import (
-    get_home_feed_structure,
-    get_home_feed_full,
-    get_feed_section,
-)
 from app.models import User
 
 router = APIRouter(prefix="/home-feed", tags=["home-feed"])
@@ -37,8 +37,7 @@ async def get_home_feed_endpoint(
             current_user,
             limit_per_section=limit_per_section,
         )
-    else:
-        return await get_home_feed_structure(db, current_user)
+    return await get_home_feed_structure(db, current_user)
 
 
 @router.get("/section/{section_key}")

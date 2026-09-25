@@ -86,12 +86,11 @@ class MomoProvider(PaymentProvider):
                             "payment_request_id": result.get("paymentRequestId"),
                         },
                     )
-                else:
-                    return PaymentInitiationResponse(
-                        provider=self.provider_type,
-                        success=False,
-                        message=f"Failed to initiate Momo payment: {response.text}",
-                    )
+                return PaymentInitiationResponse(
+                    provider=self.provider_type,
+                    success=False,
+                    message=f"Failed to initiate Momo payment: {response.text}",
+                )
 
         except httpx.TimeoutException:
             return PaymentInitiationResponse(
@@ -153,13 +152,12 @@ class MomoProvider(PaymentProvider):
                         gateway_response=result.get("reason"),
                         raw_response=result,
                     )
-                else:
-                    return PaymentVerificationResponse(
-                        provider=self.provider_type,
-                        order_id=request.order_id,
-                        status="pending",
-                        gateway_response="Unable to verify payment status",
-                    )
+                return PaymentVerificationResponse(
+                    provider=self.provider_type,
+                    order_id=request.order_id,
+                    status="pending",
+                    gateway_response="Unable to verify payment status",
+                )
 
         except Exception as e:
             return PaymentVerificationResponse(

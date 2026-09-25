@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import HTTPException, UploadFile, status
 from sqlalchemy import func, or_, select
@@ -46,7 +46,7 @@ def _dispatch_admin_campaign_opt_in_alert(
                 vendor_name=vendor.full_name or vendor.email,
                 campaign_title=campaign_title,
                 product_title=product_title,
-                submitted_at_label=datetime.now(timezone.utc).strftime("%d %b %Y, %I:%M %p UTC"),
+                submitted_at_label=datetime.now(UTC).strftime("%d %b %Y, %I:%M %p UTC"),
                 admin_panel_url=settings.admin_panel_url,
             )
         except Exception:
@@ -68,8 +68,8 @@ from app.schemas.admin import (
     AdminMerchandisingCampaignRead,
     AdminMerchandisingCampaignUpsert,
 )
-from app.schemas.pagination import AdminPageRead
 from app.schemas.catalog import MerchandisingCampaignDetailRead, MerchandisingCampaignRead
+from app.schemas.pagination import AdminPageRead
 from app.services.campaign_service import (
     CAMPAIGN_STATUSES,
     PRODUCT_SORT_MODES,
@@ -96,8 +96,8 @@ def invalidate_merchandising_campaigns() -> None:
 def _seconds_remaining(ends_at: datetime | None) -> int:
     if not ends_at:
         return 0
-    now = datetime.now(timezone.utc)
-    end = ends_at if ends_at.tzinfo else ends_at.replace(tzinfo=timezone.utc)
+    now = datetime.now(UTC)
+    end = ends_at if ends_at.tzinfo else ends_at.replace(tzinfo=UTC)
     return max(0, int((end - now).total_seconds()))
 
 

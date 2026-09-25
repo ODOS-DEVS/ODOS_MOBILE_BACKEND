@@ -13,7 +13,6 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models import User
-from app.services.assistant_context import AssistantUserSnapshot, build_assistant_user_context
 from app.schemas.assistant import (
     AssistantActionRead,
     AssistantChatRequest,
@@ -30,12 +29,8 @@ from app.services.assistant_catalog_search import (
     is_product_recommendation_intent,
     is_store_fact_intent,
 )
+from app.services.assistant_context import AssistantUserSnapshot, build_assistant_user_context
 from app.services.assistant_escalation import detect_escalation
-from app.services.assistant_tools import (
-    MAX_TOOL_LOOP,
-    execute_assistant_tool,
-    gemini_tools_payload,
-)
 from app.services.assistant_memory import (
     append_conversation_message,
     get_or_create_conversation,
@@ -44,6 +39,11 @@ from app.services.assistant_memory import (
 from app.services.assistant_reference import (
     format_reference_context_block,
     resolve_store_reference,
+)
+from app.services.assistant_tools import (
+    MAX_TOOL_LOOP,
+    execute_assistant_tool,
+    gemini_tools_payload,
 )
 
 logger = logging.getLogger(__name__)

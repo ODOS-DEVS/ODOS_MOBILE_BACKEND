@@ -1,9 +1,11 @@
 """Home feed personalization service."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
+
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.controllers.catalog_controller import serialize_catalog_product
 from app.models import (
     Product,
     User,
@@ -14,7 +16,6 @@ from app.services.enhanced_recommendation_service import (
     get_recommendations,
     get_trending_products,
 )
-from app.controllers.catalog_controller import serialize_catalog_product
 
 
 async def get_home_feed(db: Session, user: User | None) -> dict:
@@ -51,7 +52,7 @@ async def get_home_feed(db: Session, user: User | None) -> dict:
                 Product.status == "active",
                 Product.stock > 0,
                 UserBehaviorEvent.event_type.in_(["product_view", "purchase"]),
-                UserBehaviorEvent.created_at >= datetime.now(timezone.utc) - timedelta(days=30),
+                UserBehaviorEvent.created_at >= datetime.now(UTC) - timedelta(days=30),
             )
             .group_by(Product.id)
             .order_by(func.count(UserBehaviorEvent.id).desc())
@@ -81,7 +82,7 @@ async def get_home_feed(db: Session, user: User | None) -> dict:
             .where(
                 UserBehaviorEvent.user_id == user.id,
                 UserBehaviorEvent.event_type == "product_view",
-                UserBehaviorEvent.created_at >= datetime.now(timezone.utc) - timedelta(days=30),
+                UserBehaviorEvent.created_at >= datetime.now(UTC) - timedelta(days=30),
             )
             .distinct()
             .order_by(UserBehaviorEvent.created_at.desc())
@@ -128,7 +129,7 @@ async def get_home_feed(db: Session, user: User | None) -> dict:
             Product.status == "active",
             Product.stock > 0,
             UserBehaviorEvent.event_type.in_(["product_view", "purchase", "add_to_cart"]),
-            UserBehaviorEvent.created_at >= datetime.now(timezone.utc) - timedelta(days=7),
+            UserBehaviorEvent.created_at >= datetime.now(UTC) - timedelta(days=7),
         )
         .group_by(Product.category)
         .order_by(func.count(UserBehaviorEvent.id).desc())
@@ -160,7 +161,7 @@ async def get_home_feed(db: Session, user: User | None) -> dict:
     return {
         "sections": sections,
         "personalized": user is not None,
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
     }
 
 

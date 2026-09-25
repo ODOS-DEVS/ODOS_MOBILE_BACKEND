@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -30,7 +30,7 @@ def list_deal_products(
     offset: int = 0,
 ) -> list:
     """Return products on sale where the vendor (or approved flash event) set the discount."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     normalized_campaign = (campaign_tag or "").strip() or None
     min_discount = max(min_discount_percent or 0, 0)
     safe_limit = max(1, min(limit, 100))

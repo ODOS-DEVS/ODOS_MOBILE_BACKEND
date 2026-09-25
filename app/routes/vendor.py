@@ -1,8 +1,7 @@
 import json
+import uuid
 from typing import Annotated
 from uuid import UUID
-
-import uuid
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from pydantic import BaseModel, Field
@@ -17,24 +16,33 @@ from app.controllers.flash_sale_nominations_controller import (
     create_vendor_flash_sale_nomination,
     list_vendor_flash_sale_nominations,
 )
-from app.schemas.admin import AdminMerchandisingCampaignOptInRead
-from app.schemas.catalog import MerchandisingCampaignRead
+from app.controllers.store_section_controller import (
+    add_products_to_section,
+    create_vendor_section,
+    delete_vendor_section,
+    fetch_section_product_ids,
+    fetch_starter_suggestions,
+    fetch_vendor_sections,
+    remove_product_from_section,
+    reorder_vendor_sections,
+    update_vendor_section,
+)
 from app.controllers.vendor_controller import (
+    acknowledge_vendor_order,
     archive_vendor_voucher,
     bulk_update_vendor_products,
-    create_vendor_voucher,
     create_vendor_product,
+    create_vendor_voucher,
     delete_vendor_product,
     fetch_my_vendor_application,
-    fetch_vendor_dashboard,
-    fetch_vendor_profile,
-    fetch_vendor_delivery_settings,
-    fetch_vendor_store,
-    gift_vendor_voucher,
-    get_vendor_order,
-    acknowledge_vendor_order,
     fetch_vendor_analytics,
+    fetch_vendor_dashboard,
+    fetch_vendor_delivery_settings,
+    fetch_vendor_profile,
+    fetch_vendor_store,
+    get_vendor_order,
     get_vendor_return_request,
+    gift_vendor_voucher,
     list_vendor_customers,
     list_vendor_orders,
     list_vendor_product_inventory_movements,
@@ -44,10 +52,10 @@ from app.controllers.vendor_controller import (
     list_vendor_voucher_redemptions,
     list_vendor_vouchers,
     notify_vendor_order_departure,
-    request_odos_courier,
     patch_vendor_product_stock,
     patch_vendor_return_request,
     reply_to_vendor_review,
+    request_odos_courier,
     set_vendor_order_dispatch_photo,
     submit_vendor_application,
     update_vendor_delivery_settings,
@@ -66,34 +74,22 @@ from app.controllers.wallet_controller import (
 from app.core.auth import get_current_user
 from app.core.database import get_db
 from app.models import User
+from app.schemas.admin import AdminMerchandisingCampaignOptInRead
+from app.schemas.catalog import MerchandisingCampaignRead
 from app.schemas.user import MessageResponse
-from app.controllers.store_section_controller import (
-    add_products_to_section,
-    fetch_section_product_ids,
-    create_vendor_section,
-    delete_vendor_section,
-    fetch_starter_suggestions,
-    fetch_vendor_sections,
-    remove_product_from_section,
-    reorder_vendor_sections,
-    update_vendor_section,
-)
-from app.schemas.vendor import (
-    VendorStoreSectionCreate,
-    VendorStoreSectionProductsUpdate,
-    VendorStoreSectionRead,
-    VendorStoreSectionReorder,
-    VendorStoreSectionSuggestions,
-    VendorStoreSectionUpdate,
-)
 from app.schemas.vendor import (
     VendorAnalyticsRead,
     VendorApplicationRead,
     VendorCustomerRead,
     VendorDashboardRead,
+    VendorDeliverySettingsRead,
+    VendorDeliverySettingsUpdate,
+    VendorFlashSaleNominationCreate,
+    VendorFlashSaleNominationRead,
     VendorInventoryMovementRead,
     VendorOrderRead,
     VendorOrderStatusUpdate,
+    VendorPayoutInstitutionRead,
     VendorProductBulkUpdate,
     VendorProductCreate,
     VendorProductRead,
@@ -103,18 +99,19 @@ from app.schemas.vendor import (
     VendorProfileRead,
     VendorReturnRequestRead,
     VendorReturnRequestUpdate,
-    VendorReviewReplyUpdate,
     VendorReviewRead,
-    VendorDeliverySettingsRead,
-    VendorDeliverySettingsUpdate,
+    VendorReviewReplyUpdate,
     VendorStoreRead,
+    VendorStoreSectionCreate,
+    VendorStoreSectionProductsUpdate,
+    VendorStoreSectionRead,
+    VendorStoreSectionReorder,
+    VendorStoreSectionSuggestions,
+    VendorStoreSectionUpdate,
     VendorVoucherGiftPayload,
     VendorVoucherRead,
     VendorVoucherRedemptionRead,
     VendorVoucherUpsert,
-    VendorFlashSaleNominationCreate,
-    VendorFlashSaleNominationRead,
-    VendorPayoutInstitutionRead,
     VendorWalletPayoutDetailsUpdate,
     VendorWalletRead,
     VendorWithdrawalCreate,

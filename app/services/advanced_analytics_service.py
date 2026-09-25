@@ -1,10 +1,11 @@
 """Advanced analytics service for dashboard metrics."""
 
-from datetime import datetime, timedelta, timezone
-from sqlalchemy import select, func, and_, desc
+from datetime import UTC, datetime, timedelta
+
+from sqlalchemy import and_, desc, func, select
 from sqlalchemy.orm import Session
 
-from app.models import User, Order, Product, Store, UserBehaviorEvent
+from app.models import Order, Product, Store, User, UserBehaviorEvent
 
 
 class AdvancedAnalyticsService:
@@ -18,7 +19,7 @@ class AdvancedAnalyticsService:
         ) or 0
 
         # New customers today
-        today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        today = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
         new_today = db.scalar(
             select(func.count(User.id)).where(
                 User.role == "customer",
@@ -27,7 +28,7 @@ class AdvancedAnalyticsService:
         ) or 0
 
         # Active customers (purchased in last 30 days)
-        thirty_days_ago = datetime.now(timezone.utc) - timedelta(days=30)
+        thirty_days_ago = datetime.now(UTC) - timedelta(days=30)
         active_customers = db.scalar(
             select(func.count(func.distinct(Order.user_id))).where(
                 Order.created_at >= thirty_days_ago
@@ -48,9 +49,9 @@ class AdvancedAnalyticsService:
         ) or 0.0
 
         # Retention rate (customers who ordered last month and month before)
-        prev_month_start = datetime.now(timezone.utc).replace(day=1) - timedelta(days=1)
+        prev_month_start = datetime.now(UTC).replace(day=1) - timedelta(days=1)
         prev_month_start = prev_month_start.replace(day=1)
-        prev_month_end = datetime.now(timezone.utc).replace(day=1) - timedelta(seconds=1)
+        prev_month_end = datetime.now(UTC).replace(day=1) - timedelta(seconds=1)
 
         repeat_customers = db.scalar(
             select(func.count(func.distinct(Order.user_id))).where(
@@ -72,8 +73,8 @@ class AdvancedAnalyticsService:
     @staticmethod
     def get_revenue_metrics(db: Session, days: int = 30) -> dict:
         """Get revenue metrics."""
-        cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
-        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        cutoff_date = datetime.now(UTC) - timedelta(days=days)
+        today_start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
 
         # Total revenue (all time)
         total_revenue = db.scalar(
@@ -91,7 +92,7 @@ class AdvancedAnalyticsService:
         ) or 0.0
 
         # Revenue last 7 days
-        seven_days_ago = datetime.now(timezone.utc) - timedelta(days=7)
+        seven_days_ago = datetime.now(UTC) - timedelta(days=7)
         revenue_7d = db.scalar(
             select(func.coalesce(func.sum(Order.total_amount), 0))
             .where(
@@ -213,7 +214,7 @@ class AdvancedAnalyticsService:
         ) or 0
 
         # Stock turnover rate (simplified: 30-day sales / avg inventory)
-        thirty_days_ago = datetime.now(timezone.utc) - timedelta(days=30)
+        thirty_days_ago = datetime.now(UTC) - timedelta(days=30)
         units_sold = db.scalar(
             select(func.count(UserBehaviorEvent.id))
             .where(

@@ -27,6 +27,7 @@ from __future__ import annotations
 import enum
 import uuid
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     DateTime,
@@ -43,6 +44,14 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
+
+# Imported for type checking only. SQLAlchemy resolves these relationship
+# targets from the string annotations at mapper-configuration time, so a
+# runtime import would be both unnecessary and circular. Declaring them here
+# gives type checkers and editors the real types without that cost.
+if TYPE_CHECKING:
+    from app.models.courier import Courier
+    from app.models.order import Order
 
 
 class DeliveryStatus(str, enum.Enum):
@@ -179,14 +188,14 @@ class Delivery(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
 
-    order: Mapped["Order"] = relationship()
-    courier: Mapped["Courier | None"] = relationship()
-    events: Mapped[list["DeliveryEvent"]] = relationship(
+    order: Mapped[Order] = relationship()
+    courier: Mapped[Courier | None] = relationship()
+    events: Mapped[list[DeliveryEvent]] = relationship(
         back_populates="delivery",
         cascade="all, delete-orphan",
         order_by="DeliveryEvent.occurred_at.asc()",
     )
-    attempts: Mapped[list["DeliveryAttempt"]] = relationship(
+    attempts: Mapped[list[DeliveryAttempt]] = relationship(
         back_populates="delivery",
         cascade="all, delete-orphan",
         order_by="DeliveryAttempt.attempt_number.asc()",
@@ -242,7 +251,7 @@ class DeliveryEvent(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
     )
 
-    delivery: Mapped["Delivery"] = relationship(back_populates="events")
+    delivery: Mapped[Delivery] = relationship(back_populates="events")
 
 
 class DeliveryAttempt(Base):
@@ -275,7 +284,7 @@ class DeliveryAttempt(Base):
     )
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    delivery: Mapped["Delivery"] = relationship(back_populates="attempts")
+    delivery: Mapped[Delivery] = relationship(back_populates="attempts")
 
     __table_args__ = (
         UniqueConstraint(

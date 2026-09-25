@@ -1,7 +1,6 @@
-import secrets
-
-from datetime import datetime, timedelta, timezone
 import logging
+import secrets
+from datetime import UTC, datetime, timedelta
 
 from fastapi import HTTPException, status
 from sqlalchemy import func, select
@@ -15,11 +14,10 @@ from app.controllers.vendor_controller import (
     fetch_vendor_dashboard,
     list_vendor_orders_payloads,
 )
-from app.services.promotion_engine import calculate_best_discount
-from app.helpers.promo_audit import log_promo_applied, log_promo_rejections
 from app.core.admin_permissions import list_admins_with_feature
 from app.core.config import settings
 from app.core.event_types import ORDER_CREATED
+from app.helpers.promo_audit import log_promo_applied, log_promo_rejections
 from app.models import (
     CartItem,
     NotificationEvent,
@@ -30,7 +28,6 @@ from app.models import (
     User,
     VoucherRedemption,
 )
-from app.services.event_log_service import record_user_event
 from app.schemas.order import (
     OrderCreate,
     OrderItemCreate,
@@ -38,42 +35,43 @@ from app.schemas.order import (
     ReturnRequestCreate,
     ReturnRequestRead,
 )
-from app.services.pricing_service import compute_server_subtotal
+from app.services.delivery_lifecycle_service import (
+    confirm_delivery_by_customer,
+    mark_rescheduled,
+    report_delivery_problem,
+)
 from app.services.delivery_service import (
     get_delivery_config,
     resolve_active_delivery_method,
     resolve_delivery_amount,
     tracking_eta_after_payment,
 )
-from app.services.package_pricing_service import (
-    build_package_delivery_options,
-    packages_shipping_total,
-    quote_packages,
+from app.services.email_service import (
+    send_admin_delivery_problem_email,
+    send_admin_return_request_email,
 )
+from app.services.event_log_service import record_user_event
 from app.services.order_package_service import (
     build_packages_for_order,
     ensure_packages,
     group_checkout_items,
 )
-from app.services.delivery_lifecycle_service import (
-    confirm_delivery_by_customer,
-    mark_rescheduled,
-    report_delivery_problem,
-)
-from app.services.email_service import (
-    send_admin_delivery_problem_email,
-    send_admin_return_request_email,
-)
-from app.services.sms_service import notify_admins_by_sms
 from app.services.order_timeline_service import record_order_status_event
-from app.services.realtime_service import realtime_manager
+from app.services.package_pricing_service import (
+    build_package_delivery_options,
+    packages_shipping_total,
+    quote_packages,
+)
+from app.services.pricing_service import compute_server_subtotal
+from app.services.promotion_engine import calculate_best_discount
 from app.services.push_service import (
+    build_push_data,
     dispatch_customer_order_push,
     dispatch_customer_return_push,
-    build_push_data,
     send_vendor_order_push,
 )
-from app.services.sms_service import send_order_payment_confirmation_sms
+from app.services.realtime_service import realtime_manager
+from app.services.sms_service import notify_admins_by_sms, send_order_payment_confirmation_sms
 
 logger = logging.getLogger(__name__)
 OPEN_RETURN_REQUEST_STATUSES = {"requested", "under_review", "approved"}
@@ -684,7 +682,7 @@ def activate_order_after_payment(
         get_delivery_config(db),
     )
     order.payment_status = "paid"
-    order.paid_at = datetime.now(timezone.utc)
+    order.paid_at = datetime.now(UTC)
     order.cancelled_at = None
     order.cancellation_reason = None
     record_order_status_event(
@@ -728,7 +726,7 @@ def activate_order_after_payment(
                 )
                 or 0
             )
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             current_status = compute_voucher_status(
                 locked_voucher,
                 now=now,
@@ -921,9 +919,9 @@ def create_return_request(
             reference = (
                 delivered_at
                 if delivered_at.tzinfo
-                else delivered_at.replace(tzinfo=timezone.utc)
+                else delivered_at.replace(tzinfo=UTC)
             )
-            if datetime.now(timezone.utc) - reference > timedelta(days=window_days):
+            if datetime.now(UTC) - reference > timedelta(days=window_days):
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=(
@@ -1081,7 +1079,7 @@ def cancel_order(
     order.progress = 0
     order.tracking_eta = None
     order.cancellation_reason = reason
-    order.cancelled_at = datetime.now(timezone.utc)
+    order.cancelled_at = datetime.now(UTC)
     record_order_status_event(
         db,
         order,
@@ -1151,7 +1149,7 @@ def _dispatch_admin_delivery_problem_alert(db: Session, *, order: Order, reason:
                 store_name=item_label,
                 reason_label=reason.replace("_", " "),
                 details=order.delivery_problem_reason,
-                reported_at_label=(order.delivery_problem_reported_at or datetime.now(timezone.utc)).strftime(
+                reported_at_label=(order.delivery_problem_reported_at or datetime.now(UTC)).strftime(
                     "%d %b %Y, %I:%M %p UTC"
                 ),
                 order_id=str(order.id),
@@ -1193,7 +1191,7 @@ def _dispatch_admin_return_request_alert(
                 item_title=order_item.title,
                 request_type=return_request.request_type,
                 quantity=return_request.quantity,
-                submitted_at_label=datetime.now(timezone.utc).strftime("%d %b %Y, %I:%M %p UTC"),
+                submitted_at_label=datetime.now(UTC).strftime("%d %b %Y, %I:%M %p UTC"),
                 return_request_id=str(return_request.id),
                 admin_panel_url=settings.admin_panel_url,
             )
@@ -1268,7 +1266,7 @@ def submit_order_delivery_rating(
         )
 
     order.delivery_rating = rating
-    order.delivery_rated_at = datetime.now(timezone.utc)
+    order.delivery_rated_at = datetime.now(UTC)
     db.commit()
     db.refresh(order)
     return order
@@ -1311,9 +1309,9 @@ def request_order_reschedule(
             continue
         last_requested_at = target.reschedule_requested_at
         if last_requested_at.tzinfo is None:
-            last_requested_at = last_requested_at.replace(tzinfo=timezone.utc)
+            last_requested_at = last_requested_at.replace(tzinfo=UTC)
         already_notified_minutes = (
-            datetime.now(timezone.utc) - last_requested_at
+            datetime.now(UTC) - last_requested_at
         ).total_seconds() / 60
         if already_notified_minutes < 10:
             raise HTTPException(

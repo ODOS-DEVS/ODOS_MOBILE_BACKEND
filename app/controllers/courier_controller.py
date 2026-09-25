@@ -30,6 +30,7 @@ from sqlalchemy.orm import Session
 
 from app.models import (
     ACTIVE_STATUSES,
+    TERMINAL_STATUSES,
     Courier,
     CourierStatus,
     Delivery,
@@ -37,7 +38,6 @@ from app.models import (
     DeliveryOffer,
     OrderItem,
     Store,
-    TERMINAL_STATUSES,
     User,
     UserRole,
     VehicleType,

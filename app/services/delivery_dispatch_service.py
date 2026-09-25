@@ -18,11 +18,13 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from fastapi import HTTPException, status as http_status
+from fastapi import HTTPException
+from fastapi import status as http_status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import (
+    TERMINAL_STATUSES,
     Courier,
     Delivery,
     DeliveryOffer,
@@ -30,7 +32,6 @@ from app.models import (
     Order,
     OrderItem,
     Store,
-    TERMINAL_STATUSES,
     User,
 )
 from app.services.delivery_state_machine import apply_transition

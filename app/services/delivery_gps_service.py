@@ -1,10 +1,9 @@
 """GPS delivery tracking service with real-time updates."""
 
-from datetime import datetime, timedelta, timezone
-from typing import Optional
-from dataclasses import dataclass
-from math import radians, sin, cos, sqrt, atan2
 import logging
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from math import atan2, cos, radians, sin, sqrt
 
 from sqlalchemy.orm import Session
 
@@ -17,7 +16,7 @@ class LocationPoint:
     latitude: float
     longitude: float
     timestamp: datetime
-    accuracy_meters: Optional[float] = None
+    accuracy_meters: float | None = None
 
 
 @dataclass
@@ -29,8 +28,8 @@ class DeliveryTrackingUpdate:
     longitude: float
     timestamp: datetime
     status: str  # in_transit, at_location, delivered
-    eta_minutes: Optional[int] = None
-    distance_meters: Optional[float] = None
+    eta_minutes: int | None = None
+    distance_meters: float | None = None
 
 
 class GeoCalculationService:
@@ -95,11 +94,11 @@ class DeliveryGPSTracker:
         latitude: float,
         longitude: float,
         status: str = "in_transit",
-        accuracy_meters: Optional[float] = None,
+        accuracy_meters: float | None = None,
     ) -> bool:
         """Record driver location update."""
         try:
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             location = LocationPoint(
                 latitude=latitude,
                 longitude=longitude,
@@ -145,7 +144,7 @@ class DeliveryGPSTracker:
     def get_current_location(
         db: Session,
         delivery_id: str,
-    ) -> Optional[LocationPoint]:
+    ) -> LocationPoint | None:
         """Get current driver location."""
         cache = DeliveryGPSTracker._location_cache.get(delivery_id, [])
         if cache:
@@ -197,7 +196,7 @@ class DeliveryGPSTracker:
         if len(locations) < 2:
             return 0.0
 
-        cutoff_time = datetime.now(timezone.utc) - timedelta(minutes=window_minutes)
+        cutoff_time = datetime.now(UTC) - timedelta(minutes=window_minutes)
         recent_locations = [
             loc for loc in locations if loc.timestamp >= cutoff_time
         ]
@@ -229,7 +228,7 @@ class DeliveryGPSTracker:
         db: Session,
         delivery_id: str,
         status: str,
-        reason: Optional[str] = None,
+        reason: str | None = None,
     ) -> bool:
         """Update delivery status (e.g., arrived_at_location, delivered)."""
         try:
@@ -268,7 +267,7 @@ class DeliveryAlertService:
     def check_stationary_alert(
         db: Session,
         delivery_id: str,
-    ) -> Optional[dict]:
+    ) -> dict | None:
         """Check if driver has been stationary too long."""
         locations = DeliveryGPSTracker.get_location_history(db, delivery_id, limit=10)
         if len(locations) < 2:
@@ -303,7 +302,7 @@ class DeliveryAlertService:
     def check_speeding_alert(
         db: Session,
         delivery_id: str,
-    ) -> Optional[dict]:
+    ) -> dict | None:
         """Check if driver is exceeding speed limit."""
         speed = DeliveryGPSTracker.get_current_speed(db, delivery_id)
 
@@ -322,9 +321,9 @@ class DeliveryAlertService:
         db: Session,
         delivery_id: str,
         promised_eta: datetime,
-    ) -> Optional[dict]:
+    ) -> dict | None:
         """Check if delivery is running late."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         time_until_eta = (promised_eta - now).total_seconds() / 60
 
         if time_until_eta < -DeliveryAlertService.LATE_THRESHOLD_MINUTES:
@@ -343,7 +342,7 @@ class DeliveryAlertService:
         delivery_id: str,
         expected_waypoints: list[tuple[float, float]],
         deviation_threshold_meters: float = 1000,
-    ) -> Optional[dict]:
+    ) -> dict | None:
         """Check if driver has deviated from expected route."""
         current_location = DeliveryGPSTracker.get_current_location(db, delivery_id)
         if not current_location:

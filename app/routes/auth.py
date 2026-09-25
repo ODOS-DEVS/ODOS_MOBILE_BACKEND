@@ -6,12 +6,12 @@ from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
 from app.controllers.auth_controller import (
+    get_user_verified_phones,
     google_auth_user,
     login_user,
     request_password_reset,
     resend_verification_code,
     reset_password,
-    get_user_verified_phones,
     send_phone_verification_code_for_user,
     signup_user,
     update_user_profile,
@@ -42,14 +42,14 @@ from app.schemas.user import (
     MessageResponse,
     PasswordResetTokenResponse,
     ResetPasswordRequest,
+    SendPhoneVerificationRequest,
     UserCreate,
     UserLogin,
     UserRead,
     UserUpdate,
-    VerifyPasswordResetCodeRequest,
-    SendPhoneVerificationRequest,
-    VerifyEmailRequest,
     VerifiedPhonesResponse,
+    VerifyEmailRequest,
+    VerifyPasswordResetCodeRequest,
     VerifyPhoneRequest,
 )
 

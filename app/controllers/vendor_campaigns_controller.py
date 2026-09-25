@@ -4,18 +4,18 @@ Vendors can create store-specific campaigns.
 Security: Vendors can ONLY create/edit campaigns for their own store.
 """
 
-from datetime import datetime, timezone
 import uuid
+from datetime import UTC, datetime
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import (
-    User,
-    Store,
     MerchandisingCampaign,
     MerchandisingCampaignStore,
+    Store,
+    User,
 )
 from app.services.campaign_service import campaign_is_live, derive_campaign_status
 
@@ -47,6 +47,8 @@ async def get_vendor_store(db: Session, vendor_user: User) -> Store:
     """
     from app.controllers.vendor_controller import (
         get_vendor_store as fetch_store,
+    )
+    from app.controllers.vendor_controller import (
         require_vendor_access,
     )
 
@@ -146,7 +148,7 @@ async def list_vendor_campaigns(
         .order_by(MerchandisingCampaign.created_at.desc())
     ).all()
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return [
         {
             "id": str(c.id),
@@ -191,7 +193,7 @@ async def get_vendor_campaign(
             detail="Campaign not found or does not belong to your store.",
         )
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return {
         "id": str(campaign.id),
         "slug": campaign.slug,

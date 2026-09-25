@@ -77,12 +77,11 @@ class USSDProvider(PaymentProvider):
                         },
                         next_action="dial_ussd",
                     )
-                else:
-                    return PaymentInitiationResponse(
-                        provider=self.provider_type,
-                        success=False,
-                        message="Failed to generate USSD code",
-                    )
+                return PaymentInitiationResponse(
+                    provider=self.provider_type,
+                    success=False,
+                    message="Failed to generate USSD code",
+                )
 
         except httpx.TimeoutException:
             return PaymentInitiationResponse(
@@ -135,12 +134,11 @@ class USSDProvider(PaymentProvider):
                         gateway_response=result.get("message"),
                         raw_response=result,
                     )
-                else:
-                    return PaymentVerificationResponse(
-                        provider=self.provider_type,
-                        order_id=request.order_id,
-                        status="pending",
-                    )
+                return PaymentVerificationResponse(
+                    provider=self.provider_type,
+                    order_id=request.order_id,
+                    status="pending",
+                )
 
         except Exception as e:
             return PaymentVerificationResponse(

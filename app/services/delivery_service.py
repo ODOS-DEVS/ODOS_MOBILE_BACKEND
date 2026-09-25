@@ -3,10 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from zoneinfo import ZoneInfo
 
 from app.models.delivery_settings import DELIVERY_SETTINGS_ID, DeliverySettings
 

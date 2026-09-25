@@ -1,19 +1,19 @@
 """Email marketing routes."""
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy.orm import Session
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
-from app.core.auth import get_current_user
-from app.core.database import get_db
 from app.controllers.email_marketing_controller import (
-    send_promotional_email,
+    get_email_templates,
     send_abandoned_cart_campaign,
+    send_loyalty_reward_notification,
+    send_promotional_email,
     send_reengagement_campaign,
     send_welcome_campaign,
-    send_loyalty_reward_notification,
-    get_email_templates,
 )
+from app.core.auth import get_current_user
+from app.core.database import get_db
 from app.models import User
 
 router = APIRouter(prefix="/email-marketing", tags=["email-marketing"])

@@ -1,10 +1,9 @@
 """Service for two-factor authentication (2FA) for sensitive operations."""
 
+import logging
 import random
 import string
-from datetime import datetime, timedelta, timezone
-from typing import Tuple, Optional
-import logging
+from datetime import UTC, datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +33,7 @@ class TwoFactorService:
         otp = "".join(random.choices(string.digits, k=cls.OTP_LENGTH))
 
         # Store OTP with expiry and attempt count
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         expiry = now + timedelta(minutes=cls.OTP_VALIDITY_MINUTES)
 
         cls._otp_store[user_id] = {
@@ -48,7 +47,7 @@ class TwoFactorService:
         return otp
 
     @classmethod
-    def verify_otp(cls, user_id: str, provided_otp: str) -> Tuple[bool, str]:
+    def verify_otp(cls, user_id: str, provided_otp: str) -> tuple[bool, str]:
         """
         Verify that the provided OTP is correct.
 
@@ -63,7 +62,7 @@ class TwoFactorService:
             return False, "No OTP request found. Please request a new OTP."
 
         otp_data = cls._otp_store[user_id]
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         # Check if OTP has expired
         if now > otp_data["expiry"]:
@@ -73,7 +72,7 @@ class TwoFactorService:
         # Check attempt count
         if otp_data["attempts"] >= cls.MAX_OTP_ATTEMPTS:
             del cls._otp_store[user_id]
-            return False, f"Too many failed attempts. Please request a new OTP."
+            return False, "Too many failed attempts. Please request a new OTP."
 
         # Increment attempt count
         otp_data["attempts"] += 1
@@ -95,7 +94,7 @@ class TwoFactorService:
             return False
 
         otp_data = cls._otp_store[user_id]
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         # Check if expired
         if now > otp_data["expiry"]:
@@ -105,13 +104,13 @@ class TwoFactorService:
         return True
 
     @classmethod
-    def get_otp_info(cls, user_id: str) -> Optional[dict]:
+    def get_otp_info(cls, user_id: str) -> dict | None:
         """Get information about pending OTP (for debugging)."""
         if user_id not in cls._otp_store:
             return None
 
         otp_data = cls._otp_store[user_id]
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         return {
             "pending": True,
@@ -132,7 +131,7 @@ class TwoFactorService:
     @classmethod
     def cleanup_expired_otps(cls):
         """Remove all expired OTPs from store."""
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         expired_users = [
             user_id for user_id, data in cls._otp_store.items()
             if now > data["expiry"]

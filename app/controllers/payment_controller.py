@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import html
 import hashlib
+import html
 import json
 import uuid
 from datetime import UTC, datetime
@@ -12,8 +12,8 @@ from fastapi.responses import HTMLResponse
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.controllers.finance_controller import record_payment_collection
 from app.controllers.customer_wallet_controller import reconcile_wallet_topup_by_reference
+from app.controllers.finance_controller import record_payment_collection
 from app.controllers.order_controller import (
     _broadcast_order_realtime,
     _dispatch_order_push,
@@ -29,27 +29,35 @@ from app.core.config import settings
 from app.core.event_types import CHECKOUT_STARTED, PAYMENT_ATTEMPT
 from app.helpers.event_context import request_ip, request_user_agent
 from app.models import Order, PaymentTransaction, PaymentWebhookEvent, User
-from app.services.event_log_service import record_user_event
 from app.schemas.order import OrderRead
 from app.schemas.payment import (
     CheckoutSessionCreate,
     CheckoutSessionRead,
     PaymentVerificationRead,
 )
+from app.services.event_log_service import record_user_event
 from app.services.finance_math import amount_from_subunit, amount_to_subunit
+from app.services.ipay_service import (
+    build_checkout_fields,
+    ensure_ipay_configured,
+    generate_invoice_id,
+)
+from app.services.ipay_service import (
+    check_status as ipay_check_status,
+)
+from app.services.ipay_service import (
+    checkout_url as ipay_checkout_url,
+)
+from app.services.ipay_service import (
+    normalize_status as ipay_normalize_status,
+)
+from app.services.ipay_service import (
+    parse_amount_to_subunit as ipay_parse_amount_to_subunit,
+)
 from app.services.paystack_service import (
     initialize_transaction,
     verify_transaction,
     verify_webhook_signature,
-)
-from app.services.ipay_service import (
-    build_checkout_fields,
-    check_status as ipay_check_status,
-    checkout_url as ipay_checkout_url,
-    ensure_ipay_configured,
-    generate_invoice_id,
-    normalize_status as ipay_normalize_status,
-    parse_amount_to_subunit as ipay_parse_amount_to_subunit,
 )
 
 PENDING_PROVIDER_STATUSES = {"pending", "ongoing", "processing", "queued"}

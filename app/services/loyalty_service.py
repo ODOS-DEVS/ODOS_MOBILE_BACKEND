@@ -1,11 +1,11 @@
 """Loyalty rewards service for managing points and tiers."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import LoyaltyAccount, LoyaltyTransaction, User, Order
-
+from app.models import LoyaltyAccount, LoyaltyTransaction, Order, User
 
 # Tier configuration (can be moved to database later)
 LOYALTY_TIERS = {
@@ -59,10 +59,9 @@ def calculate_tier(lifetime_spend: float) -> str:
     """Calculate tier based on lifetime spend."""
     if lifetime_spend >= LOYALTY_TIERS["gold"]["min_spend"]:
         return "gold"
-    elif lifetime_spend >= LOYALTY_TIERS["silver"]["min_spend"]:
+    if lifetime_spend >= LOYALTY_TIERS["silver"]["min_spend"]:
         return "silver"
-    else:
-        return "bronze"
+    return "bronze"
 
 
 def earn_points_from_order(
@@ -96,7 +95,7 @@ def earn_points_from_order(
     new_tier = calculate_tier(account.lifetime_spend)
     if new_tier != old_tier:
         account.tier_level = new_tier
-        account.tier_upgraded_at = datetime.now(timezone.utc)
+        account.tier_upgraded_at = datetime.now(UTC)
 
     # Record transaction
     transaction = LoyaltyTransaction(
