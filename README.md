@@ -157,18 +157,31 @@ Always read a generated migration before committing it. Autogenerate is good
 at columns and bad at intent — it will happily produce a drop-and-recreate for
 something that wanted an `ALTER`.
 
-**Deploys do not migrate on their own.** The Dockerfile deliberately does not
-run alembic, and Coolify builds from the Dockerfile rather than the compose
-file, so the `migrate` service in `docker-compose.yml` never runs in
-production. Run `alembic upgrade head` against production yourself after
-deploying anything with a schema change. Skipping this has caused an outage
-before — the API booted fine and then 500'd on the first query touching a
-missing column.
+**Deploys run migrations via a Coolify pre-deploy hook**, not from the image.
+The Dockerfile deliberately does not run alembic — with more than one replica
+every container would race to `alembic upgrade head` on boot. Instead Coolify
+executes it once, before the new build starts, under Deployment lifecycle. You
+can see it at the top of any deployment log:
+
+```
+[CMD]: docker exec … sh -c 'alembic upgrade head'
+```
+
+So a schema change ships with its deploy. If that hook is ever removed, it
+goes back to being manual — and skipping it has caused an outage before, where
+the API booted fine and then 500'd on the first query touching a missing
+column.
 
 ## Deployment
 
 Coolify builds the Dockerfile and runs the API, worker and beat. Configuration
 is environment variables only; there is nothing to edit on the server.
+
+The build strategy must stay on **Dockerfile**. It was briefly set to Railpack,
+which ignores this repo's Dockerfile and builds its own image via mise. That
+broke on 1 October 2026 when mise could no longer fetch a precompiled Python
+3.13.16 — a failure with no connection to anything in this repository, and one
+that only appeared once the build cache for that step expired.
 
 Worth knowing:
 
