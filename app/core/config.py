@@ -48,11 +48,14 @@ class Settings(BaseSettings):
     paystack_webhook_secret: str = ""
     paystack_currency: str = "GHS"
     paystack_payouts_enabled: bool = True
-    # iPay (ipaygh.com) collects payments only -- it publishes no payout API, so
-    # Paystack stays responsible for vendor transfers regardless of this setting.
-    ipay_merchant_key: str = ""
-    ipay_merchant_code: str = ""
-    ipay_base_url: str = "https://manage.ipaygh.com"
+    # KutanaPay collects payments only -- its public API covers checkouts and
+    # nothing else, so Paystack stays responsible for vendor transfers.
+    kutanapay_api_key: str = ""
+    kutanapay_webhook_secret: str = ""
+    # Sandbox. The production host is issued by KutanaPay directly and is not
+    # published in their docs, so it has to be set per environment.
+    kutanapay_base_url: str = "https://dev.kutanapay.com"
+    kutanapay_currency: str = "GHS"
     redis_url: str = ""
     rate_limit_enabled: bool = True
     cache_enabled: bool = True
@@ -145,8 +148,11 @@ class Settings(BaseSettings):
         )
 
     @property
-    def ipay_is_configured(self) -> bool:
-        return bool(self.ipay_merchant_key.strip())
+    def kutanapay_is_configured(self) -> bool:
+        # The webhook secret is not required to create a checkout, so it is not
+        # checked here -- but without it signatures cannot be verified, which
+        # the webhook route refuses on separately.
+        return bool(self.kutanapay_api_key.strip())
 
     assistant_enabled: bool = True
     assistant_provider: str = "gemini"

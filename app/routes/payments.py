@@ -5,10 +5,9 @@ from sqlalchemy.orm import Session
 
 from app.controllers.payment_controller import (
     create_checkout_session,
-    create_ipay_checkout_session,
-    handle_ipay_ipn,
+    create_kutanapay_checkout_session,
+    handle_kutanapay_webhook,
     handle_paystack_webhook,
-    ipay_checkout_redirect,
     paystack_checkout_redirect,
     verify_checkout_session,
 )
@@ -67,34 +66,34 @@ def receive_paystack_redirect(
     return paystack_checkout_redirect(request, return_url=return_url)
 
 
-@router.post("/ipay/checkout", response_model=CheckoutSessionRead)
-def initialize_ipay_checkout(
+@router.post("/kutanapay/checkout", response_model=CheckoutSessionRead)
+def initialize_kutanapay_checkout(
     request: Request,
     payload: CheckoutSessionCreate,
     current_user: Annotated[User, Depends(get_current_user)],
     db: Session = Depends(get_db),
 ):
     limit_payment_checkout(current_user)
-    return create_ipay_checkout_session(db, request, current_user, payload)
+    return create_kutanapay_checkout_session(db, request, current_user, payload)
 
 
-@router.get("/ipay/redirect/{reference}", name="ipay_checkout_redirect")
-def open_ipay_checkout(
+@router.post("/kutanapay/webhook", name="kutanapay_webhook")
+async def receive_kutanapay_webhook(
     request: Request,
-    reference: str,
+    x_webhook_signature: Annotated[str | None, Header()] = None,
+    x_webhook_event: Annotated[str | None, Header()] = None,
     db: Session = Depends(get_db),
 ):
-    """Unauthenticated on purpose: opened in a browser/WebView, not by the API
-    client. The reference is the capability, and it only yields a payment form
-    for an order that is still awaiting payment."""
-    return ipay_checkout_redirect(db, request, reference=reference)
+    """KutanaPay's signed callback.
 
-
-@router.get("/ipay/ipn", name="ipay_ipn")
-def receive_ipay_ipn(
-    invoice_id: str | None = None,
-    db: Session = Depends(get_db),
-):
-    """iPay's notification. Unsigned and unauthenticated by their design, so
-    this only prompts a server-side status check -- see handle_ipay_ipn."""
-    return handle_ipay_ipn(db, invoice_id=invoice_id)
+    The raw bytes are read before any parsing, because the signature is an HMAC
+    over exactly what was sent -- re-serialising parsed JSON changes key order
+    and whitespace and the comparison then always fails.
+    """
+    raw_body = await request.body()
+    return handle_kutanapay_webhook(
+        db,
+        raw_body=raw_body,
+        signature=x_webhook_signature,
+        event_type=x_webhook_event,
+    )

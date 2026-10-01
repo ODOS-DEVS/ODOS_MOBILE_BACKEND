@@ -37,22 +37,26 @@ from app.schemas.payment import (
 )
 from app.services.event_log_service import record_user_event
 from app.services.finance_math import amount_from_subunit, amount_to_subunit
-from app.services.ipay_service import (
-    build_checkout_fields,
-    ensure_ipay_configured,
-    generate_invoice_id,
+from app.services.kutanapay_service import (
+    create_checkout as kutanapay_create_checkout,
 )
-from app.services.ipay_service import (
-    check_status as ipay_check_status,
+from app.services.kutanapay_service import (
+    ensure_kutanapay_configured,
 )
-from app.services.ipay_service import (
-    checkout_url as ipay_checkout_url,
+from app.services.kutanapay_service import (
+    generate_reference as generate_kutanapay_reference,
 )
-from app.services.ipay_service import (
-    normalize_status as ipay_normalize_status,
+from app.services.kutanapay_service import (
+    get_checkout as kutanapay_get_checkout,
 )
-from app.services.ipay_service import (
-    parse_amount_to_subunit as ipay_parse_amount_to_subunit,
+from app.services.kutanapay_service import (
+    normalize_status as kutanapay_normalize_status,
+)
+from app.services.kutanapay_service import (
+    parse_amount_to_subunit as kutanapay_parse_amount_to_subunit,
+)
+from app.services.kutanapay_service import (
+    verify_webhook_signature as verify_kutanapay_signature,
 )
 from app.services.paystack_service import (
     initialize_transaction,
@@ -591,12 +595,24 @@ def verify_checkout_session(
         user_id=current_user.id,
         reference=reference,
     )
-    # Dispatch on the provider that actually took the money. Sending an iPay
-    # reference to Paystack's verify endpoint returns "transaction not found",
-    # which would surface to the customer as a failed payment they had in fact
-    # completed.
+    # Dispatch on the provider that actually took the money. Sending a
+    # KutanaPay reference to Paystack's verify endpoint returns "transaction
+    # not found", which would surface to the customer as a failed payment they
+    # had in fact completed.
+    if payment_transaction.provider == "kutanapay":
+        return _verify_kutanapay_payment(db, payment_transaction)
     if payment_transaction.provider == "ipay":
-        return _verify_ipay_payment(db, payment_transaction)
+        # iPay was retired as the collections gateway. Rows created while it
+        # was live still exist and must not be re-verified against Paystack,
+        # which would report a completed payment as failed. They are terminal:
+        # whatever they settled as at the time is what they stay.
+        return _serialize_payment_verification(
+            payment_transaction.order,
+            payment_transaction,
+            provider_status=payment_transaction.status,
+            message="This payment was taken by a provider we no longer use. "
+            "Its recorded status is final.",
+        )
     verification_response = verify_transaction(reference)
     provider_payload = verification_response.get("data", {})
     return _reconcile_payment_transaction(db, payment_transaction, provider_payload)
@@ -737,21 +753,32 @@ def handle_paystack_webhook(
 
 
 # --------------------------------------------------------------------------
-# iPay (ipaygh.com) collections
+# KutanaPay hosted checkout
 #
-# iPay has no JSON initiate and no signed webhook, so the flow differs from
-# Paystack in two places:
+# Replaced iPay as the collections gateway. The flow is closer to Paystack's
+# than iPay's was:
 #
-#   checkout  -> we hand the app a URL on *our* domain, not the gateway's,
-#                because the gateway wants an HTML form POST
-#   IPN       -> the notification carries no proof of anything, so it only
-#                triggers a server-side status check, which is authoritative
+#   checkout  -> the gateway returns a checkout_url, handed straight to the app
+#   webhook   -> signed with HMAC-SHA256 over the raw body, so the callback is
+#                evidence rather than a hint; the amount is still re-checked
+#                against the order, because a signature proves origin and not
+#                correctness
 #
-# Payouts stay on Paystack; iPay publishes no transfer API.
+# Payouts stay on Paystack; KutanaPay's public API covers checkouts only.
 # --------------------------------------------------------------------------
 
 
-def create_ipay_checkout_session(
+
+
+
+
+
+
+
+
+
+
+def create_kutanapay_checkout_session(
     db: Session,
     request: Request,
     current_user: User,
@@ -762,52 +789,48 @@ def create_ipay_checkout_session(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="In-app wallet payments must use POST /wallet/customer/checkout.",
         )
-    ensure_ipay_configured()
+    ensure_kutanapay_configured()
 
-    reference = generate_invoice_id()
+    reference = generate_kutanapay_reference()
     order = prepare_order_for_checkout(
         db,
         current_user,
         payload,
-        payment_provider="ipay",
+        payment_provider="kutanapay",
         payment_reference=reference,
     )
 
-    # Paystack appends ?reference=&trxref= to its callback; iPay redirects to
-    # success_url exactly as given. Without the reference on the URL itself the
-    # return screen has nothing to verify against and reports the payment as
-    # unconfirmed even after the IPN has already settled it.
-    app_return_url = _append_query_params(
-        payload.callback_url or "odosmobileexpo://payments/return",
-        orderId=str(order.id),
+    checkout = kutanapay_create_checkout(
+        # Cedis, not pesewas. KutanaPay quotes major units; the ledger below
+        # stores subunits, which is why the two are converted separately.
+        amount=order.total_amount,
         reference=reference,
+        customer_email=current_user.email,
+        customer_name=current_user.full_name,
+        customer_phone=current_user.phone_number,
+        description=f"Order {order.order_number}",
+        order_id=str(order.id),
     )
-    app_cancel_url = _append_query_params(
-        payload.cancel_url or payload.callback_url or "odosmobileexpo://payments/return",
-        orderId=str(order.id),
-        cancelled="1",
-        reference=reference,
-    )
-
-    # The gateway form is built later, in ipay_checkout_redirect. Holding the
-    # return targets on the row rather than in the redirect URL keeps them out
-    # of a query string a customer could edit into an open redirect.
-    redirect_url = str(request.url_for("ipay_checkout_redirect", reference=reference))
 
     transaction = PaymentTransaction(
         order_id=order.id,
         user_id=current_user.id,
-        provider="ipay",
+        provider="kutanapay",
         reference=reference,
         access_code=None,
-        authorization_url=redirect_url,
-        currency="GHS",
+        authorization_url=checkout["checkout_url"],
+        currency=settings.kutanapay_currency,
         amount_subunit=amount_to_subunit(order.total_amount),
         status="pending",
         preferred_channel=None,
+        # The gateway's own id, which GET and cancel are keyed on. It is not
+        # our `reference`. Kept in the indexed column rather than in JSON
+        # because the webhook looks a transaction up by it on every delivery,
+        # and because _apply_successful_payment overwrites authorization_data.
+        provider_transaction_id=str(checkout["id"]) if checkout.get("id") else None,
         authorization_data={
-            "return_url": app_return_url,
-            "cancel_url": app_cancel_url,
+            "payment_reference": checkout.get("payment_reference"),
+            "expires_at": checkout.get("expires_at"),
         },
     )
     db.add(transaction)
@@ -837,7 +860,7 @@ def create_ipay_checkout_session(
         entity_id=reference,
         metadata={
             "order_id": str(order.id),
-            "provider": "ipay",
+            "provider": "kutanapay",
             "amount": order.total_amount,
         },
         ip_address=request_ip(request),
@@ -848,139 +871,31 @@ def create_ipay_checkout_session(
         order_id=order.id,
         order_number=order.order_number,
         reference=reference,
-        authorization_url=redirect_url,
+        authorization_url=checkout["checkout_url"],
         access_code=None,
         amount=order.total_amount,
-        currency="GHS",
+        currency=settings.kutanapay_currency,
         payment_status=order.payment_status,
     )
 
 
-def _load_ipay_transaction(db: Session, reference: str) -> PaymentTransaction:
-    transaction = db.scalar(
-        select(PaymentTransaction)
-        .options(selectinload(PaymentTransaction.order))
-        .where(
-            PaymentTransaction.reference == reference,
-            PaymentTransaction.provider == "ipay",
-        )
-    )
-    if not transaction:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="We couldn't find that payment.",
-        )
-    return transaction
+def _kutanapay_checkout_id(transaction: PaymentTransaction) -> str | None:
+    if transaction.provider_transaction_id:
+        return transaction.provider_transaction_id
+    data = transaction.authorization_data
+    if isinstance(data, dict):
+        return data.get("payment_reference")
+    return None
 
 
-def ipay_checkout_redirect(
-    db: Session,
-    request: Request,
-    *,
-    reference: str,
-) -> HTMLResponse:
-    """Serve the form that posts the customer into iPay's hosted checkout.
-
-    Rendered server-side so merchant_key is never shipped to the app bundle,
-    and so `total` is taken from the stored order rather than from anything the
-    client can set. The customer's browser can still read both -- iPay's own
-    widget embeds them in page HTML -- which is exactly why the IPN handler
-    re-checks the amount instead of trusting what comes back.
-    """
-    transaction = _load_ipay_transaction(db, reference)
-    order = transaction.order
-    if order is None:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="We couldn't load the order tied to this payment.",
-        )
-
-    if transaction.status != "pending" or order.payment_status == "paid":
-        targets = transaction.authorization_data or {}
-        return paystack_checkout_redirect(
-            request,
-            return_url=targets.get("return_url") or "odosmobileexpo://payments/return",
-        )
-
-    targets = transaction.authorization_data or {}
-    fields = build_checkout_fields(
-        invoice_id=transaction.reference,
-        total=f"{amount_from_subunit(transaction.amount_subunit):.2f}",
-        success_url=_append_query_params(
-            str(request.url_for("paystack_checkout_redirect")),
-            return_url=targets.get("return_url"),
-        ),
-        cancelled_url=_append_query_params(
-            str(request.url_for("paystack_checkout_redirect")),
-            return_url=targets.get("cancel_url"),
-        ),
-        ipn_url=str(request.url_for("ipay_ipn")),
-        customer_name=(transaction.user.full_name if transaction.user else None),
-        # The momo wallet picked at checkout, so iPay's prompt is prefilled and
-        # the customer only has to confirm. Falls back to the delivery contact
-        # when paying by card, where no wallet was chosen.
-        customer_mobile=(order.payment_phone or order.address_phone or None),
-        customer_email=(transaction.user.email if transaction.user else None),
-        description=f"ODOS order {order.order_number}",
-    )
-
-    inputs = "\n".join(
-        f'      <input type="hidden" name="{html.escape(name, quote=True)}"'
-        f' value="{html.escape(str(value), quote=True)}" />'
-        for name, value in fields.items()
-    )
-    action = html.escape(ipay_checkout_url(), quote=True)
-    html_body = f"""<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Opening secure payment</title>
-    <style>
-      :root {{ color-scheme: light; }}
-      body {{
-        margin: 0; min-height: 100vh; display: grid; place-items: center;
-        background: #f8fafc; color: #0f172a;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      }}
-      .card {{
-        width: min(92vw, 28rem); background: #ffffff; border-radius: 1.5rem;
-        padding: 2rem; box-shadow: 0 18px 50px rgba(15, 23, 42, 0.12);
-        text-align: center;
-      }}
-      h1 {{ margin: 0 0 0.75rem; font-size: 1.2rem; }}
-      p {{ margin: 0 0 1.25rem; color: #475569; line-height: 1.5; }}
-      button {{
-        padding: 0.85rem 1.2rem; border: 0; border-radius: 999px;
-        background: #111827; color: #ffffff; font-weight: 600; font-size: 1rem;
-      }}
-    </style>
-  </head>
-  <body>
-    <main class="card">
-      <h1>Opening secure payment</h1>
-      <p>Taking you to iPay to complete this order.</p>
-      <form id="ipay-checkout" method="post" action="{action}">
-{inputs}
-        <button type="submit">Continue to payment</button>
-      </form>
-    </main>
-    <script>
-      document.getElementById("ipay-checkout").submit();
-    </script>
-  </body>
-</html>"""
-    return HTMLResponse(content=html_body)
-
-
-def _verify_ipay_payment(
+def _verify_kutanapay_payment(
     db: Session,
     transaction: PaymentTransaction,
 ) -> PaymentVerificationRead:
-    """Ask iPay what happened, and decide from the answer alone.
+    """Ask KutanaPay what happened, and decide from the answer alone.
 
-    Shared by the IPN and by the app's own verify call, so a payment is judged
-    the same way no matter which arrives first -- and they routinely race.
+    Shared by the webhook and by the app's own verify call, so a payment is
+    judged the same way whichever arrives first -- and they routinely race.
     """
     order = transaction.order
     if order is None:
@@ -989,14 +904,15 @@ def _verify_ipay_payment(
             detail="We couldn't load the order tied to this payment.",
         )
 
-    payload = ipay_check_status(transaction.reference)
-    gateway_status = ipay_normalize_status(payload.get("status"))
-    extra = payload.get("extra") if isinstance(payload.get("extra"), dict) else {}
-    gateway_message = (
-        extra.get("psp_response_msg")
-        or payload.get("status_reason")
-        or payload.get("narration")
-    )
+    checkout_id = _kutanapay_checkout_id(transaction)
+    if not checkout_id:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="This payment has no provider reference to check.",
+        )
+
+    payload = kutanapay_get_checkout(checkout_id)
+    gateway_status = kutanapay_normalize_status(payload.get("status"))
     now = datetime.now(UTC)
     transaction.raw_response = payload
     transaction.last_checked_at = now
@@ -1006,7 +922,7 @@ def _verify_ipay_payment(
             order,
             transaction,
             provider_status=gateway_status,
-            gateway_response=_format_gateway_response(gateway_message),
+            gateway_response=_format_gateway_response(payload.get("status")),
             now=now,
         )
         db.commit()
@@ -1017,15 +933,15 @@ def _verify_ipay_payment(
             provider_status=gateway_status,
             message=_unsuccessful_payment_message(
                 payment_status=transaction.status,
-                gateway_response=_format_gateway_response(gateway_message),
+                gateway_response=_format_gateway_response(payload.get("status")),
             ),
         )
 
-    # Paid according to iPay -- now confirm it paid what the order actually
-    # costs. `total` is submitted in a form the customer's browser can edit, so
-    # this comparison against our own stored amount is the only thing standing
-    # between a tampered field and released goods.
-    paid_subunit = ipay_parse_amount_to_subunit(payload.get("amount"))
+    # Paid according to KutanaPay -- now confirm it paid what the order costs.
+    # The signature on the webhook proves who sent the message, not that the
+    # amount matches, and the status endpoint is simply an external system. So
+    # the comparison against our own stored subunit total stays.
+    paid_subunit = kutanapay_parse_amount_to_subunit(payload.get("amount"))
     if paid_subunit is None or paid_subunit != transaction.amount_subunit:
         transaction.status = "failed"
         transaction.gateway_response = "Transaction amount mismatch."
@@ -1041,33 +957,75 @@ def _verify_ipay_payment(
             message="Payment verification failed because the amount did not match the order.",
         )
 
-    # The live gateway returns service_fee even though the docs omit it, so the
-    # ledger can record the real processor cost instead of assuming zero.
-    fee_subunit = ipay_parse_amount_to_subunit(payload.get("service_fee")) or 0
     provider_payload = {
         **payload,
-        "id": payload.get("payment_reference") or transaction.reference,
-        "gateway_response": _format_gateway_response(gateway_message),
-        "fees": fee_subunit,
-        "paid_at": payload.get("as_at"),
-        "authorization": extra or None,
+        # Deliberately the checkout id, not payment_reference: the webhook
+        # finds this row by provider_transaction_id, and a retry arriving after
+        # settlement must still match.
+        "id": checkout_id,
+        "gateway_response": _format_gateway_response(payload.get("status")),
+        # KutanaPay does not report a processor fee on the checkout record, so
+        # the ledger records zero rather than inventing a number.
+        "fees": 0,
+        "paid_at": payload.get("paid_at"),
+        "authorization": None,
     }
     return _apply_successful_payment(db, transaction, provider_payload)
 
 
-def handle_ipay_ipn(db: Session, *, invoice_id: str | None) -> dict[str, str]:
-    """Handle an iPay payment notification.
+def handle_kutanapay_webhook(
+    db: Session,
+    *,
+    raw_body: bytes,
+    signature: str | None,
+    event_type: str | None,
+) -> dict[str, str]:
+    """Handle a signed KutanaPay webhook.
 
-    iPay sends an unauthenticated `GET ?invoice_id=...` with no signature, so
-    nothing in this request is evidence. It is treated purely as a prompt to go
-    and ask the gateway. A forged call can therefore do no more than make the
-    server re-verify a payment it already knows about.
+    The signature is checked against the raw bytes before the body is parsed --
+    re-serialising parsed JSON changes key order and whitespace and the HMAC
+    then never matches.
+
+    Even with a valid signature the event is treated as a prompt rather than as
+    truth: the handler re-reads the checkout from the API and compares the
+    amount. A signature establishes who sent the message, not that acting on it
+    is safe.
     """
-    if not invoice_id:
+    if not verify_kutanapay_signature(raw_body, signature):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid KutanaPay webhook signature.",
+        )
+
+    try:
+        event = json.loads(raw_body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="invoice_id is required.",
+            detail="Malformed webhook payload.",
+        ) from exc
+
+    data = event.get("data") if isinstance(event.get("data"), dict) else {}
+    checkout_id = data.get("checkout_id") or data.get("id")
+    if not checkout_id:
+        # Acknowledged rather than rejected: an event we cannot act on is not a
+        # delivery failure, and a non-2xx would make KutanaPay retry forever.
+        return {"status": "ignored"}
+
+    transaction = db.scalar(
+        select(PaymentTransaction).where(
+            PaymentTransaction.provider == "kutanapay",
+            PaymentTransaction.provider_transaction_id == str(checkout_id),
         )
-    transaction = _load_ipay_transaction(db, invoice_id)
-    result = _verify_ipay_payment(db, transaction)
-    return {"status": result.payment_status}
+    )
+    if transaction is None:
+        return {"status": "unknown"}
+
+    # Already settled. KutanaPay retries deliveries and sends an idempotency
+    # key for exactly this case; re-verifying a paid transaction would be
+    # harmless but pointless.
+    if transaction.status == "success":
+        return {"status": "success"}
+
+    result = _verify_kutanapay_payment(db, transaction)
+    return {"status": result.payment_status, "event": event_type or ""}
