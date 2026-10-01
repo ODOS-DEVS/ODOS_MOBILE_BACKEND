@@ -97,7 +97,7 @@ otherwise read the host wrongly and fail somewhere confusing.
 ## Checks
 
 ```bash
-pytest          # 244 tests
+pytest          # 237 pass; 47 more need Postgres (see tests/conftest.py)
 ruff check .    # clean; config lives in pyproject.toml
 ```
 
