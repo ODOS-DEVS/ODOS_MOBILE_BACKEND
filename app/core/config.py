@@ -52,9 +52,11 @@ class Settings(BaseSettings):
     # nothing else, so Paystack stays responsible for vendor transfers.
     kutanapay_api_key: str = ""
     kutanapay_webhook_secret: str = ""
-    # Sandbox. The production host is issued by KutanaPay directly and is not
-    # published in their docs, so it has to be set per environment.
-    kutanapay_base_url: str = "https://dev.kutanapay.com"
+    # The API host. Note this is NOT dev.kutanapay.com, which their docs name
+    # as the sandbox host -- that domain serves the merchant dashboard and the
+    # customer-facing checkout page, and answers API calls with an HTML 404.
+    # Verified by calling both.
+    kutanapay_base_url: str = "https://api.kutanapay.com"
     kutanapay_currency: str = "GHS"
     redis_url: str = ""
     rate_limit_enabled: bool = True
