@@ -150,3 +150,41 @@ def test_unconfigured_gateway_refuses_rather_than_calling_out(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         kp.ensure_kutanapay_configured()
     assert exc.value.status_code == 503
+
+
+class TestPromoteFragmentToken:
+    """KutanaPay returns the checkout token in the URL fragment.
+
+    Their page reads it from there and immediately calls
+    ``history.replaceState`` to strip the fragment, so a single reload leaves
+    it with nothing and it renders "This payment link is missing its token".
+    The same page accepts ``?token=`` from the query string, which survives
+    both. These tests pin the rewrite that moves it across.
+    """
+
+    def test_fragment_token_becomes_a_query_param(self):
+        url = kp.promote_fragment_token(
+            "https://dev.kutanapay.com/public/checkouts/PAY-4V703Y310M7E#token=abc123"
+        )
+        assert url == (
+            "https://dev.kutanapay.com/public/checkouts/PAY-4V703Y310M7E?token=abc123"
+        )
+
+    def test_existing_query_params_survive(self):
+        url = kp.promote_fragment_token("https://x.test/c/PAY-1?lang=en#token=zzz")
+        assert "lang=en" in url
+        assert "token=zzz" in url
+        assert "#" not in url
+
+    def test_a_token_already_in_the_query_is_not_overwritten(self):
+        url = kp.promote_fragment_token("https://x.test/c/PAY-1?token=keep#token=drop")
+        assert url == "https://x.test/c/PAY-1?token=keep"
+
+    def test_urls_without_a_fragment_are_untouched(self):
+        for url in ("https://x.test/c/PAY-1", "https://x.test/c/PAY-1?token=abc"):
+            assert kp.promote_fragment_token(url) == url
+
+    def test_a_fragment_carrying_no_token_is_left_alone(self):
+        """Don't discard a fragment we don't understand -- it may be meaningful."""
+        url = "https://x.test/c/PAY-1#section"
+        assert kp.promote_fragment_token(url) == url

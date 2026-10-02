@@ -27,6 +27,7 @@ import hashlib
 import hmac
 import uuid
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import requests
 from fastapi import HTTPException, status
@@ -98,6 +99,33 @@ def _unwrap(payload: Any, *, context: str) -> dict[str, Any]:
     return data
 
 
+def promote_fragment_token(checkout_url: str) -> str:
+    """Move KutanaPay's ``#token=`` into the query string.
+
+    Their checkout page prefers the fragment, and the moment it reads one it
+    calls ``history.replaceState`` to strip it back off the URL. Nothing can
+    recover it after that, so any reload -- and an in-app browser reloads
+    readily -- lands on a page with no token and renders "This payment link is
+    missing its token".
+
+    The same page falls back to ``?token=`` read from the query string, which
+    survives both that replaceState and a reload. So it is handed the token
+    there instead. A fragment is dropped only once its token is safely in the
+    query; anything we do not recognise is passed through untouched.
+    """
+    parts = urlsplit(checkout_url)
+    if not parts.fragment:
+        return checkout_url
+
+    fragment_token = dict(parse_qsl(parts.fragment)).get("token")
+    if not fragment_token:
+        return checkout_url
+
+    query = dict(parse_qsl(parts.query))
+    query.setdefault("token", fragment_token)
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), ""))
+
+
 def create_checkout(
     *,
     amount: float,
@@ -160,11 +188,13 @@ def create_checkout(
         ) from exc
 
     data = _unwrap(payload, context="create")
-    if not data.get("checkout_url"):
+    checkout_url = data.get("checkout_url")
+    if not checkout_url:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="The payment provider did not return a checkout link.",
         )
+    data["checkout_url"] = promote_fragment_token(checkout_url)
     return data
 
 
