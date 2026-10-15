@@ -216,12 +216,23 @@ returns no secret -- credentials appear as the first 8 hex of their SHA-256, so
 printf %s "$KUTANAPAY_API_KEY" | shasum -a 256 | cut -c1-8
 ```
 
-1. **Get the live credentials.** KutanaPay's keys carry no `test`/`live` marker
-   in the prefix -- both look like `mk_…` -- and both modes are served from
-   `api.kutanapay.com`. The mode lives in the key itself, so the key is the
-   only thing that tells you which account you are on. The giveaway is the host
-   in the returned `checkout_url`: a sandbox key answers with
-   `dev.kutanapay.com`.
+1. **Get the live credentials *and* the production API host.** Both, together.
+   `api.kutanapay.com` is the **sandbox** API: a key issued in the live portal
+   is rejected there with `401 {"detail":"Invalid API key"}`, while a sandbox
+   key succeeds and returns `checkout_url` values on `dev.kutanapay.com`.
+
+   A sandbox checkout looks completely healthy and never pays. It reaches the
+   hosted page, accepts a phone number, and then sits at "Waiting" until it
+   expires -- no prompt, no error, nothing in any log. If payments are not
+   arriving, check the host before anything else.
+
+   Secret keys carry no `test`/`live` marker (both are `mk_…`), so the key
+   itself tells you nothing. The publishable key does (`pk_live_…`), and the
+   `checkout_url` host is the other giveaway.
+
+   KutanaPay publish no developer docs -- no `docs.`, `developer.` or
+   `developers.` host resolves -- so the production base URL has to come from
+   them directly.
 2. **Register the webhook** in the KutanaPay dashboard, on the live account:
 
    ```
@@ -289,6 +300,8 @@ exactly that reason.
 | Paid but order still pending | webhook not registered on the **live** KutanaPay account — `/api/health/payments` |
 | Checkout 503s, "temporarily unavailable" | `KUTANAPAY_API_KEY` unset — `ready_to_collect` on the same endpoint |
 | Test money taken in production | key still on sandbox; compare `api_key_fingerprint` against the live key |
+| Checkout opens but no MoMo prompt, expires at "Waiting" | `KUTANAPAY_BASE_URL` is the sandbox API — see Payments |
+| `401 {"detail":"Invalid API key"}` from the gateway | live key against the sandbox host, or the reverse |
 | Wallet top-up 503s | by design while `PAYSTACK_SECRET_KEY` is not `sk_live_` — see Payments |
 
 ## Licence

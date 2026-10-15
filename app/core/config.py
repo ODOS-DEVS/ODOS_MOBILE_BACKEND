@@ -66,10 +66,22 @@ class Settings(BaseSettings):
     # nothing else, so Paystack stays responsible for vendor transfers.
     kutanapay_api_key: str = ""
     kutanapay_webhook_secret: str = ""
-    # The API host. Note this is NOT dev.kutanapay.com, which their docs name
-    # as the sandbox host -- that domain serves the merchant dashboard and the
-    # customer-facing checkout page, and answers API calls with an HTML 404.
-    # Verified by calling both.
+    # The API host, and the default below is the SANDBOX one.
+    #
+    # Established by calling it: a key issued in the live portal is rejected
+    # there with 401 {"detail":"Invalid API key"}, while the older key succeeds
+    # and returns checkout_url values on dev.kutanapay.com. Sandbox API,
+    # sandbox checkout page. Checkouts created against it never deliver a real
+    # mobile money prompt -- they sit at "Waiting" until they expire, with no
+    # error anywhere, which is an expensive thing to diagnose twice.
+    #
+    # dev.kutanapay.com is not the API host either, despite their docs naming
+    # it as the sandbox one: it serves the dashboard and the customer-facing
+    # checkout page, and answers API calls with an HTML 404.
+    #
+    # The production host is not known -- KutanaPay publish no developer docs
+    # and it is not discoverable. Going live means setting this to whatever
+    # they say alongside the live key; neither works without the other.
     kutanapay_base_url: str = "https://api.kutanapay.com"
     kutanapay_currency: str = "GHS"
     redis_url: str = ""
