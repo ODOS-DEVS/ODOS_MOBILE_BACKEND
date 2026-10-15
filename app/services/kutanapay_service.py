@@ -60,6 +60,62 @@ def generate_reference() -> str:
     return f"{_REFERENCE_PREFIX}-{uuid.uuid4().hex}"
 
 
+# Ghana's country code, and the length of a subscriber number without the
+# national trunk "0" (024 123 4567 -> 241234567).
+_GHANA_COUNTRY_CODE = "233"
+_GHANA_SUBSCRIBER_DIGITS = 9
+
+
+def normalize_msisdn(raw_phone: str | None) -> str | None:
+    """Put a phone number in the international form KutanaPay's page expects.
+
+    Their checkout renders a literal "+" and appends whatever it is handed, so
+    a local "0557337520" is displayed as "+0557337520" -- a number in no
+    country's plan. The network selector cannot parse that either, so it falls
+    back to its first option (Airtel) regardless of the customer's actual
+    network, and the approval prompt is sent to a network the number does not
+    belong to. It never arrives and the checkout expires with no error.
+
+    So the trunk "0" is swapped for the country code and the "+" is left off,
+    because the page supplies it. Digits only: the page concatenates, and a
+    space or dash survives into the field.
+
+    Numbers already carrying a country code are passed through, and anything
+    that is not recognisably Ghanaian is returned cleaned but otherwise
+    untouched rather than forced into +233 -- guessing a country code is how
+    you charge a stranger.
+    """
+    if not raw_phone:
+        return None
+
+    digits = "".join(character for character in raw_phone if character.isdigit())
+    if not digits:
+        return None
+
+    # "00" is the international dialling prefix -- 00233... is the same number
+    # as +233..., and leaving it on makes the country code unrecognisable.
+    if digits.startswith("00"):
+        digits = digits[2:]
+        if not digits:
+            return None
+
+    # Already international: 233 + 9 digits.
+    if digits.startswith(_GHANA_COUNTRY_CODE) and len(digits) == len(
+        _GHANA_COUNTRY_CODE
+    ) + _GHANA_SUBSCRIBER_DIGITS:
+        return digits
+
+    # Local trunk form: 0 + 9 digits.
+    if digits.startswith("0") and len(digits) == _GHANA_SUBSCRIBER_DIGITS + 1:
+        return f"{_GHANA_COUNTRY_CODE}{digits[1:]}"
+
+    # Bare subscriber number, no trunk prefix and no country code.
+    if len(digits) == _GHANA_SUBSCRIBER_DIGITS:
+        return f"{_GHANA_COUNTRY_CODE}{digits}"
+
+    return digits
+
+
 def ensure_kutanapay_configured() -> None:
     if not settings.kutanapay_is_configured:
         raise HTTPException(
@@ -153,8 +209,9 @@ def create_checkout(
     }
     if customer_name:
         body["customer_name"] = customer_name
-    if customer_phone:
-        body["customer_phone"] = customer_phone
+    normalized_phone = normalize_msisdn(customer_phone)
+    if normalized_phone:
+        body["customer_phone"] = normalized_phone
     if description:
         body["description"] = description
     if order_id:
