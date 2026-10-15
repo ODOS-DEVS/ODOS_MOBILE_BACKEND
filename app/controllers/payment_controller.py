@@ -807,7 +807,13 @@ def create_kutanapay_checkout_session(
         reference=reference,
         customer_email=current_user.email,
         customer_name=current_user.full_name,
-        customer_phone=current_user.phone_number,
+        # The number the customer chose at checkout, not the one on their
+        # profile. KutanaPay infers the mobile money network from this, so
+        # sending the profile number routes the charge to whichever network
+        # that happens to belong to -- a Telecel profile number silently
+        # overrode a customer's MTN selection, and Telecel authorises by USSD
+        # rather than a push prompt, so the payment simply never arrived.
+        customer_phone=payload.payment_phone or current_user.phone_number,
         description=f"Order {order.order_number}",
         order_id=str(order.id),
     )
