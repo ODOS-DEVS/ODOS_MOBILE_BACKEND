@@ -2,6 +2,15 @@ from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def settings_secret_is_live(secret_key: str) -> bool:
+    """True only for a key that is positively identifiable as live.
+
+    Anything unset, malformed or unrecognised reads as not-live. A key we
+    cannot classify must not be assumed to move real money.
+    """
+    return (secret_key or "").strip().startswith("sk_live_")
+
+
 class Settings(BaseSettings):
     database_url: str
     secret_key: str
@@ -48,6 +57,11 @@ class Settings(BaseSettings):
     paystack_webhook_secret: str = ""
     paystack_currency: str = "GHS"
     paystack_payouts_enabled: bool = True
+    # Allows wallet top-ups against a TEST Paystack key. Only ever correct on a
+    # staging environment, where crediting a wallet without real money is the
+    # point. In production this hands out free spendable balance -- see
+    # wallet_topups_are_allowed.
+    wallet_topups_allow_test_gateway: bool = False
     # KutanaPay collects payments only -- its public API covers checkouts and
     # nothing else, so Paystack stays responsible for vendor transfers.
     kutanapay_api_key: str = ""
@@ -148,6 +162,36 @@ class Settings(BaseSettings):
             self.paystack_secret_key.strip()
             and self.paystack_public_key.strip()
         )
+
+    @property
+    def paystack_is_live(self) -> bool:
+        """Whether Paystack would move real money.
+
+        Paystack states its mode in the key prefix, which is the only reliable
+        signal -- a test key and a live key are otherwise identical in shape.
+        """
+        return settings_secret_is_live(self.paystack_secret_key)
+
+    @property
+    def wallet_topups_are_allowed(self) -> bool:
+        """Wallet top-ups must not run on a test gateway in a live app.
+
+        Not a style rule -- a test-mode top-up credits a real wallet balance.
+        Paystack's test cards are published in their own documentation, so the
+        chain is: top up with a public test card, Paystack test verifies it as
+        a success, `_reconcile_wallet_topup` adds the amount to
+        `available_balance`, and that balance then buys real goods from real
+        vendors through `create_wallet_checkout`. Free money, and a vendor owed
+        a real settlement against none.
+
+        So top-ups are gated on Paystack actually being live.
+        `WALLET_TOPUPS_ALLOW_TEST_GATEWAY=true` forces them on for a staging
+        environment where fake credit is the point. It has to be set
+        deliberately, which an `sk_test_` key left in place does not.
+        """
+        if self.wallet_topups_allow_test_gateway:
+            return True
+        return self.paystack_is_live
 
     @property
     def kutanapay_is_configured(self) -> bool:

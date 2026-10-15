@@ -192,6 +192,91 @@ Worth knowing:
   API can hold. Set them too low and requests queue behind the pool and time
   out under load, which looks like a slow database rather than a small pool.
 
+## Payments
+
+KutanaPay collects order payments. Paystack is still live for two things it was
+never replaced for: customer wallet top-ups and every vendor payout. So
+"switching payments to live" is two switches, not one, and the second is easy
+to forget because nothing about an order checkout touches it.
+
+| What | Gateway | Env |
+|---|---|---|
+| Order checkout | KutanaPay | `KUTANAPAY_API_KEY`, `KUTANAPAY_WEBHOOK_SECRET` |
+| Wallet top-up | Paystack | `PAYSTACK_SECRET_KEY`, `PAYSTACK_WEBHOOK_SECRET` — refuses unless the key is `sk_live_` |
+| Vendor payout | Paystack | `PAYSTACK_SECRET_KEY`, `PAYSTACK_PAYOUTS_ENABLED` |
+
+### Going live
+
+`GET /api/health/payments` reports what the running container is actually
+configured with, so each step below can be confirmed before the next. It
+returns no secret -- credentials appear as the first 8 hex of their SHA-256, so
+"is this the live key or still the test one" is answerable by comparison:
+
+```
+printf %s "$KUTANAPAY_API_KEY" | shasum -a 256 | cut -c1-8
+```
+
+1. **Get the live credentials.** KutanaPay's keys carry no `test`/`live` marker
+   in the prefix -- both look like `mk_…` -- and both modes are served from
+   `api.kutanapay.com`. The mode lives in the key itself, so the key is the
+   only thing that tells you which account you are on. The giveaway is the host
+   in the returned `checkout_url`: a sandbox key answers with
+   `dev.kutanapay.com`.
+2. **Register the webhook** in the KutanaPay dashboard, on the live account:
+
+   ```
+   https://appbe.odos.market/api/payments/kutanapay/webhook
+   ```
+
+   Test and live are separate registrations. A live key with the webhook only
+   registered on sandbox is the worst of the failure modes: checkouts succeed,
+   customers are charged, and no order is ever activated.
+3. **Set `KUTANAPAY_WEBHOOK_SECRET` to the live signing secret.** It is a
+   different secret per mode. Note that `kutanapay_is_configured` does not
+   require it -- checkouts are created without it and only the callback fails,
+   so a wrong value here looks like working checkout and silently broken
+   fulfilment. `/api/health/payments` reports it as `ready_to_confirm`.
+4. **Decide about Paystack.** Leaving it on test keys is a supported choice,
+   but it has one hard consequence: **wallet top-ups refuse with a 503 while
+   Paystack is not live.** They have to. A top-up credits `available_balance`
+   directly, that balance buys real goods through `create_wallet_checkout`, and
+   Paystack publishes its test card numbers — so a test-mode top-up is free
+   spendable money and a vendor owed a real settlement against none. The gate
+   fails closed: a key that is not positively `sk_live_` is treated as not
+   live. `WALLET_TOPUPS_ALLOW_TEST_GATEWAY=true` overrides it, and is only ever
+   correct on staging.
+
+   Vendor payouts are not gated — they are admin-initiated, not customer-facing
+   — but on a test key they do not move real funds. `paystack.mode` and
+   `wallet_topups_allowed` on the health endpoint report both.
+5. **Redeploy, don't restart.** An env change needs a Redeploy to reach the
+   container; see Deployment above.
+6. **Confirm, then test with a real payment** -- small, on a real card or
+   wallet, end to end, and check the order activates. The reconciliation loop
+   only steps in after `GRACE_WINDOW_MINUTES`, so an order that activates
+   immediately proves the webhook, which is the part that silently breaks.
+
+The app needs no new build for any of this. It opens whatever
+`authorization_url` the backend hands it, so the gateway and its mode are
+entirely a backend concern. `EXPO_PUBLIC_COLLECTIONS_PROVIDER` only chooses
+*which* gateway, and exists so a live collection problem can be rolled back to
+Paystack without shipping through review.
+
+### If a payment is taken and the order stays pending
+
+That is a webhook that did not arrive or did not verify. Nothing is lost -- a
+background loop re-verifies pending transactions against their own gateway
+every 5 minutes, from 10 minutes old until 24 hours old, and the app re-verifies
+whenever the customer returns to it. Check, in order: the webhook registration
+on the **live** account, `ready_to_confirm` on the health endpoint, and the logs
+for `Failed reconciling stuck … order payment`.
+
+Each transaction is verified against the provider stored on its own row. This
+is load-bearing: references are provider-specific, and asking the wrong gateway
+returns "not found", which reads as a failure. Rows from the retired iPay
+integration are still in the table and are deliberately left untouched for
+exactly that reason.
+
 ## Troubleshooting
 
 | What you see | Where to look |
@@ -201,6 +286,10 @@ Worth knowing:
 | Browser calls blocked | `CORS_ORIGINS` must list the exact origin, scheme included |
 | Rate limiting or caching silently off | `REDIS_URL` unset — confirm at `/api/health/services` |
 | Empty recommendations | behaviour tables need data; the user must have viewed products |
+| Paid but order still pending | webhook not registered on the **live** KutanaPay account — `/api/health/payments` |
+| Checkout 503s, "temporarily unavailable" | `KUTANAPAY_API_KEY` unset — `ready_to_collect` on the same endpoint |
+| Test money taken in production | key still on sandbox; compare `api_key_fingerprint` against the live key |
+| Wallet top-up 503s | by design while `PAYSTACK_SECRET_KEY` is not `sk_live_` — see Payments |
 
 ## Licence
 

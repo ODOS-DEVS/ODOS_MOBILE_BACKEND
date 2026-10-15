@@ -16,6 +16,7 @@ from app.controllers.order_controller import (
     activate_order_after_payment,
     prepare_order_for_checkout,
 )
+from app.core.config import settings
 from app.models import (
     CustomerWallet,
     CustomerWalletTopUp,
@@ -411,6 +412,15 @@ def initialize_wallet_topup(
     current_user: User,
     payload: CustomerWalletTopUpCreate,
 ) -> CustomerWalletTopUpSessionRead:
+    # Refused before anything is written or any gateway is called. A top-up
+    # taken on a TEST Paystack key still credits a real, spendable balance --
+    # their test cards are public, so this would be free money that buys real
+    # goods from real vendors. Fails closed: an unrecognised key is not live.
+    if not settings.wallet_topups_are_allowed:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Wallet top-ups are temporarily unavailable. Please pay for your order directly.",
+        )
     amount = round_money(payload.amount)
     if amount <= 0:
         raise HTTPException(
