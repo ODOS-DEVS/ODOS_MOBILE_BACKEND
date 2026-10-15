@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 import uuid
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -47,6 +48,12 @@ SIGNATURE_HEADER = "X-Webhook-Signature"
 _SIGNATURE_PREFIX = "sha256="
 
 _TIMEOUT_SECONDS = 30
+
+logger = logging.getLogger(__name__)
+
+# How much of a gateway error body to log. Enough to carry a real message,
+# bounded so a stray HTML page cannot flood the log.
+_ERROR_BODY_LIMIT = 500
 
 
 def generate_reference() -> str:
@@ -231,6 +238,16 @@ def create_checkout(
         ) from exc
 
     if response.status_code >= 400:
+        # The customer gets a generic message; the operator needs the real one.
+        # Without this a rejected checkout is untraceable -- it could be an
+        # unauthorised key, a bad amount, a disabled currency or a wrong host,
+        # and all four look identical from the outside.
+        logger.error(
+            "KutanaPay rejected a checkout (reference=%s): HTTP %s %s",
+            reference,
+            response.status_code,
+            response.text[:_ERROR_BODY_LIMIT],
+        )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="The payment provider rejected this checkout. Please try again.",
@@ -277,6 +294,12 @@ def get_checkout(checkout_id: str) -> dict[str, Any]:
             detail="We couldn't find that payment with the provider.",
         )
     if response.status_code >= 400:
+        logger.error(
+            "KutanaPay could not confirm a checkout (id=%s): HTTP %s %s",
+            checkout_id,
+            response.status_code,
+            response.text[:_ERROR_BODY_LIMIT],
+        )
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail="The payment provider could not confirm this payment.",
