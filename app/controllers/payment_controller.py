@@ -3,8 +3,9 @@ from __future__ import annotations
 import hashlib
 import html
 import json
+import logging
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from fastapi import HTTPException, Request, status
@@ -38,6 +39,9 @@ from app.schemas.payment import (
 from app.services.event_log_service import record_user_event
 from app.services.finance_math import amount_from_subunit, amount_to_subunit
 from app.services.kutanapay_service import (
+    cancel_checkout as kutanapay_cancel_checkout,
+)
+from app.services.kutanapay_service import (
     create_checkout as kutanapay_create_checkout,
 )
 from app.services.kutanapay_service import (
@@ -63,6 +67,8 @@ from app.services.paystack_service import (
     verify_transaction,
     verify_webhook_signature,
 )
+
+logger = logging.getLogger(__name__)
 
 PENDING_PROVIDER_STATUSES = {"pending", "ongoing", "processing", "queued"}
 CANCELLED_PROVIDER_STATUSES = {"abandoned", "cancelled"}
@@ -778,6 +784,65 @@ def handle_paystack_webhook(
 
 
 
+# KutanaPay refuses a customer's 6th simultaneously-pending checkout:
+#   "Customer <email> has reached the limit of 5 pending checkouts."
+# Every checkout attempt creates a fresh order and a fresh checkout, so a
+# customer who backs out and retries a few times reaches that limit and then
+# cannot pay at all -- the next attempt surfaces as "the payment provider
+# rejected this checkout", which says nothing about the real cause.
+_STALE_CHECKOUT_WINDOW_MINUTES = 30
+# Bounded because each cancellation is a separate HTTP round trip, and this
+# runs inline before a customer's checkout opens. Their checkouts expire after
+# about five minutes anyway, so anything beyond the most recent few has already
+# stopped counting against the limit.
+_MAX_STALE_CHECKOUTS_TO_CANCEL = 5
+
+
+def _release_stale_checkouts(db: Session, user: User) -> None:
+    """Cancel a customer's abandoned checkouts before opening another.
+
+    Best effort throughout: a customer who cannot start a checkout because we
+    failed to tidy up the last one is worse off than one carrying a stray
+    pending record, so nothing here is allowed to raise.
+
+    A transaction is only marked cancelled locally when the gateway confirms
+    the cancellation. That ordering matters -- a checkout the customer has in
+    fact just paid cannot be cancelled, `cancel_checkout` returns False for it,
+    and recording it as cancelled on our side would strand a real payment in a
+    status the reconciliation loop no longer looks at.
+    """
+    cutoff = datetime.now(UTC) - timedelta(minutes=_STALE_CHECKOUT_WINDOW_MINUTES)
+    stale = list(
+        db.scalars(
+            select(PaymentTransaction)
+            .where(
+                PaymentTransaction.user_id == user.id,
+                PaymentTransaction.provider == "kutanapay",
+                PaymentTransaction.status == "pending",
+                PaymentTransaction.provider_transaction_id.is_not(None),
+                PaymentTransaction.created_at >= cutoff,
+            )
+            .order_by(PaymentTransaction.created_at.desc())
+            .limit(_MAX_STALE_CHECKOUTS_TO_CANCEL)
+        ).all()
+    )
+
+    for transaction in stale:
+        try:
+            if kutanapay_cancel_checkout(transaction.provider_transaction_id):
+                transaction.status = "cancelled"
+                transaction.gateway_response = "Superseded by a new checkout."
+        except Exception:
+            logger.warning(
+                "Could not cancel stale KutanaPay checkout %s",
+                transaction.reference,
+                exc_info=True,
+            )
+
+    if stale:
+        db.commit()
+
+
 def create_kutanapay_checkout_session(
     db: Session,
     request: Request,
@@ -790,6 +855,7 @@ def create_kutanapay_checkout_session(
             detail="In-app wallet payments must use POST /wallet/customer/checkout.",
         )
     ensure_kutanapay_configured()
+    _release_stale_checkouts(db, current_user)
 
     reference = generate_kutanapay_reference()
     order = prepare_order_for_checkout(

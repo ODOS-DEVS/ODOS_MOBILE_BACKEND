@@ -273,6 +273,23 @@ entirely a backend concern. `EXPO_PUBLIC_COLLECTIONS_PROVIDER` only chooses
 *which* gateway, and exists so a live collection problem can be rolled back to
 Paystack without shipping through review.
 
+### KutanaPay caps a customer at 5 pending checkouts
+
+> `Customer <email> has reached the limit of 5 pending checkouts.`
+
+Every checkout attempt creates a fresh order and a fresh checkout, so a
+customer who backs out and retries reaches that limit quickly. The sixth
+attempt is refused, and what they see is "the payment provider rejected this
+checkout" -- which reads as a card problem and points nowhere near the cause.
+
+`_release_stale_checkouts` cancels a customer's recent pending checkouts
+before opening another. It is best effort and never blocks the new checkout: a
+customer who cannot pay because we failed to tidy up is worse off than one
+carrying a stray record. A transaction is marked cancelled locally **only**
+when the gateway confirms it, because a checkout the customer has just paid
+cannot be cancelled, and recording it as cancelled would hide a real payment
+from the reconciliation loop, which only re-checks pending rows.
+
 ### If a payment is taken and the order stays pending
 
 That is a webhook that did not arrive or did not verify. Nothing is lost -- a
@@ -302,6 +319,7 @@ exactly that reason.
 | Test money taken in production | key still on sandbox; compare `api_key_fingerprint` against the live key |
 | Checkout opens but no MoMo prompt, expires at "Waiting" | `KUTANAPAY_BASE_URL` is the sandbox API — see Payments |
 | `401 {"detail":"Invalid API key"}` from the gateway | live key against the sandbox host, or the reverse |
+| Checkout rejected after a customer retried a few times | KutanaPay caps a customer at 5 pending checkouts — see Payments |
 | Wallet top-up 503s | by design while `PAYSTACK_SECRET_KEY` is not `sk_live_` — see Payments |
 
 ## Licence
