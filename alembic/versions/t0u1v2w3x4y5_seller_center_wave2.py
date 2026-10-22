@@ -8,6 +8,11 @@ Create Date: 2026-07-20
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
+from app.core.migration_guards import (
+    add_column_if_missing,
+    create_index_if_missing,
+    create_table_if_missing,
+)
 
 revision = "t0u1v2w3x4y5"
 down_revision = "s9t0u1v2w3x4"
@@ -16,7 +21,7 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.create_table(
+    create_table_if_missing(
         "inventory_movements",
         sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("product_id", sa.String(length=100), nullable=False),
@@ -41,56 +46,56 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["created_by_user_id"], ["users.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index(
+    create_index_if_missing(
         op.f("ix_inventory_movements_product_id"),
         "inventory_movements",
         ["product_id"],
         unique=False,
     )
-    op.create_index(
+    create_index_if_missing(
         op.f("ix_inventory_movements_vendor_user_id"),
         "inventory_movements",
         ["vendor_user_id"],
         unique=False,
     )
-    op.create_index(
+    create_index_if_missing(
         op.f("ix_inventory_movements_store_id"),
         "inventory_movements",
         ["store_id"],
         unique=False,
     )
-    op.create_index(
+    create_index_if_missing(
         op.f("ix_inventory_movements_reason"),
         "inventory_movements",
         ["reason"],
         unique=False,
     )
-    op.create_index(
+    create_index_if_missing(
         op.f("ix_inventory_movements_reference_id"),
         "inventory_movements",
         ["reference_id"],
         unique=False,
     )
-    op.create_index(
+    create_index_if_missing(
         op.f("ix_inventory_movements_created_at"),
         "inventory_movements",
         ["created_at"],
         unique=False,
     )
 
-    op.add_column(
+    add_column_if_missing(
         "users",
         sa.Column("vendor_notify_orders", sa.Boolean(), nullable=False, server_default="true"),
     )
-    op.add_column(
+    add_column_if_missing(
         "users",
         sa.Column("vendor_notify_inventory", sa.Boolean(), nullable=False, server_default="true"),
     )
-    op.add_column(
+    add_column_if_missing(
         "users",
         sa.Column("vendor_notify_reviews", sa.Boolean(), nullable=False, server_default="true"),
     )
-    op.add_column(
+    add_column_if_missing(
         "users",
         sa.Column("vendor_notify_payouts", sa.Boolean(), nullable=False, server_default="true"),
     )
