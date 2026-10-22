@@ -44,8 +44,10 @@ from app.controllers.vendor_controller import (
     get_vendor_return_request,
     gift_vendor_voucher,
     list_vendor_customers,
+    list_vendor_inventory_feed,
     list_vendor_orders,
     list_vendor_product_inventory_movements,
+    list_vendor_product_performance,
     list_vendor_products,
     list_vendor_return_requests,
     list_vendor_reviews,
@@ -86,12 +88,14 @@ from app.schemas.vendor import (
     VendorDeliverySettingsUpdate,
     VendorFlashSaleNominationCreate,
     VendorFlashSaleNominationRead,
+    VendorInventoryFeedRead,
     VendorInventoryMovementRead,
     VendorOrderRead,
     VendorOrderStatusUpdate,
     VendorPayoutInstitutionRead,
     VendorProductBulkUpdate,
     VendorProductCreate,
+    VendorProductPerformanceRead,
     VendorProductRead,
     VendorProductStatusUpdate,
     VendorProductStockUpdate,
@@ -357,6 +361,17 @@ def get_vendor_products(
     return list_vendor_products(db, current_user, q=q, limit=limit, offset=offset)
 
 
+# Declared ahead of any "/products/{product_id}" GET so the literal segment is
+# matched first rather than being captured as a product id.
+@router.get("/products/performance", response_model=list[VendorProductPerformanceRead])
+def get_vendor_product_performance(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+    days: Annotated[int, Query(ge=1, le=365)] = 30,
+):
+    return list_vendor_product_performance(db, current_user, days=days)
+
+
 @router.post("/products", response_model=VendorProductRead, status_code=status.HTTP_201_CREATED)
 async def add_vendor_product(
     name: Annotated[str, Form(min_length=1, max_length=255)],
@@ -507,6 +522,16 @@ def get_vendor_product_inventory_movements(
         limit=limit,
         offset=offset,
     )
+
+
+@router.get("/inventory-movements", response_model=list[VendorInventoryFeedRead])
+def get_vendor_inventory_feed(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+    limit: Annotated[int | None, Query(ge=1, le=100)] = 40,
+    offset: Annotated[int | None, Query(ge=0)] = 0,
+):
+    return list_vendor_inventory_feed(db, current_user, limit=limit, offset=offset)
 
 
 @router.get("/orders", response_model=list[VendorOrderRead])

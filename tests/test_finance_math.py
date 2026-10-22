@@ -130,3 +130,31 @@ def test_a_vendor_is_never_allocated_a_negative_amount():
 
     assert allocation["gross_amount"] >= 0.0
     assert allocation["net_amount"] >= 0.0
+
+
+def test_default_commission_rate_is_four_percent():
+    """The commercial rate, pinned.
+
+    Every production caller of `vendor_allocation_map` omits `commission_rate`
+    and inherits this default, so it is the single number that decides what
+    ODOS keeps. The tests above pass an explicit rate to check the arithmetic;
+    this one checks the business rule.
+
+    A deployment may still override it with VENDOR_COMMISSION_RATE, which this
+    cannot assert — if that variable is set in an environment, it wins.
+    """
+    from app.core.config import settings
+
+    assert settings.vendor_commission_rate == pytest.approx(0.04)
+
+
+def test_commission_defaults_to_four_percent_in_allocation():
+    """A vendor keeps 96% of the goods they sold."""
+    vendor = uuid.uuid4()
+    order = build_order([(vendor, 200.0, "store-1")])
+
+    allocation = vendor_allocation_map(order)[vendor]
+
+    assert allocation["gross_amount"] == pytest.approx(200.0)
+    assert allocation["commission_amount"] == pytest.approx(8.0)
+    assert allocation["net_amount"] == pytest.approx(192.0)

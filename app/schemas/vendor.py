@@ -599,6 +599,24 @@ class VendorInventoryMovementRead(BaseModel):
     created_by_user_id: uuid.UUID | None = None
 
 
+class VendorInventoryFeedRead(BaseModel):
+    """One stock movement, with enough product context to read on its own.
+
+    `VendorInventoryMovementRead` is scoped to a product the caller already
+    chose, so it can omit the title. A cross-catalog feed cannot — a list of
+    deltas with no product names is unreadable.
+    """
+
+    id: uuid.UUID
+    product_id: str
+    product_title: str
+    delta: int
+    stock_after: int
+    reason: str
+    note: str | None = None
+    created_at: datetime
+
+
 class VendorProductRead(BaseModel):
     id: str
     store_id: str
@@ -724,6 +742,22 @@ class VendorTopProductRead(BaseModel):
     product_image_url: str | None = None
     units_sold: int
     gross_sales: float
+
+
+class VendorProductPerformanceRead(BaseModel):
+    """Sales performance for one SKU over a window.
+
+    Unlike `VendorTopProductRead`, which is capped at the five best sellers for
+    the dashboard, this is returned for every product the vendor has sold in
+    the window — the Products and Stock screens annotate each row with it, and
+    a product missing from the response simply sold nothing.
+    """
+
+    product_id: str
+    units_sold: int
+    gross_sales: float
+    order_count: int
+    last_sold_at: datetime | None = None
 
 
 class VendorAnalyticsDailyPoint(BaseModel):

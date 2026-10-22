@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 
-from app.controllers.vendor_controller import list_vendor_product_inventory_movements
+from app.controllers.vendor_controller import (
+    list_vendor_inventory_feed,
+    list_vendor_product_inventory_movements,
+    list_vendor_product_performance,
+)
 from app.models import UserRole, VendorStatus
 from app.services.inventory_service import (
     LOW_STOCK_THRESHOLD,
@@ -180,3 +185,115 @@ def test_list_inventory_movements_ownership_404():
         list_vendor_product_inventory_movements(db, user, "missing-product")
 
     assert exc_info.value.status_code == 404
+
+
+def _performance_row(product_id="prod-1", units=6, gross=120.0, orders=3, last=None):
+    return SimpleNamespace(
+        product_id=product_id,
+        units_sold=units,
+        gross_sales=gross,
+        order_count=orders,
+        last_sold_at=last,
+    )
+
+
+def test_product_performance_maps_rows_per_sku():
+    """Every sold SKU comes back, not just the dashboard's top five."""
+    db = MagicMock()
+    db.execute.return_value.all.return_value = [
+        _performance_row("prod-1", units=6, gross=120.0, orders=3),
+        _performance_row("prod-2", units=1, gross=15.5, orders=1),
+    ]
+
+    rows = list_vendor_product_performance(db, _vendor_user(), days=30)
+
+    assert [row.product_id for row in rows] == ["prod-1", "prod-2"]
+    assert rows[0].units_sold == 6
+    assert rows[0].gross_sales == 120.0
+    assert rows[0].order_count == 3
+
+
+def test_product_performance_coerces_missing_aggregates():
+    """A SUM over no matching rows is NULL, which must read as zero not crash."""
+    db = MagicMock()
+    db.execute.return_value.all.return_value = [
+        SimpleNamespace(
+            product_id="prod-1",
+            units_sold=None,
+            gross_sales=None,
+            order_count=None,
+            last_sold_at=None,
+        )
+    ]
+
+    rows = list_vendor_product_performance(db, _vendor_user(), days=30)
+
+    assert rows[0].units_sold == 0
+    assert rows[0].gross_sales == 0
+    assert rows[0].order_count == 0
+    assert rows[0].last_sold_at is None
+
+
+def test_product_performance_clamps_window():
+    """A hostile `days` must not widen the scan to an unbounded range."""
+    db = MagicMock()
+    db.execute.return_value.all.return_value = []
+
+    for days in (0, -5, 10_000):
+        list_vendor_product_performance(db, _vendor_user(), days=days)
+
+    assert db.execute.call_count == 3
+
+
+def test_product_performance_requires_approved_vendor():
+    """Gated on vendor_status, which is what require_vendor_access checks."""
+    db = MagicMock()
+    with pytest.raises(HTTPException):
+        list_vendor_product_performance(
+            db, _vendor_user(vendor_status=VendorStatus.SUSPENDED), days=30
+        )
+
+
+def test_inventory_feed_falls_back_to_product_id_for_title():
+    """A movement on a product with no title still has to render."""
+    db = MagicMock()
+    db.execute.return_value.all.return_value = [
+        SimpleNamespace(
+            id=uuid.uuid4(),
+            product_id="prod-9",
+            product_title=None,
+            delta=-2,
+            stock_after=4,
+            reason="order_sale",
+            note=None,
+            created_at=datetime.now(UTC),
+        )
+    ]
+
+    rows = list_vendor_inventory_feed(db, _vendor_user())
+
+    assert rows[0].product_title == "prod-9"
+    assert rows[0].delta == -2
+    assert rows[0].stock_after == 4
+
+
+def test_inventory_feed_requires_approved_vendor():
+    db = MagicMock()
+    with pytest.raises(HTTPException):
+        list_vendor_inventory_feed(
+            db, _vendor_user(vendor_status=VendorStatus.SUSPENDED)
+        )
+
+
+def test_no_automatic_delivery_delay_credit_exists():
+    """Delivery delays must not pay the customer.
+
+    The GHS 5 automatic goodwill credit was removed: it spent real money off an
+    internal SLA metric with no cap and no review. This asserts the entry point
+    is gone rather than merely unused, so reintroducing it cannot happen by
+    accident — a late order should raise an admin alert, not a payout.
+    """
+    import app.controllers.customer_wallet_controller as wallet_controller
+
+    assert not hasattr(wallet_controller, "credit_customer_wallet_for_delivery_delay")
+    assert not hasattr(wallet_controller, "DELIVERY_DELAY_GOODWILL_CREDIT")

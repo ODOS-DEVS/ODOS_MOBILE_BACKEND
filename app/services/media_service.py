@@ -73,7 +73,10 @@ UPLOAD_TARGETS = {
     "vendors/applications/banner": {"asset_folder": "odos/vendors/applications/banner"},
     "vendors/applications/shop": {"asset_folder": "odos/vendors/applications/shop"},
     "chat/attachments": {"asset_folder": "odos/chat/attachments"},
+    "guides/videos": {"asset_folder": "odos/guides/videos"},
 }
+
+GUIDE_VIDEO_FOLDER = "guides/videos"
 
 
 def _require_cloudinary_configuration() -> None:
@@ -461,4 +464,70 @@ def remove_media_file(file_url: str | None) -> None:
         )
         response.raise_for_status()
     except requests.RequestException:
+        return
+
+
+def build_video_upload_signature(folder: str = GUIDE_VIDEO_FOLDER) -> dict[str, str | int]:
+    """Credentials for a browser to upload one video straight to Cloudinary.
+
+    Tutorial videos are tens of megabytes. Streaming them through this API on
+    the way to Cloudinary would hold a worker open for the whole transfer and
+    buffer the file in memory, so the admin uploads directly and only tells us
+    the resulting URL. The API secret stays here — what leaves is a signature
+    over a fixed folder and a timestamp, which Cloudinary rejects once stale.
+    """
+    _require_cloudinary_configuration()
+
+    target = _resolve_target(folder)
+    timestamp = int(time.time())
+    payload = {
+        "timestamp": str(timestamp),
+        "folder": target["asset_folder"],
+    }
+
+    return {
+        "cloud_name": settings.cloudinary_cloud_name.strip(),
+        "api_key": settings.cloudinary_api_key,
+        "timestamp": timestamp,
+        "folder": target["asset_folder"],
+        "signature": _sign_cloudinary_payload(payload),
+        "upload_url": (
+            f"https://api.cloudinary.com/v1_1/"
+            f"{settings.cloudinary_cloud_name.strip()}/video/upload"
+        ),
+    }
+
+
+def remove_video_file(file_url: str | None, public_id: str | None = None) -> None:
+    """Destroy an uploaded video. Cloudinary files uploaded as `video` must be
+    destroyed on the video endpoint — calling the image one reports success
+    while leaving the asset (and its storage bill) in place."""
+    if not settings.cloudinary_is_configured:
+        return
+
+    resolved_id = public_id or _cloudinary_public_id_from_url(file_url)
+    if not resolved_id:
+        return
+
+    timestamp = str(int(time.time()))
+    destroy_payload = {
+        "public_id": resolved_id,
+        "timestamp": timestamp,
+    }
+
+    try:
+        response = requests.post(
+            f"https://api.cloudinary.com/v1_1/"
+            f"{settings.cloudinary_cloud_name.strip()}/video/destroy",
+            data={
+                **destroy_payload,
+                "api_key": settings.cloudinary_api_key,
+                "signature": _sign_cloudinary_payload(destroy_payload),
+            },
+            timeout=15,
+        )
+        response.raise_for_status()
+    except requests.RequestException:
+        # Losing the remote asset is a cleanup problem, never a reason to fail
+        # the admin's delete — the row is what the app reads.
         return

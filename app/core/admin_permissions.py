@@ -39,6 +39,7 @@ PERMISSION_FEATURES: dict[AdminPermissionLevel, frozenset[str]] = {
             "stores",
             "markets",
             "categories",
+            "guides",
             "promotions",
             "reviews",
             "notifications",
@@ -52,6 +53,7 @@ PERMISSION_FEATURES: dict[AdminPermissionLevel, frozenset[str]] = {
         {
             "dashboard",
             "audit_log",
+            "guides",
             "users",
             "orders",
             "returns",
@@ -85,6 +87,7 @@ PERMISSION_FEATURES: dict[AdminPermissionLevel, frozenset[str]] = {
             "dashboard",
             "analytics",
             "audit_log",
+            "guides",
             "promotions",
             "notifications",
             "products",

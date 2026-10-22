@@ -1,0 +1,396 @@
+{
+  "generated_by": "odos-mobile-expo/scripts/export-guide-catalog.ts",
+  "guide_count": 13,
+  "guides": [
+    {
+      "slug": "first-order",
+      "title": "Your first order, start to finish",
+      "category": "Getting started",
+      "summary": "Six steps from opening the app to watching your package move. Start here if you have never ordered on ODOS.",
+      "minutes": 4,
+      "starter_order": 1,
+      "steps": [
+        {
+          "index": 0,
+          "title": "Find something to buy"
+        },
+        {
+          "index": 1,
+          "title": "Read the product page before you commit"
+        },
+        {
+          "index": 2,
+          "title": "Add it to your cart"
+        },
+        {
+          "index": 3,
+          "title": "Review the cart"
+        },
+        {
+          "index": 4,
+          "title": "Set address, delivery, and payment"
+        },
+        {
+          "index": 5,
+          "title": "Pay, then follow it"
+        }
+      ]
+    },
+    {
+      "slug": "finding-products",
+      "title": "Finding what you want",
+      "category": "Buying",
+      "summary": "Search, categories, markets, and the deals lanes — plus the wishlist for things you are not ready to buy yet.",
+      "minutes": 3,
+      "starter_order": null,
+      "steps": [
+        {
+          "index": 0,
+          "title": "Search when you know what you want"
+        },
+        {
+          "index": 1,
+          "title": "Browse categories when you are exploring"
+        },
+        {
+          "index": 2,
+          "title": "Shop a specific market or store"
+        },
+        {
+          "index": 3,
+          "title": "Check deals and flash sales"
+        },
+        {
+          "index": 4,
+          "title": "Save things for later"
+        }
+      ]
+    },
+    {
+      "slug": "paying-on-odos",
+      "title": "Ways to pay",
+      "category": "Paying",
+      "summary": "Wallet, card, and mobile money — how to save a method, how the secure payment page works, and what to do when a payment fails.",
+      "minutes": 4,
+      "starter_order": 2,
+      "steps": [
+        {
+          "index": 0,
+          "title": "ODOS Wallet — the instant one"
+        },
+        {
+          "index": 1,
+          "title": "Card — debit or credit"
+        },
+        {
+          "index": 2,
+          "title": "Mobile money"
+        },
+        {
+          "index": 3,
+          "title": "Save a method so checkout is one tap"
+        },
+        {
+          "index": 4,
+          "title": "When a payment fails"
+        }
+      ]
+    },
+    {
+      "slug": "wallet-top-up",
+      "title": "Topping up your ODOS wallet",
+      "category": "Paying",
+      "summary": "Move money into your wallet from a card or MoMo so checkout becomes a single tap, and see where every cedi went.",
+      "minutes": 3,
+      "starter_order": null,
+      "steps": [
+        {
+          "index": 0,
+          "title": "Open your wallet"
+        },
+        {
+          "index": 1,
+          "title": "Enter an amount"
+        },
+        {
+          "index": 2,
+          "title": "Choose card or mobile money"
+        },
+        {
+          "index": 3,
+          "title": "Finish on the secure page"
+        },
+        {
+          "index": 4,
+          "title": "Spend it at checkout"
+        }
+      ]
+    },
+    {
+      "slug": "tracking-delivery",
+      "title": "Tracking your delivery",
+      "category": "Delivery",
+      "summary": "What each stage of the order journey actually means, and what you can do at the moment your package is out for delivery.",
+      "minutes": 5,
+      "starter_order": 3,
+      "steps": [
+        {
+          "index": 0,
+          "title": "Open the order"
+        },
+        {
+          "index": 1,
+          "title": "Read the order journey"
+        },
+        {
+          "index": 2,
+          "title": "Orders from several stores move separately"
+        },
+        {
+          "index": 3,
+          "title": "When it says out for delivery"
+        },
+        {
+          "index": 4,
+          "title": "Confirm when it reaches your hands"
+        },
+        {
+          "index": 5,
+          "title": "Keep your receipt"
+        }
+      ]
+    },
+    {
+      "slug": "delivery-options",
+      "title": "Delivery options and fees",
+      "category": "Delivery",
+      "summary": "Economy, express, and same-day — what each costs you in time, and how the fee on your order is worked out.",
+      "minutes": 3,
+      "starter_order": null,
+      "steps": [
+        {
+          "index": 0,
+          "title": "Economy — 3 to 5 business days"
+        },
+        {
+          "index": 1,
+          "title": "Express — 1 to 2 business days"
+        },
+        {
+          "index": 2,
+          "title": "Same-day — where your address qualifies"
+        },
+        {
+          "index": 3,
+          "title": "How your fee is calculated"
+        },
+        {
+          "index": 4,
+          "title": "Multi-store orders"
+        }
+      ]
+    },
+    {
+      "slug": "vouchers-and-deals",
+      "title": "Vouchers, deals, and flash sales",
+      "category": "Buying",
+      "summary": "Where discounts come from, how to apply one at checkout, and the usual reasons a code gets rejected.",
+      "minutes": 3,
+      "starter_order": null,
+      "steps": [
+        {
+          "index": 0,
+          "title": "Claim vouchers from Deals"
+        },
+        {
+          "index": 1,
+          "title": "Check what you are holding"
+        },
+        {
+          "index": 2,
+          "title": "Apply it at checkout"
+        },
+        {
+          "index": 3,
+          "title": "If the code is rejected"
+        },
+        {
+          "index": 4,
+          "title": "Flash sales end on a timer"
+        }
+      ]
+    },
+    {
+      "slug": "returns-and-refunds",
+      "title": "Returns and refunds",
+      "category": "After delivery",
+      "summary": "How to raise a return on a delivered item, what to include so it is approved quickly, and how the refund comes back.",
+      "minutes": 4,
+      "starter_order": null,
+      "steps": [
+        {
+          "index": 0,
+          "title": "Check what is eligible"
+        },
+        {
+          "index": 1,
+          "title": "Pick the item and explain the problem"
+        },
+        {
+          "index": 2,
+          "title": "Add photos"
+        },
+        {
+          "index": 3,
+          "title": "Submit and follow the request"
+        },
+        {
+          "index": 4,
+          "title": "Getting your money back"
+        }
+      ]
+    },
+    {
+      "slug": "addresses",
+      "title": "Addresses and your delivery pin",
+      "category": "Delivery",
+      "summary": "Saving addresses, setting a default, and why an accurate map pin changes both your options and your fee.",
+      "minutes": 3,
+      "starter_order": null,
+      "steps": [
+        {
+          "index": 0,
+          "title": "Add your addresses"
+        },
+        {
+          "index": 1,
+          "title": "Get the region and city right"
+        },
+        {
+          "index": 2,
+          "title": "Drop an accurate pin"
+        },
+        {
+          "index": 3,
+          "title": "Set a default"
+        },
+        {
+          "index": 4,
+          "title": "Check it before you pay"
+        }
+      ]
+    },
+    {
+      "slug": "chat-and-support",
+      "title": "Getting help: sellers, assistant, support",
+      "category": "Account",
+      "summary": "Four different ways to ask a question, and which one is actually the right one for your problem.",
+      "minutes": 3,
+      "starter_order": 4,
+      "steps": [
+        {
+          "index": 0,
+          "title": "Ask the seller about their products"
+        },
+        {
+          "index": 1,
+          "title": "Ask the ODOS Assistant for anything quick"
+        },
+        {
+          "index": 2,
+          "title": "Message support for account and payment issues"
+        },
+        {
+          "index": 3,
+          "title": "Find your conversations again"
+        },
+        {
+          "index": 4,
+          "title": "Check the FAQ first for the common ones"
+        }
+      ]
+    },
+    {
+      "slug": "loyalty-points",
+      "title": "Loyalty tiers and points",
+      "category": "Account",
+      "summary": "Bronze, silver, and gold — what each tier is worth on your orders and how you move up.",
+      "minutes": 2,
+      "starter_order": null,
+      "steps": [
+        {
+          "index": 0,
+          "title": "Find your tier"
+        },
+        {
+          "index": 1,
+          "title": "What each tier gives you"
+        },
+        {
+          "index": 2,
+          "title": "Moving up"
+        }
+      ]
+    },
+    {
+      "slug": "account-security",
+      "title": "Your account and privacy",
+      "category": "Account",
+      "summary": "Profile details, passwords, notification control, and what happens if you decide to delete your account.",
+      "minutes": 3,
+      "starter_order": null,
+      "steps": [
+        {
+          "index": 0,
+          "title": "Keep your details current"
+        },
+        {
+          "index": 1,
+          "title": "Use a password only you know"
+        },
+        {
+          "index": 2,
+          "title": "Decide what you get notified about"
+        },
+        {
+          "index": 3,
+          "title": "Read the legal bits once"
+        },
+        {
+          "index": 4,
+          "title": "Deleting your account"
+        }
+      ]
+    },
+    {
+      "slug": "selling-on-odos",
+      "title": "Selling on ODOS",
+      "category": "Selling",
+      "summary": "What the vendor application asks for, how approval works, and what you get access to once you are in.",
+      "minutes": 4,
+      "starter_order": null,
+      "steps": [
+        {
+          "index": 0,
+          "title": "Have your details ready"
+        },
+        {
+          "index": 1,
+          "title": "Prepare your images"
+        },
+        {
+          "index": 2,
+          "title": "Submit the application"
+        },
+        {
+          "index": 3,
+          "title": "Track your application"
+        },
+        {
+          "index": 4,
+          "title": "What you get once approved"
+        }
+      ]
+    }
+  ]
+}

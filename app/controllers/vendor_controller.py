@@ -42,11 +42,13 @@ from app.schemas.vendor import (
     VendorDashboardRead,
     VendorDeliverySettingsRead,
     VendorDeliverySettingsUpdate,
+    VendorInventoryFeedRead,
     VendorInventoryMovementRead,
     VendorOrderItemRead,
     VendorOrderRead,
     VendorOrderStatusUpdate,
     VendorProductCreate,
+    VendorProductPerformanceRead,
     VendorProductRead,
     VendorProductUpdate,
     VendorProfileRead,
@@ -1550,6 +1552,117 @@ def list_vendor_product_inventory_movements(
             note=row.note,
             created_at=row.created_at,
             created_by_user_id=row.created_by_user_id,
+        )
+        for row in rows
+    ]
+
+
+def list_vendor_inventory_feed(
+    db: Session,
+    user: User,
+    *,
+    limit: int | None = None,
+    offset: int | None = None,
+) -> list[VendorInventoryFeedRead]:
+    """Recent stock movements across the whole catalog.
+
+    The per-product history answers "what happened to this SKU?", which only
+    helps once the vendor already suspects a particular line. This answers the
+    question they actually arrive with — "why is my stock wrong?" — where the
+    culprit is usually a sale, a return or a bulk edit they have to find first.
+
+    Ownership is anchored on `Product.vendor_user_id` rather than the
+    movement's own `vendor_user_id`, which is nullable and left unset by
+    system-generated rows; filtering on it directly would quietly hide exactly
+    the automatic movements this feed exists to explain.
+    """
+    from app.models import InventoryMovement
+
+    require_vendor_access(user)
+    resolved_limit, resolved_offset = normalize_page_params(limit, offset)
+
+    rows = db.execute(
+        select(
+            InventoryMovement.id,
+            InventoryMovement.product_id,
+            Product.title.label("product_title"),
+            InventoryMovement.delta,
+            InventoryMovement.stock_after,
+            InventoryMovement.reason,
+            InventoryMovement.note,
+            InventoryMovement.created_at,
+        )
+        .join(Product, InventoryMovement.product_id == Product.id)
+        .where(Product.vendor_user_id == user.id)
+        .order_by(InventoryMovement.created_at.desc())
+        .offset(resolved_offset)
+        .limit(resolved_limit)
+    ).all()
+
+    return [
+        VendorInventoryFeedRead(
+            id=row.id,
+            product_id=row.product_id,
+            product_title=row.product_title or row.product_id,
+            delta=row.delta,
+            stock_after=row.stock_after,
+            reason=row.reason,
+            note=row.note,
+            created_at=row.created_at,
+        )
+        for row in rows
+    ]
+
+
+def list_vendor_product_performance(
+    db: Session,
+    user: User,
+    *,
+    days: int = 30,
+) -> list[VendorProductPerformanceRead]:
+    """Units and revenue per SKU over the last `days`.
+
+    The dashboard's `top_products` answers "what are my best five?". The
+    Products and Stock screens need a different question — "how is *this* row
+    doing?" — for every row on screen, so this returns one entry per product
+    sold in the window with no cap.
+
+    Counted against VENDOR_SALES_ORDER_STATUSES rather than `delivered` alone,
+    so the figures agree with the sales totals the vendor sees elsewhere and
+    recent demand is not undercounted while orders are still in transit.
+    """
+    require_vendor_access(user)
+
+    window_days = max(1, min(int(days), 365))
+    period_start = datetime.now(UTC).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    ) - timedelta(days=window_days - 1)
+
+    rows = db.execute(
+        select(
+            OrderItem.product_id,
+            func.sum(OrderItem.quantity).label("units_sold"),
+            func.sum(OrderItem.line_total).label("gross_sales"),
+            func.count(func.distinct(OrderItem.order_id)).label("order_count"),
+            func.max(func.coalesce(Order.placed_at, Order.created_at)).label("last_sold_at"),
+        )
+        .join(Order, OrderItem.order_id == Order.id)
+        .where(
+            OrderItem.vendor_user_id == user.id,
+            Order.vendor_status.in_(VENDOR_SALES_ORDER_STATUSES),
+            func.coalesce(Order.placed_at, Order.created_at) >= period_start,
+            OrderItem.product_id.is_not(None),
+        )
+        .group_by(OrderItem.product_id)
+    ).all()
+
+    return [
+        VendorProductPerformanceRead(
+            product_id=str(row.product_id),
+            units_sold=int(row.units_sold or 0),
+            gross_sales=round(float(row.gross_sales or 0), 2),
+            order_count=int(row.order_count or 0),
+            last_sold_at=row.last_sold_at,
         )
         for row in rows
     ]

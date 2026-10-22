@@ -28,6 +28,7 @@ from app.routes import (
     customer_wallet,
     delivery,
     email_marketing,
+    guides,
     health,
     home_feed,
     loyalty,
@@ -229,6 +230,8 @@ app.include_router(orders.router, prefix="/api")
 app.include_router(payments.router, prefix="/api")
 app.include_router(payment_methods.router, prefix="/api")
 app.include_router(loyalty.router, prefix="/api")
+app.include_router(guides.router, prefix="/api")
+app.include_router(guides.admin_router, prefix="/api")
 app.include_router(home_feed.router, prefix="/api")
 app.include_router(customer_wallet.router, prefix="/api")
 app.include_router(realtime.router, prefix="/api")

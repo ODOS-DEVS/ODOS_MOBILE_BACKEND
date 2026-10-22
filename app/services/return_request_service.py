@@ -7,6 +7,7 @@ sync between the two roles."""
 
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -23,6 +24,7 @@ from app.controllers.wallet_controller import (
 )
 from app.core.config import settings
 from app.models import Order, OrderItem, ReturnRequest, ReturnStatusEvent, User
+from app.services.loyalty_service import reverse_order_loyalty_points
 from app.services.push_service import dispatch_customer_return_push
 
 SUPPORTED_RETURN_REQUEST_STATUSES = {
@@ -141,6 +143,9 @@ class ReturnRequestIllegalTransitionError(ReturnRequestError):
                 f"to {next_status.replace('_', ' ')}."
             )
         super().__init__(message)
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -294,6 +299,19 @@ def apply_return_request_status_change(
         changed_wallet_vendor_id = reverse_vendor_wallet_for_return_request(db, request)
         record_refund_adjustments(db, request)
         credit_customer_wallet_for_return(db, request)
+
+        # Points are redeemable for wallet cash, so leaving them untouched on
+        # a refunded order turns buy-earn-return into a withdrawal. Reversed
+        # proportionally to the refund, and never below a zero balance.
+        if request.order:
+            try:
+                reverse_order_loyalty_points(
+                    db, request.order, float(request.refund_amount or 0)
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to reverse loyalty points for return %s", request.id
+                )
 
     record_return_status_event(
         db,

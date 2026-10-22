@@ -44,6 +44,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.controllers.notification_controller import create_notification_event, order_notification_image
 from app.controllers.wallet_controller import publish_vendor_wallet_updates, settle_vendor_wallets_for_order
 from app.models import Order, OrderPackage, User
+from app.services.loyalty_service import award_order_loyalty_points
 from app.services.order_package_service import ensure_packages, recompute_order_rollup
 from app.services.order_timeline_service import record_order_status_event
 from app.services.push_service import dispatch_customer_order_push
@@ -349,6 +350,22 @@ def _complete_package(
         order.cancelled_at = None
         order.cancellation_reason = None
         order.confirmation_method = confirmation_method
+
+        # Loyalty accrues here, on the last package, because this is the one
+        # place an order becomes fully delivered no matter who confirmed it.
+        # Hanging it off the customer-confirmation endpoint instead would have
+        # silently skipped every auto-released and admin-completed order.
+        #
+        # In-transaction and idempotent per order: points and the delivery
+        # state that earned them commit together, and a replay cannot pay
+        # twice. A loyalty failure must never strand a delivered package or
+        # unwind a vendor settlement, so it is contained.
+        try:
+            award_order_loyalty_points(db, order)
+        except Exception:
+            logger.exception(
+                "Failed to award loyalty points for delivered order %s", order.id
+            )
     return changed_wallet_vendor_ids
 
 

@@ -14,7 +14,14 @@ from fastapi.responses import HTMLResponse
 
 router = APIRouter(tags=["public"], include_in_schema=False)
 
-SUPPORT_EMAIL = "agyekumpaul07@gmail.com"
+# Must match constants/legal.ts in the mobile app, so the in-app route and the
+# hosted page reach the same monitored inbox.
+#
+# Split by purpose: a question about an order and a question about the privacy
+# policy want different people, and an App Store reviewer opening the Support
+# URL should not land in a legal inbox.
+SUPPORT_EMAIL = "odos.support@gmail.com"
+LEGAL_EMAIL = "odos.infos@gmail.com"
 
 _STYLE = """
 :root {
@@ -100,6 +107,13 @@ provider after the return is verified.</p>
 servers, so the amount you are charged always matches the items in your order.
 Your ODOS wallet holds refunds and store credit.</p>
 
+<h2>Loyalty points</h2>
+<p>You earn points on orders once they are delivered, counted on the goods total
+rather than on delivery. Redeem them from the Loyalty screen and the value is
+added to your ODOS wallet, which you can spend at checkout. Points are redeemed
+in whole cedis, so redeem in hundreds. If an order is refunded, the points it
+earned come back off your balance in proportion to the refund.</p>
+
 <h2>Selling on ODOS</h2>
 <p>Apply from your profile in the app. Once approved you get a storefront,
 product and stock management, order handling, customer messaging and a wallet to
@@ -169,7 +183,7 @@ requires.</p>
 their information.</p>
 
 <h2>Questions</h2>
-<p>Email <a href="mailto:{SUPPORT_EMAIL}">{SUPPORT_EMAIL}</a>.</p>
+<p>Email <a href="mailto:{LEGAL_EMAIL}">{LEGAL_EMAIL}</a>.</p>
 """)
 
 
@@ -203,6 +217,14 @@ released after the stated window, or resolved by us where there is a dispute.</p
 described. Refunds are issued to the original payment method or to your ODOS
 wallet once a return is verified.</p>
 
+<h2>Loyalty points and your wallet</h2>
+<p>Points are earned on delivered orders, at the rate shown in the app, and are
+calculated on the goods total rather than on delivery. They have no cash value
+on their own.</p>
+<p>Points can be redeemed for ODOS wallet credit in whole cedis. Wallet credit
+is spent in the app and cannot be withdrawn. If an order is refunded, the points
+it earned are reversed in proportion to the refund.</p>
+
 <h2>If you sell on ODOS</h2>
 <p>Describe what you sell accurately, keep stock and prices current, fulfil
 orders you accept, and handle returns within the stated terms. You arrange
@@ -219,5 +241,5 @@ interfere with the service, or attempt to access accounts that are not yours.</p
 change means you accept the revised terms.</p>
 
 <h2>Contact</h2>
-<p>Email <a href="mailto:{SUPPORT_EMAIL}">{SUPPORT_EMAIL}</a>.</p>
+<p>Email <a href="mailto:{LEGAL_EMAIL}">{LEGAL_EMAIL}</a>.</p>
 """)

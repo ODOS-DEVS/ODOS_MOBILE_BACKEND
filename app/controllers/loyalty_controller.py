@@ -9,7 +9,7 @@ from app.services.loyalty_service import (
     get_account_with_benefits,
     get_loyalty_transactions,
     get_or_create_loyalty_account,
-    redeem_points,
+    redeem_points_to_wallet,
 )
 
 
@@ -52,7 +52,13 @@ def redeem_loyalty_points(
     current_user: User,
     points_to_redeem: int,
 ) -> dict:
-    """Redeem loyalty points."""
+    """Redeem loyalty points for ODOS wallet credit.
+
+    This used to answer with `discount_amount_ghs`, a number no checkout code
+    ever read — the points were burned and nothing was given back. Redemption
+    now moves real balance into the customer's wallet, so the response
+    reports the credit and the new balance instead of a phantom discount.
+    """
     require_user(current_user)
 
     if points_to_redeem <= 0:
@@ -61,25 +67,10 @@ def redeem_loyalty_points(
             "message": "Points must be greater than 0",
         }
 
-    success = redeem_points(
-        db,
-        str(current_user.id),
-        points_to_redeem,
-        reason="Customer redemption",
-    )
-
-    if success:
-        account = get_account_with_benefits(db, str(current_user.id))
-        return {
-            "success": True,
-            "message": f"Successfully redeemed {points_to_redeem} points",
-            "account": account,
-            "discount_amount_ghs": points_to_redeem / 100,  # 100 points = 1 GHS
-        }
-    return {
-        "success": False,
-        "message": "Insufficient loyalty points",
-    }
+    result = redeem_points_to_wallet(db, str(current_user.id), points_to_redeem)
+    if result.get("success"):
+        result["account"] = get_account_with_benefits(db, str(current_user.id))
+    return result
 
 
 def award_bonus(

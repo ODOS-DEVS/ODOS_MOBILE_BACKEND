@@ -42,6 +42,7 @@ from app.models.delivery import (
     DeliveryStatus,
 )
 from app.models.delivery_settings import DeliverySettings
+from app.models.guide import GuideVideo
 from app.models.inventory import InventoryMovement
 from app.models.loyalty import LoyaltyAccount, LoyaltyTierBenefit, LoyaltyTransaction
 from app.models.notification import NotificationEvent, NotificationRead
@@ -139,6 +140,7 @@ __all__ = [
     "PlatformTreasuryAccount",
     "Product",
     "PromoAnalyticsEvent",
+    "GuideVideo",
     "PromoBanner",
     "Review",
     "SavedAddress",
