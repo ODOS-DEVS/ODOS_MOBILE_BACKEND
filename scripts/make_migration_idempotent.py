@@ -29,7 +29,8 @@ IMPORT_LINE = (
 
 
 def patch(path: str) -> bool:
-    src = open(path).read()
+    with open(path) as handle:
+        src = handle.read()
     if "app.core.migration_guards" in src:
         return False
 
@@ -57,7 +58,8 @@ def patch(path: str) -> bool:
     else:
         head = IMPORT_LINE + head
 
-    open(path, "w").write(head + body + tail)
+    with open(path, "w") as handle:
+        handle.write(head + body + tail)
     return True
 
 

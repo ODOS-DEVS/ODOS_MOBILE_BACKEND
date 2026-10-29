@@ -31,6 +31,14 @@ import json
 import os
 import re
 import sys
+
+# Run from anywhere: `python scripts/x.py` puts scripts/ on sys.path, not the
+# project root, so `import app` fails with ModuleNotFoundError. Adding the
+# parent directory here means the script works without the caller having to
+# remember PYTHONPATH.
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import time
 from dataclasses import asdict, dataclass
 

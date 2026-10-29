@@ -23,6 +23,14 @@ from __future__ import annotations
 import os
 import sys
 import uuid
+
+# Run from anywhere: `python scripts/x.py` puts scripts/ on sys.path, not the
+# project root, so `import app` fails with ModuleNotFoundError. Adding the
+# parent directory here means the script works without the caller having to
+# remember PYTHONPATH.
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from datetime import UTC, datetime
 
 import sqlalchemy as sa
