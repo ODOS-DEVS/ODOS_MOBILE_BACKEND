@@ -5,7 +5,15 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import and_, desc, func, select
 from sqlalchemy.orm import Session
 
-from app.models import Order, Product, Store, User, UserBehaviorEvent
+from app.models import Order, OrderItem, Product, Store, User, UserBehaviorEvent
+
+#: Order states that represent money actually earned.
+#:
+#: Mirrors VENDOR_SALES_ORDER_STATUSES in vendor_controller: pending is not a
+#: sale (it may never be paid) and cancelled is not a sale either, so counting
+#: them would overstate every figure on the admin dashboard relative to what
+#: the vendor sees for the same orders.
+SALES_ORDER_STATUSES = ("confirmed", "processing", "ready", "out_for_delivery", "delivered")
 
 
 class AdvancedAnalyticsService:
@@ -161,26 +169,28 @@ class AdvancedAnalyticsService:
             .where(Product.status == "active", Product.rating > 0)
         ) or 0.0
 
-        # Top products by sales
+        # Same correction as the category query: units and revenue come from
+        # OrderItem. Counting UserBehaviorEvent rows also conflated "viewed"
+        # with "bought" even where it did not crash.
         top_products = db.execute(
             select(
                 Product.id,
                 Product.title,
-                func.count(UserBehaviorEvent.id).label("sales"),
-                func.coalesce(func.sum(Order.total_amount), 0).label("revenue"),
+                func.coalesce(func.sum(OrderItem.quantity), 0).label("sales"),
+                func.coalesce(func.sum(OrderItem.line_total), 0).label("revenue"),
             )
             .select_from(Product)
+            .outerjoin(OrderItem, OrderItem.product_id == Product.id)
             .outerjoin(
-                UserBehaviorEvent,
+                Order,
                 and_(
-                    UserBehaviorEvent.product_id == Product.id,
-                    UserBehaviorEvent.event_type == "purchase",
+                    Order.id == OrderItem.order_id,
+                    Order.vendor_status.in_(SALES_ORDER_STATUSES),
                 ),
             )
-            .outerjoin(Order, Order.id == UserBehaviorEvent.order_id)
             .where(Product.status == "active")
             .group_by(Product.id, Product.title)
-            .order_by(desc("sales"))
+            .order_by(desc("revenue"))
             .limit(5)
         ).all()
 
@@ -256,21 +266,25 @@ class AdvancedAnalyticsService:
     @staticmethod
     def get_category_performance(db: Session, limit: int = 10) -> list[dict]:
         """Get category performance metrics."""
+        # Revenue reaches a category through OrderItem, which is the only
+        # table linking a product to an order. This previously tried to reach
+        # it through UserBehaviorEvent.order_id — a column that does not exist
+        # on that model — so the endpoint raised AttributeError on every call
+        # and had never returned data.
         results = db.execute(
             select(
                 Product.category,
-                func.coalesce(func.sum(Order.total_amount), 0).label("revenue"),
-                func.count(func.distinct(Order.id)).label("orders"),
+                func.coalesce(func.sum(OrderItem.line_total), 0).label("revenue"),
+                func.count(func.distinct(OrderItem.order_id)).label("orders"),
                 func.avg(Product.rating).label("avg_rating"),
             )
             .select_from(Product)
+            .outerjoin(OrderItem, OrderItem.product_id == Product.id)
             .outerjoin(
                 Order,
-                Order.id == (
-                    select(UserBehaviorEvent.order_id)
-                    .where(UserBehaviorEvent.product_id == Product.id)
-                    .correlate(Product)
-                    .scalar_subquery()
+                and_(
+                    Order.id == OrderItem.order_id,
+                    Order.vendor_status.in_(SALES_ORDER_STATUSES),
                 ),
             )
             .where(Product.status == "active")
@@ -298,29 +312,31 @@ class AdvancedAnalyticsService:
             select(func.count(User.id)).where(User.role == "vendor")
         ) or 0
 
+        # Store's vendor column is `vendor_user_id`; `vendor_id` does not
+        # exist and raised AttributeError before the query ever ran.
         active_vendors = db.scalar(
-            select(func.count(func.distinct(Store.vendor_id)))
+            select(func.count(func.distinct(Store.vendor_user_id)))
             .where(Store.is_active.is_(True))
         ) or 0
 
-        # Top vendor by revenue
+        # Store's display column is `title`, not `name`. Revenue is summed
+        # from OrderItem.store_id, which is the real link from a shop to the
+        # money it took.
         top_vendor = db.execute(
             select(
-                Store.name,
-                func.coalesce(func.sum(Order.total_amount), 0).label("revenue"),
+                Store.title,
+                func.coalesce(func.sum(OrderItem.line_total), 0).label("revenue"),
             )
             .select_from(Store)
+            .outerjoin(OrderItem, OrderItem.store_id == Store.id)
             .outerjoin(
-                Product,
-                Product.store_id == Store.id,
+                Order,
+                and_(
+                    Order.id == OrderItem.order_id,
+                    Order.vendor_status.in_(SALES_ORDER_STATUSES),
+                ),
             )
-            .outerjoin(Order, Order.id == (
-                select(UserBehaviorEvent.order_id)
-                .where(UserBehaviorEvent.product_id == Product.id)
-                .correlate(Product)
-                .scalar_subquery()
-            ))
-            .group_by(Store.id, Store.name)
+            .group_by(Store.id, Store.title)
             .order_by(desc("revenue"))
             .limit(1)
         ).first()
@@ -330,11 +346,17 @@ class AdvancedAnalyticsService:
             .where(Store.is_active.is_(True))
         ) or 0.0
 
-        avg_products = db.scalar(
-            select(func.avg(func.count(Product.id)))
+        # Postgres rejects avg(count(...)) — an aggregate cannot wrap another.
+        # The per-store counts have to be materialised first, then averaged.
+        products_per_store = (
+            select(func.count(Product.id).label("product_count"))
             .select_from(Store)
-            .join(Product)
+            .join(Product, Product.store_id == Store.id)
             .group_by(Store.id)
+            .subquery()
+        )
+        avg_products = db.scalar(
+            select(func.avg(products_per_store.c.product_count))
         ) or 0.0
 
         return {

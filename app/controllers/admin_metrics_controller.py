@@ -8,6 +8,11 @@ from sqlalchemy.orm import Session
 from app.core.admin_permissions import require_admin
 from app.models import Order, OrderItem, Store, User, VendorStatus
 
+#: Order states that represent money actually earned — see
+#: advanced_analytics_service.SALES_ORDER_STATUSES, kept identical so the
+#: dashboard and the analytics pages cannot disagree about what a sale is.
+SALES_ORDER_STATUSES = ("confirmed", "processing", "ready", "out_for_delivery", "delivered")
+
 
 def get_sales_chart_timeseries(
     db: Session,
@@ -23,19 +28,27 @@ def get_sales_chart_timeseries(
     now = datetime.now(UTC)
     start_date = now - timedelta(days=days)
 
-    # Get daily revenue for the period
+    # One expression object, reused in all three clauses.
+    #
+    # Building `func.date_trunc(...)` separately per clause produced three
+    # distinct expressions, and Postgres rejected the statement with
+    # "orders.created_at must appear in the GROUP BY clause" because what was
+    # grouped was not recognised as what was selected. Binding it once makes
+    # select, group and order provably the same expression.
+    day = func.date_trunc("day", Order.created_at)
+
+    # Counted on vendor_status, matching SALES_ORDER_STATUSES used by the
+    # vendor dashboard, so the same orders produce the same revenue on both
+    # sides. The previous filter on `status in (paid, delivered)` answered a
+    # different question and could not agree with the seller's own figures.
     query = select(
-        func.date_trunc("day", Order.created_at).label("date"),
+        day.label("date"),
         func.count(Order.id).label("order_count"),
         func.coalesce(func.sum(Order.total_amount), 0.0).label("revenue"),
     ).where(
         Order.created_at >= start_date,
-        Order.status.in_(["paid", "delivered"]),
-    ).group_by(
-        func.date_trunc("day", Order.created_at),
-    ).order_by(
-        func.date_trunc("day", Order.created_at),
-    )
+        Order.vendor_status.in_(SALES_ORDER_STATUSES),
+    ).group_by(day).order_by(day)
 
     results = db.execute(query).all()
 
@@ -79,28 +92,37 @@ def get_top_vendors(
 
     start_date = datetime.now(UTC) - timedelta(days=days)
 
+    # Three corrections, each of which alone raised an error:
+    #
+    #   * `Order.store_id` does not exist. An order can carry items from
+    #     several shops, so the shop lives on OrderItem, and that is the join
+    #     that makes a multi-vendor order count once per shop rather than
+    #     attributing the whole basket to one of them.
+    #   * `OrderItem.price` does not exist either; the column is `unit_price`,
+    #     and `line_total` already holds unit_price * quantity.
+    #   * counted on vendor_status, for the same agreement with the seller's
+    #     own figures as the chart above.
+    gmv = func.coalesce(func.sum(OrderItem.line_total), 0.0)
     query = select(
         Store.id,
         Store.title,
         Store.image_url,
-        func.count(Order.id).label("order_count"),
-        func.coalesce(func.sum(OrderItem.price * OrderItem.quantity), 0.0).label("gmv"),
+        func.count(func.distinct(Order.id)).label("order_count"),
+        gmv.label("gmv"),
         func.coalesce(func.avg(Order.total_amount), 0.0).label("avg_order_value"),
     ).join(
-        Order, Order.store_id == Store.id,
+        OrderItem, OrderItem.store_id == Store.id,
     ).join(
-        OrderItem, OrderItem.order_id == Order.id,
+        Order, Order.id == OrderItem.order_id,
     ).where(
         Order.created_at >= start_date,
-        Order.status.in_(["paid", "delivered"]),
+        Order.vendor_status.in_(SALES_ORDER_STATUSES),
         Store.status == "active",
     ).group_by(
         Store.id,
         Store.title,
         Store.image_url,
-    ).order_by(
-        func.coalesce(func.sum(OrderItem.price * OrderItem.quantity), 0.0).desc(),
-    ).limit(limit)
+    ).order_by(gmv.desc()).limit(limit)
 
     results = db.execute(query).all()
 
