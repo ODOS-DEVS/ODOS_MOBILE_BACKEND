@@ -37,6 +37,7 @@ import sqlalchemy as sa
 from sqlalchemy.orm import Session
 
 from app.core.security import hash_password
+from app.core.admin_permissions import AdminPermissionLevel
 from app.models import User, UserRole, VendorStatus
 
 
@@ -65,6 +66,14 @@ def main() -> int:
 
         if existing:
             existing.role = UserRole.ADMIN
+            # Bootstrap admins are super admins.
+            #
+            # A NULL band resolves to the plain ADMIN level, whose feature set
+            # deliberately excludes "staff" — so an account created here could
+            # log in, see the dashboard, and then be refused the one screen
+            # that grants anyone else access. For the account that exists to
+            # recover a locked-out system, that is the wrong default.
+            existing.admin_permission = AdminPermissionLevel.SUPER_ADMIN.value
             existing.hashed_password = hash_password(password)
             existing.is_active = True
             existing.is_verified = True
@@ -84,6 +93,7 @@ def main() -> int:
                 email=email,
                 hashed_password=hash_password(password),
                 role=UserRole.ADMIN,
+                admin_permission=AdminPermissionLevel.SUPER_ADMIN.value,
                 vendor_status=VendorStatus.NONE,
                 is_active=True,
                 is_verified=True,
