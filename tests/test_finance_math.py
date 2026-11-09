@@ -132,7 +132,7 @@ def test_a_vendor_is_never_allocated_a_negative_amount():
     assert allocation["net_amount"] >= 0.0
 
 
-def test_default_commission_rate_is_four_percent():
+def test_default_commission_rate_is_point_one_percent():
     """The commercial rate, pinned.
 
     Every production caller of `vendor_allocation_map` omits `commission_rate`
@@ -145,16 +145,16 @@ def test_default_commission_rate_is_four_percent():
     """
     from app.core.config import settings
 
-    assert settings.vendor_commission_rate == pytest.approx(0.04)
+    assert settings.vendor_commission_rate == pytest.approx(0.001)
 
 
-def test_commission_defaults_to_four_percent_in_allocation():
-    """A vendor keeps 96% of the goods they sold."""
+def test_commission_defaults_to_point_one_percent_in_allocation():
+    """A vendor keeps 99.9% of the goods they sold."""
     vendor = uuid.uuid4()
     order = build_order([(vendor, 200.0, "store-1")])
 
     allocation = vendor_allocation_map(order)[vendor]
 
     assert allocation["gross_amount"] == pytest.approx(200.0)
-    assert allocation["commission_amount"] == pytest.approx(8.0)
-    assert allocation["net_amount"] == pytest.approx(192.0)
+    assert allocation["commission_amount"] == pytest.approx(0.2)
+    assert allocation["net_amount"] == pytest.approx(199.8)

@@ -41,12 +41,13 @@ class Settings(BaseSettings):
     arkesel_otp_message: str = "Your ODOS verification code is %otp_code%. Do not share it."
     password_reset_code_expire_minutes: int = 10
     password_reset_token_expire_minutes: int = 15
-    # ODOS takes 4% of the goods subtotal. Delivery fees are never
+    # ODOS takes 0.1% of the goods subtotal — temporarily reduced from 4%
+    # while the marketplace grows; it will go back up. Delivery fees are never
     # commissioned — see vendor_allocation_map in services/finance_math.py.
     #
     # Overridable per environment via VENDOR_COMMISSION_RATE. Changing this
     # default does NOT change a deployment that already sets that variable.
-    vendor_commission_rate: float = 0.04
+    vendor_commission_rate: float = 0.001
     vendor_withdrawal_minimum: float = 20.0
 
     # How long after delivery a customer may open a return. Without a limit a
