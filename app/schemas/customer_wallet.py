@@ -21,7 +21,8 @@ class CustomerWalletTopUpCreate(BaseModel):
 class CustomerWalletTopUpSessionRead(BaseModel):
     reference: str
     authorization_url: str
-    access_code: str
+    #: Paystack-only. KutanaPay has no equivalent, so this is absent for its sessions.
+    access_code: str | None = None
     amount: float
     currency: str
     status: str

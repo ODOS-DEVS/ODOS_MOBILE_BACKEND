@@ -35,6 +35,24 @@ from app.schemas.customer_wallet import (
 )
 from app.schemas.order import OrderRead
 from app.services.finance_math import amount_to_subunit, round_money
+from app.services.kutanapay_service import (
+    create_checkout as kutanapay_create_checkout,
+)
+from app.services.kutanapay_service import (
+    ensure_kutanapay_configured,
+)
+from app.services.kutanapay_service import (
+    generate_reference as generate_kutanapay_reference,
+)
+from app.services.kutanapay_service import (
+    get_checkout as kutanapay_get_checkout,
+)
+from app.services.kutanapay_service import (
+    normalize_status as kutanapay_normalize_status,
+)
+from app.services.kutanapay_service import (
+    parse_amount_to_subunit as kutanapay_parse_amount_to_subunit,
+)
 from app.services.paystack_service import initialize_transaction, verify_transaction
 from app.services.push_service import build_push_data, send_expo_push_notification
 from app.services.sms_service import send_wallet_topup_confirmation_sms
@@ -369,6 +387,12 @@ def initialize_wallet_topup(
             detail="Top up amount must be greater than 0.",
         )
     wallet = get_or_create_customer_wallet(db, current_user.id)
+
+    # KutanaPay is the collections provider, so it takes the top-up whenever it
+    # is live. Paystack stays the fallback on the same live-only terms.
+    if settings.wallet_topup_provider == "kutanapay":
+        return _initialize_kutanapay_topup(db, current_user, wallet, payload, amount)
+
     reference = f"odos-wallet-{uuid.uuid4().hex}"
     callback_url = _append_query_params(
         payload.callback_url or "odosmobileexpo://wallet/topup-return",
@@ -450,6 +474,75 @@ def initialize_wallet_topup(
     )
 
 
+def _initialize_kutanapay_topup(
+    db: Session,
+    current_user: User,
+    wallet: CustomerWallet,
+    payload: CustomerWalletTopUpCreate,
+    amount: float,
+) -> CustomerWalletTopUpSessionRead:
+    """Open a KutanaPay checkout for a wallet top-up.
+
+    KutanaPay has no concept of a return URL, so there is nothing to hand it:
+    the client polls `POST /wallet/customer/topups/{reference}/verify` when the
+    shopper comes back, which is the same way the Paystack path settles.
+    """
+    ensure_kutanapay_configured()
+    reference = generate_kutanapay_reference()
+
+    checkout = kutanapay_create_checkout(
+        # Cedis, not pesewas -- the ledger below stores subunits, so the two
+        # are converted separately.
+        amount=amount,
+        reference=reference,
+        customer_email=current_user.email,
+        customer_name=current_user.full_name,
+        # The number the shopper picked for this top-up, not their profile one:
+        # KutanaPay infers the mobile money network from it, so the wrong
+        # number routes the charge to the wrong network and it never arrives.
+        customer_phone=payload.payment_phone or current_user.phone_number,
+        description="ODOS wallet top up",
+    )
+
+    metadata = {
+        "wallet_id": str(wallet.id),
+        "user_id": str(current_user.id),
+        "kind": "customer_wallet_topup",
+        "payment_type": payload.payment_type,
+        "payment_label": payload.payment_label,
+        "payment_network": payload.payment_network,
+        "payment_phone": payload.payment_phone,
+        "payment_last4": payload.payment_last4,
+    }
+
+    topup = CustomerWalletTopUp(
+        wallet_id=wallet.id,
+        user_id=current_user.id,
+        provider="kutanapay",
+        reference=reference,
+        access_code=None,
+        authorization_url=checkout["checkout_url"],
+        amount_subunit=amount_to_subunit(amount),
+        currency=wallet.currency,
+        status="pending",
+        # The gateway's own id, which the status call is keyed on -- not our
+        # `reference`. Reconciliation cannot find the checkout without it.
+        provider_transaction_id=str(checkout["id"]) if checkout.get("id") else None,
+        raw_response={"metadata": metadata},
+    )
+    db.add(topup)
+    db.commit()
+
+    return CustomerWalletTopUpSessionRead(
+        reference=reference,
+        authorization_url=checkout["checkout_url"],
+        access_code=None,
+        amount=amount,
+        currency=wallet.currency,
+        status="pending",
+    )
+
+
 def verify_wallet_topup(
     db: Session,
     current_user: User,
@@ -504,6 +597,80 @@ def verify_wallet_topup(
 
 
 def _reconcile_wallet_topup(db: Session, topup: CustomerWalletTopUp) -> str:
+    """Ask whoever took the money what happened.
+
+    Dispatches on the provider recorded when the session was created: sending a
+    KutanaPay reference to Paystack's verify endpoint returns "transaction not
+    found", which would read as a failure rather than as the wrong question.
+    """
+    if topup.provider == "kutanapay":
+        return _reconcile_kutanapay_topup(db, topup)
+    return _reconcile_paystack_topup(db, topup)
+
+
+def _credit_wallet_for_topup(db: Session, topup: CustomerWalletTopUp, now: datetime) -> str:
+    """Move a confirmed top-up into the balance. Idempotent: re-running will not double-credit."""
+    if topup.status == "paid":
+        db.commit()
+        return topup.status
+
+    wallet = topup.wallet
+    wallet.available_balance = round_money(wallet.available_balance + (topup.amount_subunit / 100))
+    wallet.lifetime_topups = round_money(wallet.lifetime_topups + (topup.amount_subunit / 100))
+    topup.status = "paid"
+    topup.paid_at = now
+    db.add(
+        CustomerWalletTransaction(
+            wallet_id=wallet.id,
+            user_id=wallet.user_id,
+            topup_id=topup.id,
+            kind="topup",
+            title="Wallet top up",
+            amount=topup.amount_subunit / 100,
+            balance_after=wallet.available_balance,
+        )
+    )
+
+    user = db.get(User, topup.user_id)
+    if user:
+        _dispatch_wallet_topup_notifications(db, user=user, topup=topup, wallet=wallet)
+
+    db.commit()
+    return topup.status
+
+
+def _reconcile_kutanapay_topup(db: Session, topup: CustomerWalletTopUp) -> str:
+    """KutanaPay is keyed on its own checkout id, not on our reference."""
+    checkout_id = (topup.provider_transaction_id or "").strip()
+    if not checkout_id:
+        topup.status = "failed"
+        db.commit()
+        return topup.status
+
+    payload = kutanapay_get_checkout(checkout_id)
+    now = datetime.now(UTC)
+    gateway_status = kutanapay_normalize_status(payload.get("status"))
+    topup.raw_response = payload
+    topup.verified_at = now
+    topup.gateway_response = str(payload.get("status") or "")
+
+    if gateway_status != "paid":
+        topup.status = "cancelled" if gateway_status in {"cancelled", "abandoned", "expired"} else "pending"
+        db.commit()
+        return topup.status
+
+    # Trust the gateway's own figure over anything the client sent: a mismatch
+    # means this is not the payment we opened, so it must not credit a balance.
+    amount_subunit = kutanapay_parse_amount_to_subunit(payload.get("amount"))
+    if amount_subunit is not None and amount_subunit != topup.amount_subunit:
+        topup.status = "failed"
+        db.commit()
+        return topup.status
+
+    return _credit_wallet_for_topup(db, topup, now)
+
+
+def _reconcile_paystack_topup(db: Session, topup: CustomerWalletTopUp) -> str:
     verification_response = verify_transaction(topup.reference)
     provider_payload = verification_response.get("data", {})
     provider_status = str(provider_payload.get("status") or "").strip().lower()
@@ -537,38 +704,7 @@ def _reconcile_wallet_topup(db: Session, topup: CustomerWalletTopUp) -> str:
         db.commit()
         return topup.status
 
-    if topup.status == "paid":
-        db.commit()
-        return topup.status
-
-    wallet = topup.wallet
-    wallet.available_balance = round_money(wallet.available_balance + (topup.amount_subunit / 100))
-    wallet.lifetime_topups = round_money(wallet.lifetime_topups + (topup.amount_subunit / 100))
-    topup.status = "paid"
-    topup.paid_at = now
-    db.add(
-        CustomerWalletTransaction(
-            wallet_id=wallet.id,
-            user_id=wallet.user_id,
-            topup_id=topup.id,
-            kind="topup",
-            title="Wallet top up",
-            amount=topup.amount_subunit / 100,
-            balance_after=wallet.available_balance,
-        )
-    )
-
-    user = db.get(User, topup.user_id)
-    if user:
-        _dispatch_wallet_topup_notifications(
-            db,
-            user=user,
-            topup=topup,
-            wallet=wallet,
-        )
-
-    db.commit()
-    return topup.status
+    return _credit_wallet_for_topup(db, topup, now)
 
 
 def reconcile_wallet_topup_by_reference(db: Session, reference: str) -> uuid.UUID | None:

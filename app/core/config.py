@@ -11,6 +11,11 @@ def settings_secret_is_live(secret_key: str) -> bool:
     return (secret_key or "").strip().startswith("sk_live_")
 
 
+#: KutanaPay's sandbox API host. Checkouts created against it never deliver a real mobile money
+#: prompt, so anything that moves money checks the configured host is not this one.
+KUTANAPAY_SANDBOX_BASE_URL = "https://api.kutanapay.com"
+
+
 class Settings(BaseSettings):
     database_url: str
     secret_key: str
@@ -88,7 +93,7 @@ class Settings(BaseSettings):
     # The production host is not known -- KutanaPay publish no developer docs
     # and it is not discoverable. Going live means setting this to whatever
     # they say alongside the live key; neither works without the other.
-    kutanapay_base_url: str = "https://api.kutanapay.com"
+    kutanapay_base_url: str = KUTANAPAY_SANDBOX_BASE_URL
     kutanapay_currency: str = "GHS"
     redis_url: str = ""
     rate_limit_enabled: bool = True
@@ -209,7 +214,7 @@ class Settings(BaseSettings):
         """
         if self.wallet_topups_allow_test_gateway:
             return True
-        return self.paystack_is_live
+        return self.wallet_topup_provider is not None
 
     @property
     def kutanapay_is_configured(self) -> bool:
@@ -217,6 +222,35 @@ class Settings(BaseSettings):
         # checked here -- but without it signatures cannot be verified, which
         # the webhook route refuses on separately.
         return bool(self.kutanapay_api_key.strip())
+
+    @property
+    def kutanapay_is_live(self) -> bool:
+        """KutanaPay is taking real money, rather than sitting on the sandbox.
+
+        There is no mode flag in a KutanaPay key, so the host is the only
+        signal: `KUTANAPAY_SANDBOX_BASE_URL` is the sandbox API, and a checkout
+        created against it never delivers a mobile money prompt -- it waits
+        until it expires. Going live means a different host alongside the live
+        key, so a base URL still on the sandbox default means not live.
+        """
+        if not self.kutanapay_is_configured:
+            return False
+        host = self.kutanapay_base_url.strip().rstrip("/").lower()
+        return bool(host) and host != KUTANAPAY_SANDBOX_BASE_URL
+
+    @property
+    def wallet_topup_provider(self) -> str | None:
+        """Which gateway takes wallet top-ups, or None when none may.
+
+        KutanaPay is the collections provider, so it is preferred when it is
+        live. Paystack remains the fallback, on the same live-only terms it
+        always had -- see `wallet_topups_are_allowed` for why that matters.
+        """
+        if self.kutanapay_is_live:
+            return "kutanapay"
+        if self.paystack_is_live or self.wallet_topups_allow_test_gateway:
+            return "paystack"
+        return None
 
     assistant_enabled: bool = True
     assistant_provider: str = "gemini"
