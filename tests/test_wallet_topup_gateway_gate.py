@@ -17,7 +17,7 @@ from __future__ import annotations
 import pytest
 from fastapi import HTTPException
 
-from app.core.config import KUTANAPAY_SANDBOX_BASE_URL, settings_secret_is_live
+from app.core.config import settings_secret_is_live
 
 
 class TestLiveKeyDetection:
@@ -61,13 +61,10 @@ class TestTopUpGate:
             monkeypatch.setattr(
                 settings, "wallet_topups_allow_test_gateway", allow_test
             )
-            # Hold KutanaPay on the sandbox so these cases isolate the Paystack
-            # arm of the gate -- otherwise a live KutanaPay host in the
-            # environment would satisfy it and the assertions would pass for
-            # the wrong reason.
-            monkeypatch.setattr(
-                settings, "kutanapay_base_url", KUTANAPAY_SANDBOX_BASE_URL
-            )
+            # Hold KutanaPay off so these cases isolate the Paystack arm of
+            # the gate -- otherwise a live KutanaPay in the environment would
+            # satisfy it and the assertions would pass for the wrong reason.
+            monkeypatch.setattr(settings, "kutanapay_live", False)
             return settings
 
         return configure
@@ -181,40 +178,39 @@ class TestTopUpEndpointRefuses:
 
 
 class TestKutanaPayLiveDetection:
-    """KutanaPay keys carry no mode, so the host is the only signal.
+    """Whether KutanaPay is live has to be declared, not inferred.
 
-    A checkout created against the sandbox API never delivers a mobile money
-    prompt -- it sits at "Waiting" until it expires. Crediting a wallet from
-    one would be the same free-money chain the Paystack gate exists to stop,
-    so "not obviously live" has to read as not live here too.
+    A KutanaPay key carries no mode the way Paystack's `sk_live_` prefix does,
+    and the host is not a signal either -- live and sandbox are both served
+    from api.kutanapay.com and differ only by which key is presented. Guessing
+    from the host blocks a working gateway or, worse, credits a real balance
+    from a sandbox one, so the flag has to be set deliberately.
     """
 
     @pytest.fixture
     def cfg(self, monkeypatch):
         from app.core.config import settings
 
-        def configure(*, api_key: str = "kp_abc", base_url: str = KUTANAPAY_SANDBOX_BASE_URL):
+        def configure(*, api_key: str = "kp_abc", live: bool = False):
             monkeypatch.setattr(settings, "kutanapay_api_key", api_key)
-            monkeypatch.setattr(settings, "kutanapay_base_url", base_url)
+            monkeypatch.setattr(settings, "kutanapay_live", live)
             return settings
 
         return configure
 
-    def test_sandbox_host_is_not_live(self, cfg):
-        assert cfg(base_url=KUTANAPAY_SANDBOX_BASE_URL).kutanapay_is_live is False
+    def test_configured_but_not_declared_live_is_not_live(self, cfg):
+        assert cfg(live=False).kutanapay_is_live is False
 
-    def test_sandbox_host_is_matched_despite_trailing_slash_or_case(self, cfg):
-        assert cfg(base_url=KUTANAPAY_SANDBOX_BASE_URL + "/").kutanapay_is_live is False
-        assert cfg(base_url=KUTANAPAY_SANDBOX_BASE_URL.upper()).kutanapay_is_live is False
+    def test_declared_live_is_live(self, cfg):
+        assert cfg(live=True).kutanapay_is_live is True
 
-    def test_a_different_host_is_live(self, cfg):
-        assert cfg(base_url="https://pay.kutanapay.com").kutanapay_is_live is True
+    def test_the_flag_alone_is_not_enough_without_a_key(self, cfg):
+        """A declaration cannot conjure credentials."""
+        assert cfg(api_key="", live=True).kutanapay_is_live is False
 
-    def test_no_key_is_never_live(self, cfg):
-        assert cfg(api_key="", base_url="https://pay.kutanapay.com").kutanapay_is_live is False
+    def test_blank_key_is_not_configured(self, cfg):
+        assert cfg(api_key="   ", live=True).kutanapay_is_live is False
 
-    def test_blank_host_is_not_live(self, cfg):
-        assert cfg(base_url="   ").kutanapay_is_live is False
 
 
 class TestTopUpProviderChoice:
@@ -222,10 +218,10 @@ class TestTopUpProviderChoice:
     def cfg(self, monkeypatch):
         from app.core.config import settings
 
-        def configure(*, paystack: str, kutana_host: str, allow_test: bool = False):
+        def configure(*, paystack: str, kutana_live: bool, allow_test: bool = False):
             monkeypatch.setattr(settings, "paystack_secret_key", paystack)
             monkeypatch.setattr(settings, "kutanapay_api_key", "kp_abc")
-            monkeypatch.setattr(settings, "kutanapay_base_url", kutana_host)
+            monkeypatch.setattr(settings, "kutanapay_live", kutana_live)
             monkeypatch.setattr(settings, "wallet_topups_allow_test_gateway", allow_test)
             return settings
 
@@ -234,23 +230,23 @@ class TestTopUpProviderChoice:
     def test_kutanapay_is_preferred_when_live(self, cfg):
         """It is the collections provider, so it takes the top-up even though
         Paystack is also live and could have."""
-        s = cfg(paystack="sk_live_abc", kutana_host="https://pay.kutanapay.com")
+        s = cfg(paystack="sk_live_abc", kutana_live=True)
         assert s.wallet_topup_provider == "kutanapay"
 
     def test_live_kutanapay_unblocks_topups_on_a_paystack_test_key(self, cfg):
         """The Paystack key is irrelevant once KutanaPay is taking the money --
         this is the case that had top-ups returning 503 in production."""
-        s = cfg(paystack="sk_test_abc", kutana_host="https://pay.kutanapay.com")
+        s = cfg(paystack="sk_test_abc", kutana_live=True)
         assert s.paystack_is_live is False
         assert s.wallet_topup_provider == "kutanapay"
         assert s.wallet_topups_are_allowed is True
 
-    def test_falls_back_to_paystack_when_kutanapay_is_sandboxed(self, cfg):
-        s = cfg(paystack="sk_live_abc", kutana_host=KUTANAPAY_SANDBOX_BASE_URL)
+    def test_falls_back_to_paystack_when_kutanapay_is_not_live(self, cfg):
+        s = cfg(paystack="sk_live_abc", kutana_live=False)
         assert s.wallet_topup_provider == "paystack"
 
     def test_neither_live_blocks_topups(self, cfg):
-        s = cfg(paystack="sk_test_abc", kutana_host=KUTANAPAY_SANDBOX_BASE_URL)
+        s = cfg(paystack="sk_test_abc", kutana_live=False)
         assert s.wallet_topup_provider is None
         assert s.wallet_topups_are_allowed is False
 
@@ -263,7 +259,7 @@ class TestTopUpRouting:
 
         monkeypatch.setattr(ctrl.settings, "paystack_secret_key", "sk_test_abc")
         monkeypatch.setattr(ctrl.settings, "kutanapay_api_key", "kp_abc")
-        monkeypatch.setattr(ctrl.settings, "kutanapay_base_url", "https://pay.kutanapay.com")
+        monkeypatch.setattr(ctrl.settings, "kutanapay_live", True)
         monkeypatch.setattr(ctrl.settings, "wallet_topups_allow_test_gateway", False)
 
         def must_not_run(*_a, **_k):
