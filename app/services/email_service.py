@@ -20,60 +20,169 @@ def _strip_html_to_text(fragment: str) -> str:
     return unescape(_HTML_TAG_PATTERN.sub("", fragment))
 
 
+# --------------------------------------------------------------------------
+# Shared layout
+#
+# One shell for every email ODOS sends, in the storefront's own palette --
+# warm paper, ink text, ember accent -- so the inbox and the site read as the
+# same brand. Tables rather than divs because Outlook still ignores most CSS,
+# and every style inline because email clients strip <style> blocks.
+# --------------------------------------------------------------------------
+
+STOREFRONT_URL = "https://odos.market"
+SUPPORT_EMAIL = "info@odos.market"
+
+_INK = "#16140F"
+_BODY = "#403C33"
+_MUTED = "#6B675E"
+_PAPER = "#FBFAF7"
+_CARD = "#FFFFFF"
+_LINE = "#E8E4DA"
+_EMBER = "#CF4310"
+_EMBER_SOFT = "#FDEBE3"
+_EMBER_LINE = "#F5D0BD"
+
+_FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
+
+
+def _shell(*, preheader: str, body: str, audience_line: str) -> str:
+    """The chrome around every email: preheader, wordmark, card, footer.
+
+    `preheader` is the line inboxes show after the subject -- hidden in the
+    body itself. `audience_line` is the footer's "why you got this".
+    """
+    safe_preheader = escape(preheader)
+    return dedent(
+        f"""\
+        <!doctype html>
+        <html lang="en">
+          <body style="margin:0;padding:0;background:{_PAPER};">
+            <div style="display:none;max-height:0;overflow:hidden;mso-hide:all;">{safe_preheader}&nbsp;&#8199;&#847;&nbsp;&#8199;&#847;&nbsp;&#8199;&#847;&nbsp;&#8199;&#847;&nbsp;&#8199;&#847;&nbsp;&#8199;&#847;&nbsp;&#8199;&#847;&nbsp;&#8199;&#847;</div>
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:{_PAPER};">
+              <tr>
+                <td align="center" style="padding:36px 16px 28px;">
+                  <table role="presentation" width="560" cellpadding="0" cellspacing="0" style="width:100%;max-width:560px;">
+                    <tr>
+                      <td style="background:{_CARD};border:1px solid {_LINE};border-radius:20px;padding:36px 40px 38px;font-family:{_FONT};">
+                        <div style="font-size:21px;line-height:24px;font-weight:800;letter-spacing:-0.3px;color:{_INK};">ODOS<span style="color:{_EMBER};">.</span></div>
+                        <div style="height:1px;background:{_LINE};margin:24px 0 28px;font-size:0;line-height:0;">&nbsp;</div>
+        {body}
+                      </td>
+                    </tr>
+                    <tr>
+                      <td style="padding:22px 12px 0;font-family:{_FONT};font-size:12px;line-height:19px;color:{_MUTED};text-align:center;">
+                        {escape(audience_line)}<br>
+                        <a href="{STOREFRONT_URL}" style="color:{_MUTED};text-decoration:underline;">odos.market</a>
+                        &nbsp;&middot;&nbsp;
+                        <a href="mailto:{SUPPORT_EMAIL}" style="color:{_MUTED};text-decoration:underline;">{SUPPORT_EMAIL}</a>
+                      </td>
+                    </tr>
+                  </table>
+                </td>
+              </tr>
+            </table>
+          </body>
+        </html>"""
+    )
+
+
+def _h1(text_html: str) -> str:
+    return f'<h1 style="margin:0 0 14px;font-size:23px;line-height:30px;font-weight:700;letter-spacing:-0.3px;color:{_INK};">{text_html}</h1>'
+
+
+def _p(text_html: str, *, last: bool = False) -> str:
+    margin = "0" if last else "0 0 16px"
+    return f'<p style="margin:{margin};font-size:15px;line-height:24px;color:{_BODY};">{text_html}</p>'
+
+
+def _fine(text_html: str, *, last: bool = False) -> str:
+    """Small print -- the ignore-this / wasn't-you lines."""
+    margin = "0" if last else "0 0 10px"
+    return f'<p style="margin:{margin};font-size:13px;line-height:21px;color:{_MUTED};">{text_html}</p>'
+
+
+def _code_panel(code: str) -> str:
+    """The one-time code as the centrepiece of the email."""
+    return dedent(
+        f"""\
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:26px 0;">
+          <tr>
+            <td align="center" style="background:{_EMBER_SOFT};border:1px solid {_EMBER_LINE};border-radius:14px;padding:22px 16px 24px;">
+              <div style="font-family:{_FONT};font-size:11px;line-height:16px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:{_EMBER};">One-time code</div>
+              <div style="margin-top:8px;font-family:{_FONT};font-size:38px;line-height:44px;font-weight:700;letter-spacing:9px;color:{_INK};">{escape(code)}</div>
+            </td>
+          </tr>
+        </table>"""
+    )
+
+
+def _cta(label: str, url: str) -> str:
+    return dedent(
+        f"""\
+        <table role="presentation" cellpadding="0" cellspacing="0" style="margin:24px 0 26px;">
+          <tr>
+            <td style="border-radius:999px;background:{_EMBER};">
+              <a href="{escape(url)}" style="display:inline-block;padding:13px 30px;font-family:{_FONT};font-size:15px;line-height:20px;font-weight:600;color:#FFFFFF;text-decoration:none;border-radius:999px;">{escape(label)}</a>
+            </td>
+          </tr>
+        </table>"""
+    )
+
+
+def _detail_panel(rows: list[tuple[str, str]]) -> str:
+    """Key/value facts -- an application summary, an alert's particulars."""
+    tr = "".join(
+        f'<tr>'
+        f'<td style="padding:9px 18px 9px 0;font-family:{_FONT};font-size:13px;line-height:20px;color:{_MUTED};vertical-align:top;white-space:nowrap;">{escape(label)}</td>'
+        f'<td style="padding:9px 0;font-family:{_FONT};font-size:14px;line-height:20px;font-weight:600;color:{_INK};vertical-align:top;">{escape(value)}</td>'
+        f"</tr>"
+        for label, value in rows
+    )
+    return dedent(
+        f"""\
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:22px 0;background:{_PAPER};border:1px solid {_LINE};border-radius:14px;">
+          <tr>
+            <td style="padding:10px 20px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0">{tr}</table>
+            </td>
+          </tr>
+        </table>"""
+    )
+
+
+def _greeting_name(full_name: str | None) -> str:
+    """First name only -- 'Hi Paul', never 'Hi Paul Kwame Agyekum'."""
+    cleaned = (full_name or "").strip()
+    return escape(cleaned.split()[0]) if cleaned else "there"
+
+
 def render_email_verification_email(
     *,
     full_name: str | None,
     code: str,
     expires_in_minutes: int,
 ) -> tuple[str, str, str]:
-    safe_name = escape((full_name or "there").strip() or "there")
-    safe_code = escape(code)
-    subject = "Verify your ODOS email address"
-    html_content = dedent(
-        f"""
-        <html>
-          <body style="margin:0;padding:0;background:#F5F7FA;font-family:Arial,Helvetica,sans-serif;color:#374151;">
-            <div style="max-width:560px;margin:0 auto;padding:32px 16px;">
-              <div style="background:#FFFFFF;border:1px solid #E5E7EB;border-radius:24px;overflow:hidden;">
-                <div style="background:#66797F;padding:24px 28px;">
-                  <div style="font-size:24px;font-weight:700;color:#FFFFFF;letter-spacing:0.5px;">ODOS</div>
-                  <div style="margin-top:8px;font-size:14px;line-height:22px;color:#E9EEF0;">
-                    Your marketplace account is almost ready.
-                  </div>
-                </div>
-                <div style="padding:28px;">
-                  <p style="margin:0 0 16px;font-size:16px;line-height:26px;color:#374151;">
-                    Hi {safe_name},
-                  </p>
-                  <p style="margin:0 0 18px;font-size:15px;line-height:26px;color:#4B5563;">
-                    Use the verification code below to confirm your email address and finish setting up your ODOS account.
-                  </p>
-                  <div style="margin:24px 0;padding:20px 16px;border-radius:18px;background:#F1F3F5;border:1px solid #E5E7EB;text-align:center;">
-                    <div style="font-size:12px;line-height:18px;color:#66797F;letter-spacing:1.8px;text-transform:uppercase;">
-                      Verification code
-                    </div>
-                    <div style="margin-top:10px;font-size:34px;line-height:40px;font-weight:700;letter-spacing:8px;color:#696969;">
-                      {safe_code}
-                    </div>
-                  </div>
-                  <p style="margin:0 0 14px;font-size:14px;line-height:24px;color:#4B5563;">
-                    This code expires in {expires_in_minutes} minutes.
-                  </p>
-                  <p style="margin:0;font-size:14px;line-height:24px;color:#6B7280;">
-                    If you didn’t create an ODOS account, you can safely ignore this email.
-                  </p>
-                </div>
-              </div>
-            </div>
-          </body>
-        </html>
-        """
-    ).strip()
+    name = _greeting_name(full_name)
+    # The code up front in the subject: it shows in the inbox row and in
+    # notification previews, so most people never have to open the email.
+    subject = f"{code} is your ODOS code"
+    body = (
+        _h1("Confirm your email")
+        + _p(f"Hi {name}, enter this code in the app to finish creating your account.")
+        + _code_panel(code)
+        + _fine(f"It expires in {expires_in_minutes} minutes. After that, just request a new one.")
+        + _fine("Didn\u2019t sign up for ODOS? Ignore this email \u2014 nothing happens without the code.", last=True)
+    )
+    html_content = _shell(
+        preheader=f"Your code is {code}. It expires in {expires_in_minutes} minutes.",
+        body=body,
+        audience_line="Sent because this address was used to sign up for ODOS.",
+    )
     text_content = (
-        f"Hi {full_name or 'there'},\n\n"
-        f"Use this verification code to confirm your ODOS email address: {code}\n\n"
-        f"This code expires in {expires_in_minutes} minutes.\n\n"
-        "If you didn't create an ODOS account, you can ignore this email."
+        f"Hi {(full_name or 'there').strip() or 'there'},\n\n"
+        f"Your ODOS code: {code}\n\n"
+        f"Enter it in the app to finish creating your account. It expires in {expires_in_minutes} minutes.\n\n"
+        "Didn't sign up for ODOS? Ignore this email - nothing happens without the code."
     )
     return subject, html_content, text_content
 
@@ -146,54 +255,28 @@ def render_password_reset_email(
     code: str,
     expires_in_minutes: int,
 ) -> tuple[str, str, str]:
-    safe_name = escape((full_name or "there").strip() or "there")
-    safe_code = escape(code)
+    name = _greeting_name(full_name)
     subject = "Reset your ODOS password"
-    html_content = dedent(
-        f"""
-        <html>
-          <body style="margin:0;padding:0;background:#F5F7FA;font-family:Arial,Helvetica,sans-serif;color:#374151;">
-            <div style="max-width:560px;margin:0 auto;padding:32px 16px;">
-              <div style="background:#FFFFFF;border:1px solid #E5E7EB;border-radius:24px;overflow:hidden;">
-                <div style="background:#696969;padding:24px 28px;">
-                  <div style="font-size:24px;font-weight:700;color:#FFFFFF;letter-spacing:0.5px;">ODOS</div>
-                  <div style="margin-top:8px;font-size:14px;line-height:22px;color:#ECECEC;">
-                    Secure password recovery for your account.
-                  </div>
-                </div>
-                <div style="padding:28px;">
-                  <p style="margin:0 0 16px;font-size:16px;line-height:26px;color:#374151;">
-                    Hi {safe_name},
-                  </p>
-                  <p style="margin:0 0 18px;font-size:15px;line-height:26px;color:#4B5563;">
-                    Use the code below to continue resetting your ODOS password.
-                  </p>
-                  <div style="margin:24px 0;padding:20px 16px;border-radius:18px;background:#F1F3F5;border:1px solid #E5E7EB;text-align:center;">
-                    <div style="font-size:12px;line-height:18px;color:#66797F;letter-spacing:1.8px;text-transform:uppercase;">
-                      Password reset code
-                    </div>
-                    <div style="margin-top:10px;font-size:34px;line-height:40px;font-weight:700;letter-spacing:8px;color:#696969;">
-                      {safe_code}
-                    </div>
-                  </div>
-                  <p style="margin:0 0 14px;font-size:14px;line-height:24px;color:#4B5563;">
-                    This code expires in {expires_in_minutes} minutes.
-                  </p>
-                  <p style="margin:0;font-size:14px;line-height:24px;color:#6B7280;">
-                    If you didn’t request this, you can ignore the email and your password will stay the same.
-                  </p>
-                </div>
-              </div>
-            </div>
-          </body>
-        </html>
-        """
-    ).strip()
+    body = (
+        _h1("Reset your password")
+        + _p(f"Hi {name}, someone asked to reset the password for this ODOS account. If that was you, enter this code in the app.")
+        + _code_panel(code)
+        + _fine(f"It expires in {expires_in_minutes} minutes.")
+        + _fine(
+            "If this wasn\u2019t you, you can ignore it \u2014 your password doesn\u2019t change unless the code is used.",
+            last=True,
+        )
+    )
+    html_content = _shell(
+        preheader=f"Your reset code is {code}. It expires in {expires_in_minutes} minutes.",
+        body=body,
+        audience_line="Sent because a password reset was requested for your ODOS account.",
+    )
     text_content = (
-        f"Hi {full_name or 'there'},\n\n"
-        f"Use this code to reset your ODOS password: {code}\n\n"
-        f"This code expires in {expires_in_minutes} minutes.\n\n"
-        "If you didn't request this, you can ignore this email."
+        f"Hi {(full_name or 'there').strip() or 'there'},\n\n"
+        f"Your ODOS password reset code: {code}\n\n"
+        f"It expires in {expires_in_minutes} minutes.\n\n"
+        "If this wasn't you, ignore this email - your password doesn't change unless the code is used."
     )
     return subject, html_content, text_content
 
@@ -222,46 +305,25 @@ def render_email_verified_success_email(
     *,
     full_name: str | None,
 ) -> tuple[str, str, str]:
-    safe_name = escape((full_name or "there").strip() or "there")
-    subject = "Your ODOS email has been verified"
-    html_content = dedent(
-        f"""
-        <html>
-          <body style="margin:0;padding:0;background:#F5F7FA;font-family:Arial,Helvetica,sans-serif;color:#374151;">
-            <div style="max-width:560px;margin:0 auto;padding:32px 16px;">
-              <div style="background:#FFFFFF;border:1px solid #E5E7EB;border-radius:24px;overflow:hidden;">
-                <div style="background:#66797F;padding:24px 28px;">
-                  <div style="font-size:24px;font-weight:700;color:#FFFFFF;letter-spacing:0.5px;">ODOS</div>
-                  <div style="margin-top:8px;font-size:14px;line-height:22px;color:#E9EEF0;">
-                    Your account is ready to go.
-                  </div>
-                </div>
-                <div style="padding:28px;">
-                  <p style="margin:0 0 16px;font-size:16px;line-height:26px;color:#374151;">
-                    Hi {safe_name},
-                  </p>
-                  <p style="margin:0 0 18px;font-size:15px;line-height:26px;color:#4B5563;">
-                    Your email address has been verified successfully. You can now continue exploring ODOS with full access to your account.
-                  </p>
-                  <div style="margin:24px 0;padding:18px 16px;border-radius:18px;background:#F1F3F5;border:1px solid #E5E7EB;text-align:center;">
-                    <div style="font-size:16px;line-height:24px;font-weight:700;color:#696969;">
-                      Verification complete
-                    </div>
-                  </div>
-                  <p style="margin:0;font-size:14px;line-height:24px;color:#6B7280;">
-                    If you did not complete this verification, please secure your account immediately.
-                  </p>
-                </div>
-              </div>
-            </div>
-          </body>
-        </html>
-        """
-    ).strip()
+    name = _greeting_name(full_name)
+    subject = "Your email is verified"
+    body = (
+        _h1("You\u2019re all set")
+        + _p(f"Hi {name}, your email is confirmed and your ODOS account is ready.")
+        + _p("Markets, stores and deals from all over Ghana are waiting \u2014 and everything you order is delivered to your door.")
+        + _cta("Start shopping", STOREFRONT_URL)
+        + _fine("If you didn\u2019t verify an ODOS account just now, write to us \u2014 this address may have been used by someone else.", last=True)
+    )
+    html_content = _shell(
+        preheader="Your ODOS account is ready.",
+        body=body,
+        audience_line="Sent to confirm a change on your ODOS account.",
+    )
     text_content = (
-        f"Hi {full_name or 'there'},\n\n"
-        "Your ODOS email address has been verified successfully.\n\n"
-        "If you did not complete this verification, please secure your account immediately."
+        f"Hi {(full_name or 'there').strip() or 'there'},\n\n"
+        "Your email is confirmed and your ODOS account is ready.\n\n"
+        f"Start shopping: {STOREFRONT_URL}\n\n"
+        f"If you didn't verify an ODOS account just now, write to {SUPPORT_EMAIL}."
     )
     return subject, html_content, text_content
 
@@ -287,46 +349,27 @@ def render_password_changed_success_email(
     *,
     full_name: str | None,
 ) -> tuple[str, str, str]:
-    safe_name = escape((full_name or "there").strip() or "there")
+    name = _greeting_name(full_name)
     subject = "Your ODOS password was changed"
-    html_content = dedent(
-        f"""
-        <html>
-          <body style="margin:0;padding:0;background:#F5F7FA;font-family:Arial,Helvetica,sans-serif;color:#374151;">
-            <div style="max-width:560px;margin:0 auto;padding:32px 16px;">
-              <div style="background:#FFFFFF;border:1px solid #E5E7EB;border-radius:24px;overflow:hidden;">
-                <div style="background:#696969;padding:24px 28px;">
-                  <div style="font-size:24px;font-weight:700;color:#FFFFFF;letter-spacing:0.5px;">ODOS</div>
-                  <div style="margin-top:8px;font-size:14px;line-height:22px;color:#ECECEC;">
-                    Your account security has been updated.
-                  </div>
-                </div>
-                <div style="padding:28px;">
-                  <p style="margin:0 0 16px;font-size:16px;line-height:26px;color:#374151;">
-                    Hi {safe_name},
-                  </p>
-                  <p style="margin:0 0 18px;font-size:15px;line-height:26px;color:#4B5563;">
-                    Your ODOS password was changed successfully.
-                  </p>
-                  <div style="margin:24px 0;padding:18px 16px;border-radius:18px;background:#F1F3F5;border:1px solid #E5E7EB;text-align:center;">
-                    <div style="font-size:16px;line-height:24px;font-weight:700;color:#696969;">
-                      Password updated
-                    </div>
-                  </div>
-                  <p style="margin:0;font-size:14px;line-height:24px;color:#6B7280;">
-                    If you did not make this change, reset your password again right away and contact support.
-                  </p>
-                </div>
-              </div>
-            </div>
-          </body>
-        </html>
-        """
-    ).strip()
+    body = (
+        _h1("Password changed")
+        + _p(f"Hi {name}, the password on your ODOS account was just changed. If that was you, you\u2019re done \u2014 nothing else to do.")
+        + _p(
+            f'If it <strong style="color:{_INK};">wasn\u2019t</strong> you, someone else may have your old password. '
+            f'Reset it from the sign-in screen straight away, then write to '
+            f'<a href="mailto:{SUPPORT_EMAIL}" style="color:{_EMBER};font-weight:600;text-decoration:none;">{SUPPORT_EMAIL}</a> so we can check the account with you.'
+        )
+        + _fine("We send this note on every password change, every time. That\u2019s the point of it.", last=True)
+    )
+    html_content = _shell(
+        preheader="If this was you, you\u2019re done. If not, reset your password now.",
+        body=body,
+        audience_line="Sent to confirm a change on your ODOS account.",
+    )
     text_content = (
-        f"Hi {full_name or 'there'},\n\n"
-        "Your ODOS password was changed successfully.\n\n"
-        "If you did not make this change, reset your password again right away and contact support."
+        f"Hi {(full_name or 'there').strip() or 'there'},\n\n"
+        "The password on your ODOS account was just changed. If that was you, you're done.\n\n"
+        f"If it wasn't you, reset your password from the sign-in screen straight away, then write to {SUPPORT_EMAIL} so we can check the account with you."
     )
     return subject, html_content, text_content
 
@@ -355,62 +398,35 @@ def render_vendor_application_pending_email(
     business_category: str,
     submitted_at_label: str,
 ) -> tuple[str, str, str]:
-    safe_name = escape((full_name or "there").strip() or "there")
-    safe_store_name = escape(store_name.strip() or "your store")
-    safe_category = escape(business_category.strip() or "your category")
-    safe_submitted_at = escape(submitted_at_label.strip())
-    subject = "Your ODOS vendor application is pending review"
-    html_content = dedent(
-        f"""
-        <html>
-          <body style="margin:0;padding:0;background:#F5F7FA;font-family:Arial,Helvetica,sans-serif;color:#374151;">
-            <div style="max-width:560px;margin:0 auto;padding:32px 16px;">
-              <div style="background:#FFFFFF;border:1px solid #E5E7EB;border-radius:24px;overflow:hidden;">
-                <div style="background:#66797F;padding:24px 28px;">
-                  <div style="font-size:24px;font-weight:700;color:#FFFFFF;letter-spacing:0.5px;">ODOS</div>
-                  <div style="margin-top:8px;font-size:14px;line-height:22px;color:#E9EEF0;">
-                    We’ve received your vendor application and it is now under review.
-                  </div>
-                </div>
-                <div style="padding:28px;">
-                  <p style="margin:0 0 16px;font-size:16px;line-height:26px;color:#374151;">
-                    Hi {safe_name},
-                  </p>
-                  <p style="margin:0 0 18px;font-size:15px;line-height:26px;color:#4B5563;">
-                    Your ODOS vendor application for <strong>{safe_store_name}</strong> has been submitted successfully and is currently pending review.
-                  </p>
-                  <div style="margin:24px 0;padding:20px 18px;border-radius:18px;background:#F1F3F5;border:1px solid #E5E7EB;">
-                    <div style="font-size:12px;line-height:18px;color:#66797F;letter-spacing:1.8px;text-transform:uppercase;">
-                      Application summary
-                    </div>
-                    <div style="margin-top:12px;font-size:14px;line-height:24px;color:#374151;">
-                      <div><strong>Store name:</strong> {safe_store_name}</div>
-                      <div><strong>Category:</strong> {safe_category}</div>
-                      <div><strong>Submitted:</strong> {safe_submitted_at}</div>
-                      <div><strong>Status:</strong> Pending review</div>
-                    </div>
-                  </div>
-                  <p style="margin:0 0 14px;font-size:14px;line-height:24px;color:#4B5563;">
-                    Our team will review your store details and notify you once a decision has been made. If we need anything else, we’ll reach out directly.
-                  </p>
-                  <p style="margin:0;font-size:14px;line-height:24px;color:#6B7280;">
-                    Thank you for choosing ODOS to grow your business.
-                  </p>
-                </div>
-              </div>
-            </div>
-          </body>
-        </html>
-        """
-    ).strip()
+    name = _greeting_name(full_name)
+    clean_store = store_name.strip() or "your store"
+    subject = f"We\u2019ve received your application for {clean_store}"
+    body = (
+        _h1("Application received")
+        + _p(f"Hi {name}, thanks for applying to sell on ODOS \u2014 here\u2019s what you sent us.")
+        + _detail_panel(
+            [
+                ("Store", clean_store),
+                ("Category", business_category.strip() or "\u2014"),
+                ("Submitted", submitted_at_label),
+            ]
+        )
+        + _p("A person on our team reviews every store \u2014 we check each application by hand rather than approving automatically. You\u2019ll get an email from us either way, usually within a couple of days.")
+        + _fine("Nothing to do in the meantime. If any of the details above are wrong, just reply to this email.", last=True)
+    )
+    html_content = _shell(
+        preheader=f"We\u2019re reviewing {clean_store} \u2014 you\u2019ll hear from us soon.",
+        body=body,
+        audience_line="Sent because you applied to sell on ODOS.",
+    )
     text_content = (
-        f"Hi {full_name or 'there'},\n\n"
-        f"Your ODOS vendor application for {store_name} has been submitted successfully and is now pending review.\n\n"
+        f"Hi {(full_name or 'there').strip() or 'there'},\n\n"
+        f"Thanks for applying to sell on ODOS.\n\n"
+        f"Store: {clean_store}\n"
         f"Category: {business_category}\n"
-        f"Submitted: {submitted_at_label}\n"
-        "Status: Pending review\n\n"
-        "Our team will review your store details and notify you once a decision has been made.\n\n"
-        "Thank you for choosing ODOS."
+        f"Submitted: {submitted_at_label}\n\n"
+        "A person on our team reviews every store. You'll get an email either way, usually within a couple of days.\n\n"
+        "If any of the details above are wrong, just reply to this email."
     )
     return subject, html_content, text_content
 
@@ -443,57 +459,31 @@ def render_vendor_application_approved_email(
     full_name: str | None,
     store_name: str,
 ) -> tuple[str, str, str]:
-    safe_name = escape((full_name or "there").strip() or "there")
-    safe_store_name = escape(store_name.strip() or "your store")
-    subject = "Your ODOS vendor application has been approved"
-    html_content = dedent(
-        f"""
-        <html>
-          <body style="margin:0;padding:0;background:#F5F7FA;font-family:Arial,Helvetica,sans-serif;color:#374151;">
-            <div style="max-width:560px;margin:0 auto;padding:32px 16px;">
-              <div style="background:#FFFFFF;border:1px solid #E5E7EB;border-radius:24px;overflow:hidden;">
-                <div style="background:#696969;padding:24px 28px;">
-                  <div style="font-size:24px;font-weight:700;color:#FFFFFF;letter-spacing:0.5px;">ODOS</div>
-                  <div style="margin-top:8px;font-size:14px;line-height:22px;color:#ECECEC;">
-                    Your store is approved and ready for vendor management.
-                  </div>
-                </div>
-                <div style="padding:28px;">
-                  <p style="margin:0 0 16px;font-size:16px;line-height:26px;color:#374151;">
-                    Hi {safe_name},
-                  </p>
-                  <p style="margin:0 0 18px;font-size:15px;line-height:26px;color:#4B5563;">
-                    Great news. Your ODOS vendor application for <strong>{safe_store_name}</strong> has been approved.
-                  </p>
-                  <div style="margin:24px 0;padding:20px 18px;border-radius:18px;background:#F1F3F5;border:1px solid #E5E7EB;">
-                    <div style="font-size:12px;line-height:18px;color:#66797F;letter-spacing:1.8px;text-transform:uppercase;">
-                      What you can do now
-                    </div>
-                    <div style="margin-top:12px;font-size:14px;line-height:24px;color:#374151;">
-                      <div>• Sign in to your vendor dashboard</div>
-                      <div>• Add and manage products</div>
-                      <div>• Update your store profile</div>
-                      <div>• Start receiving and fulfilling orders</div>
-                    </div>
-                  </div>
-                  <p style="margin:0 0 14px;font-size:14px;line-height:24px;color:#4B5563;">
-                    Your store can now be managed inside ODOS, and approved products will be able to go live for shoppers.
-                  </p>
-                  <p style="margin:0;font-size:14px;line-height:24px;color:#6B7280;">
-                    Welcome to the ODOS vendor community.
-                  </p>
-                </div>
-              </div>
-            </div>
-          </body>
-        </html>
-        """
-    ).strip()
+    name = _greeting_name(full_name)
+    clean_store = store_name.strip() or "your store"
+    safe_store = escape(clean_store)
+    subject = f"{clean_store} is approved \u2014 welcome to ODOS"
+    body = (
+        _h1(f"{safe_store} is live")
+        + _p(f"Hi {name}, we\u2019ve reviewed your application and approved it. Your Seller Center is open from today.")
+        + _p("Add your products, set stock and prices, and you\u2019re trading \u2014 orders, chats with shoppers, and your earnings all live in one place.")
+        + _cta("Open your Seller Center", f"{STOREFRONT_URL}/seller")
+        + _fine(
+            f'Questions about getting set up? Reply to this email or write to <a href="mailto:{SUPPORT_EMAIL}" style="color:{_MUTED};">{SUPPORT_EMAIL}</a> \u2014 a real person answers.',
+            last=True,
+        )
+    )
+    html_content = _shell(
+        preheader="Your Seller Center is open \u2014 add products and start taking orders.",
+        body=body,
+        audience_line="Sent because you applied to sell on ODOS.",
+    )
     text_content = (
-        f"Hi {full_name or 'there'},\n\n"
-        f"Your ODOS vendor application for {store_name} has been approved.\n\n"
-        "You can now sign in to your vendor dashboard, add products, update your store profile, and start receiving orders.\n\n"
-        "Welcome to the ODOS vendor community."
+        f"Hi {(full_name or 'there').strip() or 'there'},\n\n"
+        f"{clean_store} has been approved. Your Seller Center is open from today:\n\n"
+        f"{STOREFRONT_URL}/seller\n\n"
+        "Add your products, set stock and prices, and you're trading - orders, chats with shoppers, and your earnings all live in one place.\n\n"
+        f"Questions? Reply to this email or write to {SUPPORT_EMAIL}."
     )
     return subject, html_content, text_content
 
@@ -526,63 +516,24 @@ def _render_admin_alert_email(
     cta_label: str,
     cta_url: str | None,
 ) -> tuple[str, str]:
-    """Shared shell for admin-facing "this needs your attention" alerts —
-    vendor applications, withdrawal requests, voucher review, etc. Returns
-    (html_content, text_content); callers own their own subject line.
+    """Internal alerts to the ODOS team: something needs a decision.
 
-    `heading` is caller-built HTML (e.g. with <strong> around already-escaped
-    values), not a plain string — it must NOT be escaped again here, or the
-    emphasis tags render as literal text instead of bold."""
-    safe_heading = heading
-    safe_eyebrow = escape(eyebrow)
-    rows_html = "".join(
-        f'<div style="margin-top:8px;"><strong>{escape(label)}:</strong> {escape(value)}</div>'
-        for label, value in summary_rows
+    `heading` arrives as an HTML fragment (callers bold the key names), so it
+    is trusted here and escaped by the callers.
+    """
+    body = (
+        f'<div style="font-family:{_FONT};font-size:11px;line-height:16px;font-weight:700;letter-spacing:2px;text-transform:uppercase;color:{_EMBER};margin-bottom:10px;">{escape(eyebrow)}</div>'
+        + f'<h1 style="margin:0 0 6px;font-size:19px;line-height:27px;font-weight:600;letter-spacing:-0.2px;color:{_INK};">{heading}</h1>'
+        + _detail_panel(summary_rows)
+        + (_cta(cta_label, cta_url) if cta_url else "")
+        + _fine("Internal notification for the ODOS team.", last=True)
     )
-    cta_html = (
-        f"""
-        <div style="margin:26px 0 4px;text-align:center;">
-          <a href="{escape(cta_url)}" style="display:inline-block;padding:13px 28px;border-radius:999px;background:#696969;color:#FFFFFF;font-size:14px;font-weight:700;text-decoration:none;">
-            {escape(cta_label)}
-          </a>
-        </div>
-        """
-        if cta_url
-        else ""
+    html_content = _shell(
+        preheader=_strip_html_to_text(heading),
+        body=body,
+        audience_line="Sent to ODOS staff. Not a customer email.",
     )
-    html_content = dedent(
-        f"""
-        <html>
-          <body style="margin:0;padding:0;background:#F5F7FA;font-family:Arial,Helvetica,sans-serif;color:#374151;">
-            <div style="max-width:560px;margin:0 auto;padding:32px 16px;">
-              <div style="background:#FFFFFF;border:1px solid #E5E7EB;border-radius:24px;overflow:hidden;">
-                <div style="background:#0F172A;padding:24px 28px;">
-                  <div style="font-size:22px;font-weight:700;color:#FFFFFF;letter-spacing:0.5px;">ODOS Admin</div>
-                  <div style="margin-top:8px;font-size:13px;line-height:20px;color:#CBD5E1;text-transform:uppercase;letter-spacing:1px;">
-                    {safe_eyebrow}
-                  </div>
-                </div>
-                <div style="padding:28px;">
-                  <p style="margin:0 0 18px;font-size:16px;line-height:26px;color:#374151;">
-                    {safe_heading}
-                  </p>
-                  <div style="margin:20px 0;padding:20px 18px;border-radius:18px;background:#F1F3F5;border:1px solid #E5E7EB;">
-                    <div style="font-size:12px;line-height:18px;color:#66797F;letter-spacing:1.8px;text-transform:uppercase;">
-                      {escape(summary_title)}
-                    </div>
-                    <div style="margin-top:4px;font-size:14px;line-height:22px;color:#374151;">
-                      {rows_html}
-                    </div>
-                  </div>
-                  {cta_html}
-                </div>
-              </div>
-            </div>
-          </body>
-        </html>
-        """
-    ).strip()
-    text_lines = [_strip_html_to_text(heading), "", summary_title + ":"]
+    text_lines = [_strip_html_to_text(heading), "", f"{summary_title}:"]
     text_lines.extend(f"{label}: {value}" for label, value in summary_rows)
     if cta_url:
         text_lines.extend(["", f"{cta_label}: {cta_url}"])
