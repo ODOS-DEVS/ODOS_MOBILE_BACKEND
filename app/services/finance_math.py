@@ -81,6 +81,38 @@ def _apportion_discount(
     return {vendor_id: pesewas / 100 for vendor_id, pesewas in shares.items()}
 
 
+def vendor_funded_discount(order: Order) -> float:
+    """The part of the order's discount that comes off vendor gross.
+
+    Vouchers are vendor-funded under the standing policy. Platform-funded
+    lines -- today only the loyalty tier discount -- are ODOS's own cost:
+    the customer pays less, the vendor is settled as if the line did not
+    exist, and the difference comes out of ODOS's side of the ledger.
+
+    Derived from the promotion breakdown stored on the order at creation,
+    so settlement months later cannot drift from what checkout computed.
+    Orders from before the breakdown existed (or with none recorded) treat
+    the whole discount as vendor-funded, which is exactly what the old code
+    assumed everywhere.
+    """
+    total = float(order.discount_amount or 0)
+    raw = getattr(order, "promotion_breakdown", None)
+    breakdown = raw if isinstance(raw, dict) else None
+    if not breakdown:
+        return total
+    applied = breakdown.get("applied_promotions")
+    if not isinstance(applied, list):
+        return total
+    platform = 0.0
+    for line in applied:
+        if isinstance(line, dict) and line.get("funding") == "platform":
+            try:
+                platform += float(line.get("discount_amount") or 0)
+            except (TypeError, ValueError):
+                continue
+    return max(0.0, round_money(total - platform))
+
+
 def vendor_allocation_map(
     order: Order,
     *,
@@ -102,7 +134,7 @@ def vendor_allocation_map(
         else float(commission_rate)
     )
 
-    discount_pool = float(order.discount_amount or 0)
+    discount_pool = vendor_funded_discount(order)
     if voucher_store_id:
         eligible_subtotal = sum(
             float(item.line_total)
@@ -162,10 +194,11 @@ def return_reversal_breakdown(
         else float(commission_rate)
     )
     line_discount_share = 0.0
-    if order.subtotal_amount > 0 and order.discount_amount > 0:
+    funded_discount = vendor_funded_discount(order)
+    if order.subtotal_amount > 0 and funded_discount > 0:
         line_discount_share = (
             (float(order_item.line_total) / float(order.subtotal_amount))
-            * float(order.discount_amount)
+            * funded_discount
         )
 
     gross_line_amount = max(float(order_item.line_total) - line_discount_share, 0.0)

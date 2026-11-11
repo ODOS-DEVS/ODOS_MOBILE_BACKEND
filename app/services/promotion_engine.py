@@ -12,6 +12,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.models import User, Voucher, VoucherAssignment
 from app.schemas.order import OrderItemCreate
 from app.services.finance_math import round_money
@@ -47,6 +48,11 @@ class AppliedPromotion:
     priority: int
     stackable: bool
     eligible_subtotal_amount: float = 0.0
+    #: Who absorbs this line. "vendor" is the standing policy for vouchers --
+    #: the discount comes off the vendor's gross in vendor_allocation_map.
+    #: "platform" lines (the loyalty tier discount) are ODOS's own cost and
+    #: must leave vendor settlement untouched.
+    funding: str = "vendor"
 
 
 @dataclass(slots=True)
@@ -85,6 +91,7 @@ class PromotionCalculationResult:
                     "discount_amount": promo.discount_amount,
                     "priority": promo.priority,
                     "stackable": promo.stackable,
+                    "funding": promo.funding,
                 }
                 for promo in self.applied_promotions
             ],
@@ -288,6 +295,63 @@ def _merge_quotes(
     )
 
 
+def _apply_loyalty_tier_discount(
+    db: Session,
+    user: User,
+    result: PromotionCalculationResult,
+) -> None:
+    """Append the member's tier discount as a platform-funded line.
+
+    The loyalty screen has advertised "5% off" / "10% off" per tier since
+    launch; this is where the promise is finally kept. It stacks after every
+    voucher (a benefit, not a competing promotion), applies to what the
+    vouchers left of the subtotal so the two never discount the same cedi
+    twice, and is capped per order. Funding is "platform": ODOS absorbs it,
+    and vendor settlement is computed as if this line did not exist.
+
+    Off by default -- settings.loyalty_tier_discounts_enabled is the business
+    switch, because every percent here is ODOS margin.
+    """
+    if not settings.loyalty_tier_discounts_enabled:
+        return
+
+    from app.services.loyalty_service import LOYALTY_TIERS, get_or_create_loyalty_account
+
+    account = get_or_create_loyalty_account(db, user)
+    tier = LOYALTY_TIERS.get(account.tier_level)
+    percent = float(tier["discount_percent"]) if tier else 0.0
+    if percent <= 0:
+        return
+
+    remaining_subtotal = max(0.0, result.subtotal_amount - sum(
+        promo.discount_amount
+        for promo in result.applied_promotions
+        if promo.discount_type != "free_shipping"
+    ))
+    amount = round_money(
+        min(remaining_subtotal * (percent / 100.0), float(settings.loyalty_tier_discount_cap))
+    )
+    if amount <= 0:
+        return
+
+    result.applied_promotions.append(
+        AppliedPromotion(
+            voucher_id="",
+            code=f"TIER-{account.tier_level.upper()}",
+            title=f"{account.tier_level.capitalize()} member {percent:g}% off",
+            promotion_type="loyalty_tier",
+            discount_type="percent",
+            discount_amount=amount,
+            priority=-100,
+            stackable=True,
+            eligible_subtotal_amount=remaining_subtotal,
+            funding="platform",
+        )
+    )
+    result.discount_amount = round_money(result.discount_amount + amount)
+    result.total_amount = round_money(max(0.0, result.total_amount - amount))
+
+
 def calculate_best_discount(
     db: Session,
     user: User,
@@ -348,17 +412,20 @@ def calculate_best_discount(
                 seen_ids.add(str(voucher.id))
 
     if not candidates:
-        return PromotionCalculationResult(
+        result = PromotionCalculationResult(
             subtotal_amount=base_subtotal,
             shipping_amount=round_money(shipping_amount),
             discount_amount=0.0,
             total_amount=round_money(base_subtotal + shipping_amount),
             rejected_promotions=rejected,
         )
+        _apply_loyalty_tier_discount(db, user, result)
+        return result
 
     selected = _resolve_promotion_set(candidates)
     result = _merge_quotes(base_subtotal, shipping_amount, selected)
     result.rejected_promotions = rejected
+    _apply_loyalty_tier_discount(db, user, result)
     return result
 
 

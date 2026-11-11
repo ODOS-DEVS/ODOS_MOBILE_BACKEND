@@ -158,3 +158,54 @@ def test_commission_defaults_to_point_one_percent_in_allocation():
     assert allocation["gross_amount"] == pytest.approx(200.0)
     assert allocation["commission_amount"] == pytest.approx(0.2)
     assert allocation["net_amount"] == pytest.approx(199.8)
+
+
+# --- platform-funded promotion lines (the loyalty tier discount) ---
+#
+# Vouchers come off vendor gross; the loyalty tier discount is ODOS's own
+# promise and must not. The split is derived from the promotion breakdown the
+# order stored at creation, so settlement can never drift from checkout.
+
+from app.services.finance_math import vendor_funded_discount
+
+
+def breakdown_with(lines):
+    return {"applied_promotions": lines}
+
+
+def test_platform_funded_lines_are_excluded_from_the_vendor_pool():
+    order = build_order([(uuid.uuid4(), 200.0, "s1")], discount=30.0)
+    order.promotion_breakdown = breakdown_with(
+        [
+            {"code": "SAVE20", "funding": "vendor", "discount_amount": 20.0},
+            {"code": "TIER-GOLD", "funding": "platform", "discount_amount": 10.0},
+        ]
+    )
+    assert vendor_funded_discount(order) == 20.0
+
+
+def test_an_all_platform_discount_leaves_vendor_gross_untouched():
+    vendor = uuid.uuid4()
+    order = build_order([(vendor, 200.0, "s1")], discount=10.0)
+    order.promotion_breakdown = breakdown_with(
+        [{"code": "TIER-SILVER", "funding": "platform", "discount_amount": 10.0}]
+    )
+    allocation = vendor_allocation_map(order, commission_rate=0.10)[vendor]
+    # The customer paid 190 for the goods, but the vendor is settled on 200:
+    # the 10 is ODOS's loyalty cost, not the vendor's.
+    assert allocation["gross_amount"] == 200.0
+    assert allocation["discount_share"] == 0.0
+
+
+def test_orders_without_a_breakdown_treat_the_whole_discount_as_vendor_funded():
+    order = build_order([(uuid.uuid4(), 100.0, "s1")], discount=15.0)
+    # Pre-breakdown orders, and any order where recording failed.
+    assert vendor_funded_discount(order) == 15.0
+
+
+def test_malformed_breakdown_lines_do_not_crash_settlement():
+    order = build_order([(uuid.uuid4(), 100.0, "s1")], discount=15.0)
+    order.promotion_breakdown = breakdown_with(
+        [None, "junk", {"funding": "platform", "discount_amount": "not-a-number"}, {"funding": "platform", "discount_amount": 5}]
+    )
+    assert vendor_funded_discount(order) == 10.0

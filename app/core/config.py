@@ -50,6 +50,18 @@ class Settings(BaseSettings):
     vendor_commission_rate: float = 0.001
     vendor_withdrawal_minimum: float = 20.0
 
+    # Loyalty tier discounts (silver 5%, gold 10%) are ADVERTISED in the app's
+    # loyalty screen but have never been applied to an order. Applying them
+    # costs ODOS real margin on every eligible order, so turning them on is a
+    # business decision, not a code default: set LOYALTY_TIER_DISCOUNTS_ENABLED
+    # =true when that decision is made. The discount is platform-funded --
+    # vendor settlement is computed as if it did not exist (see
+    # finance_math.vendor_funded_discount).
+    loyalty_tier_discounts_enabled: bool = False
+    # Per-order ceiling on the tier discount, in GHS. A gold customer placing a
+    # GHS 5,000 order would otherwise take GHS 500 off a single basket.
+    loyalty_tier_discount_cap: float = 50.0
+
     # How long after delivery a customer may open a return. Without a limit a
     # request can arrive a year later, by which point the goods, the vendor's
     # settlement and any evidence are long gone.
