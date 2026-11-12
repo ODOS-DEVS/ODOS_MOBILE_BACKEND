@@ -1,6 +1,7 @@
 from datetime import UTC, datetime, timedelta
 from typing import TypedDict
 
+from fastapi import HTTPException, status
 from sqlalchemy import Select, false, func, or_, select
 from sqlalchemy.orm import Session
 
@@ -8,10 +9,12 @@ from app.models import (
     Category,
     FlashSaleEvent,
     FlashSaleEventProduct,
+    FlashSaleReminder,
     Market,
     Product,
     PromoBanner,
     Store,
+    User,
 )
 from app.schemas.catalog import FlashSaleEventRead, ProductRead
 from app.services.delivery_service import get_delivery_config
@@ -507,6 +510,95 @@ def list_active_flash_sale_events(db: Session) -> list[FlashSaleEventRead]:
             )
         )
     return payload
+
+
+def list_upcoming_flash_sale_events(db: Session) -> list[FlashSaleEventRead]:
+    """Scheduled-but-not-started events, soonest first.
+
+    This is what "notify me" hangs off: an event with no future start
+    (starts_at null means live-on-activation) never appears here.
+    """
+    now = datetime.now(UTC)
+    events = [
+        event
+        for event in db.scalars(
+            select(FlashSaleEvent)
+            .where(FlashSaleEvent.is_active.is_(True), FlashSaleEvent.starts_at.is_not(None))
+            .order_by(FlashSaleEvent.starts_at.asc())
+        ).all()
+        if event.starts_at and event.starts_at > now and event.ends_at > now
+    ]
+    if not events:
+        return []
+    counts = dict(
+        db.execute(
+            select(FlashSaleEventProduct.event_id, func.count())
+            .where(FlashSaleEventProduct.event_id.in_([event.id for event in events]))
+            .group_by(FlashSaleEventProduct.event_id)
+        ).all()
+    )
+    return [
+        FlashSaleEventRead(
+            id=event.id,
+            slug=event.slug,
+            title=event.title,
+            subtitle=event.subtitle,
+            image_url=event.image_url,
+            starts_at=event.starts_at,
+            ends_at=event.ends_at,
+            sort_order=event.sort_order,
+            product_count=int(counts.get(event.id, 0)),
+            seconds_remaining=max(int((event.ends_at - datetime.now(UTC)).total_seconds()), 0),
+        )
+        for event in events
+    ]
+
+
+def set_flash_sale_reminder(db: Session, user: User, event_id: str) -> dict[str, bool]:
+    """Idempotent: asking twice is one reminder."""
+    event = db.get(FlashSaleEvent, event_id)
+    now = datetime.now(UTC)
+    if not event or not event.is_active or event.ends_at <= now:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="That flash sale isn't available.",
+        )
+    if not event.starts_at or event.starts_at <= now:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This flash sale has already started.",
+        )
+    existing = db.scalar(
+        select(FlashSaleReminder).where(
+            FlashSaleReminder.event_id == event.id,
+            FlashSaleReminder.user_id == user.id,
+        )
+    )
+    if not existing:
+        db.add(FlashSaleReminder(event_id=event.id, user_id=user.id))
+        db.commit()
+    return {"reminder_set": True}
+
+
+def unset_flash_sale_reminder(db: Session, user: User, event_id: str) -> dict[str, bool]:
+    existing = db.scalar(
+        select(FlashSaleReminder).where(
+            FlashSaleReminder.event_id == event_id,
+            FlashSaleReminder.user_id == user.id,
+        )
+    )
+    if existing:
+        db.delete(existing)
+        db.commit()
+    return {"reminder_set": False}
+
+
+def list_my_flash_sale_reminders(db: Session, user: User) -> list[str]:
+    """Event ids the user has reminders on — enough for a client to light buttons up."""
+    rows = db.scalars(
+        select(FlashSaleReminder.event_id).where(FlashSaleReminder.user_id == user.id)
+    ).all()
+    return [str(event_id) for event_id in rows]
 
 
 def list_flash_sale_event_products(db: Session, slug: str) -> list[ProductRead]:

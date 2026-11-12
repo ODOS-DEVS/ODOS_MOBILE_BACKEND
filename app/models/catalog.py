@@ -285,6 +285,40 @@ class FlashSaleEventProduct(Base):
     units_sold: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
 
 
+class FlashSaleReminder(Base):
+    """One shopper asking to be told when a flash sale starts.
+
+    Unique per (event, user): tapping "notify me" twice is one reminder, and
+    the scheduler marks `notified_at` so a reminder fires exactly once even
+    though the job window overlaps itself run to run.
+    """
+
+    __tablename__ = "flash_sale_reminders"
+    __table_args__ = (
+        UniqueConstraint("event_id", "user_id", name="uq_flash_sale_reminder_event_user"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    event_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("flash_sale_events.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+
 class FlashSaleNomination(Base):
     __tablename__ = "flash_sale_nominations"
 

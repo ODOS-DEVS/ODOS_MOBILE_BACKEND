@@ -170,11 +170,66 @@ def _process_vendor_voucher_expiry_reminders(db, now: datetime) -> None:
             )
 
 
+def _process_flash_sale_start_reminders(db, now: datetime) -> None:
+    """Tell shoppers who asked that their flash sale is starting.
+
+    Fires in the window from 15 minutes before the start until the sale ends,
+    so a reminder set seconds before launch still lands and a job outage never
+    silently drops reminders -- late beats never. `notified_at` is the once-
+    only guard; the window overlapping itself run to run is what makes it
+    necessary rather than merely polite.
+    """
+    from app.models import FlashSaleEvent, FlashSaleReminder
+
+    lead = now + timedelta(minutes=15)
+    rows = db.execute(
+        select(FlashSaleReminder, FlashSaleEvent, User)
+        .join(FlashSaleEvent, FlashSaleReminder.event_id == FlashSaleEvent.id)
+        .join(User, FlashSaleReminder.user_id == User.id)
+        .where(
+            FlashSaleReminder.notified_at.is_(None),
+            FlashSaleEvent.is_active.is_(True),
+            FlashSaleEvent.starts_at.is_not(None),
+            FlashSaleEvent.starts_at <= lead,
+            FlashSaleEvent.ends_at > now,
+        )
+        .limit(200)
+    ).all()
+
+    for reminder, event, user in rows:
+        try:
+            starts_now = event.starts_at <= now
+            _notify(
+                db,
+                user,
+                kind="flash_sale_starting",
+                title=f"{event.title} is {'live now' if starts_now else 'about to start'}",
+                body=(
+                    f"The flash sale you asked about {'has started' if starts_now else 'starts in a few minutes'} — "
+                    "the best prices go to the quickest."
+                ),
+                icon="flash-outline",
+                route_type="flash_sale",
+                route_target_id=event.slug,
+                push_type="flash_sale_starting",
+            )
+            reminder.notified_at = now
+            db.commit()
+        except Exception:
+            db.rollback()
+            logger.exception(
+                "Failed processing flash sale reminder %s for user %s",
+                reminder.id,
+                user.id,
+            )
+
+
 def process_promo_expiry_reminders() -> None:
     db = SessionLocal()
     try:
         now = datetime.now(UTC)
         _process_shopper_voucher_expiry_reminders(db, now)
         _process_vendor_voucher_expiry_reminders(db, now)
+        _process_flash_sale_start_reminders(db, now)
     finally:
         db.close()

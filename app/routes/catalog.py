@@ -6,6 +6,10 @@ from app.controllers.campaign_controller import (
     list_public_campaigns,
 )
 from app.controllers.catalog_controller import (
+    list_my_flash_sale_reminders,
+    list_upcoming_flash_sale_events,
+    set_flash_sale_reminder,
+    unset_flash_sale_reminder,
     get_catalog_product,
     get_store,
     list_active_flash_sale_events,
@@ -20,7 +24,9 @@ from app.controllers.catalog_controller import (
     serialize_catalog_products,
 )
 from app.controllers.deals_controller import get_deals_hub
-from app.core.auth import get_optional_current_user
+from typing import Annotated
+
+from app.core.auth import get_current_user, get_optional_current_user
 from app.core.cache import (
     TTL_CATEGORIES,
     TTL_FLASH_SALE_EVENTS,
@@ -382,6 +388,43 @@ def get_active_flash_sale_events(response: Response, db: Session = Depends(get_d
         loader=lambda: list_active_flash_sale_events(db),
         response=response,
     )
+
+
+@router.get("/flash-sale-events/upcoming", response_model=list[FlashSaleEventRead])
+def get_upcoming_flash_sale_events(response: Response, db: Session = Depends(get_db)):
+    return cached_list(
+        key="catalog:flash-sale-events:upcoming",
+        ttl_seconds=TTL_FLASH_SALE_EVENTS,
+        schema=FlashSaleEventRead,
+        loader=lambda: list_upcoming_flash_sale_events(db),
+        response=response,
+    )
+
+
+@router.get("/flash-sale-reminders/me", response_model=list[str])
+def get_my_flash_sale_reminders(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return list_my_flash_sale_reminders(db, current_user)
+
+
+@router.post("/flash-sale-events/{event_id}/reminder")
+def post_flash_sale_reminder(
+    event_id: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return set_flash_sale_reminder(db, current_user, event_id)
+
+
+@router.delete("/flash-sale-events/{event_id}/reminder")
+def delete_flash_sale_reminder(
+    event_id: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    return unset_flash_sale_reminder(db, current_user, event_id)
 
 
 @router.get("/flash-sale-events/{slug}/products", response_model=list[ProductRead])
