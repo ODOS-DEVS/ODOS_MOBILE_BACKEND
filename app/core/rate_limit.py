@@ -156,6 +156,19 @@ def limit_google_auth(request: Request) -> None:
     )
 
 
+def limit_apple_auth(request: Request) -> None:
+    enforce_rate_limits_with_memory_fallback(
+        [
+            RateLimitRule(
+                scope="auth:apple:ip",
+                identifier=client_ip(request),
+                limit=20,
+                window_seconds=900,
+            )
+        ]
+    )
+
+
 def limit_forgot_password(request: Request, email: str) -> None:
     ip = client_ip(request)
     email_key = email.strip().lower()

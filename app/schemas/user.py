@@ -48,6 +48,14 @@ class GoogleAuthRequest(BaseModel):
     picture_url: str | None = Field(default=None, max_length=2000)
 
 
+class AppleAuthRequest(BaseModel):
+    identity_token: str = Field(min_length=1)
+    #: Apple returns the name ONLY on the very first authorization, and never
+    #: again — not even after the app is deleted and reinstalled. The client
+    #: forwards it when present; afterwards we rely on what was stored then.
+    full_name: str | None = Field(default=None, max_length=120)
+
+
 class VerifyEmailRequest(BaseModel):
     code: str = Field(pattern=r"^\d{6}$")
 

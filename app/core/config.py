@@ -30,6 +30,12 @@ class Settings(BaseSettings):
     cloudinary_api_key: str = ""
     cloudinary_api_secret: str = ""
     google_client_ids: str = ""
+    #: Comma-separated Apple audiences. For the app this is the iOS bundle id
+    #: (com.paul.odos); a web Services ID would be added here too. Empty means
+    #: Apple sign-in stays off — the endpoint refuses rather than guessing an
+    #: audience, which is the one check stopping a token minted for someone
+    #: else's app from being accepted as ours.
+    apple_audiences: str = ""
     brevo_api_key: str = ""
     brevo_sender_name: str = "ODOS"
     brevo_sender_email: str = ""
@@ -159,6 +165,14 @@ class Settings(BaseSettings):
     @property
     def google_client_id_list(self) -> list[str]:
         return [item.strip() for item in self.google_client_ids.split(",") if item.strip()]
+
+    @property
+    def apple_audience_list(self) -> list[str]:
+        return [item.strip() for item in self.apple_audiences.split(",") if item.strip()]
+
+    @property
+    def apple_auth_is_configured(self) -> bool:
+        return bool(self.apple_audience_list)
 
     @property
     def cors_origin_list(self) -> list[str]:

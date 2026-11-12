@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.controllers.auth_controller import (
     get_user_verified_phones,
+    apple_auth_user,
     google_auth_user,
     login_user,
     request_password_reset,
@@ -23,6 +24,7 @@ from app.core.auth import get_current_user
 from app.core.database import get_db
 from app.core.rate_limit import (
     limit_forgot_password,
+    limit_apple_auth,
     limit_google_auth,
     limit_login,
     limit_resend_email_verification,
@@ -37,6 +39,7 @@ from app.models import User
 from app.schemas.user import (
     AuthToken,
     ForgotPasswordRequest,
+    AppleAuthRequest,
     GoogleAuthRequest,
     LogoutResponse,
     MessageResponse,
@@ -105,6 +108,16 @@ def google_auth(
 ):
     limit_google_auth(request)
     return google_auth_user(db, payload, request=request)
+
+
+@router.post("/apple", response_model=AuthToken)
+def apple_auth(
+    payload: AppleAuthRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    limit_apple_auth(request)
+    return apple_auth_user(db, payload, request=request)
 
 
 @router.post("/verify-email", response_model=UserRead)

@@ -13,11 +13,13 @@ from app.controllers.notification_controller import create_notification_event
 from app.core.auth import raise_account_blocked
 from app.core.config import settings
 from app.core.event_types import (
+    USER_APPLE_AUTH,
     USER_GOOGLE_AUTH,
     USER_LOGIN,
     USER_LOGIN_FAILED,
     USER_SIGNUP,
 )
+from app.core.apple_auth import apple_email_is_verified, verify_apple_identity_token
 from app.core.google_auth import verify_google_identity_token
 from app.core.phone import normalize_ghana_phone
 from app.core.security import (
@@ -32,6 +34,7 @@ from app.models import AuthProvider, User, UserAuthAccount, UserRole
 from app.schemas.user import (
     AuthToken,
     ForgotPasswordRequest,
+    AppleAuthRequest,
     GoogleAuthRequest,
     MessageResponse,
     PasswordResetTokenResponse,
@@ -569,6 +572,125 @@ def google_auth_user(
         request=request,
         login_event_type=USER_GOOGLE_AUTH,
         login_method="google",
+    )
+
+
+def apple_auth_user(
+    db: Session,
+    payload: AppleAuthRequest,
+    request: Request | None = None,
+) -> AuthToken:
+    """Sign in (or sign up) with a verified Apple identity token.
+
+    Apple differs from Google in a way that shapes this whole function: the
+    email and the name are returned ONLY on the user's first authorization
+    for this app, and never again — not after a reinstall, not ever. So the
+    stable `sub` is the identity, and a returning user is matched on it
+    alone. Anything that insisted on an email would work in testing and then
+    fail for every real returning user.
+    """
+    try:
+        apple_payload = verify_apple_identity_token(payload.identity_token)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=str(exc),
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
+
+    apple_sub = apple_payload.get("sub")
+    email = (apple_payload.get("email") or "").strip().lower() or None
+    email_verified = apple_email_is_verified(apple_payload)
+
+    # Already linked: the only path a returning Apple user takes, and the
+    # reason this lookup must come before any email handling.
+    linked_account = db.scalar(
+        select(UserAuthAccount).where(
+            UserAuthAccount.provider == AuthProvider.APPLE,
+            UserAuthAccount.provider_user_id == apple_sub,
+        )
+    )
+    if linked_account:
+        user = linked_account.user
+        if not user.is_active:
+            raise_account_blocked()
+        return build_auth_token(
+            db,
+            user,
+            request=request,
+            login_event_type=USER_APPLE_AUTH,
+            login_method="apple",
+        )
+
+    # First time for this Apple id. Without an email there is nothing to
+    # create an account from and nothing to match an existing one against.
+    if not email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Apple didn't share an email for this sign-in. In Settings, "
+                "remove ODOS under your Apple ID's sign-in list and try again."
+            ),
+        )
+
+    user = db.scalar(select(User).where(User.email == email))
+    is_new_user = user is None
+
+    if user:
+        if not user.is_active:
+            raise_account_blocked()
+        # Same rule the Google path enforces: an unverified password account
+        # must not be claimable by signing in with a matching social email.
+        if not user.is_verified:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "An account with this email already exists but is not verified. "
+                    "Sign in with your password and verify your email first."
+                ),
+            )
+    else:
+        # The name arrives only now, on this one request, or not at all.
+        full_name = (payload.full_name or "").strip() or email.split("@")[0]
+        user = User(
+            full_name=full_name,
+            email=email,
+            hashed_password=None,
+            is_verified=email_verified,
+        )
+        db.add(user)
+        db.flush()
+
+    db.add(
+        UserAuthAccount(
+            user_id=user.id,
+            provider=AuthProvider.APPLE,
+            provider_user_id=apple_sub,
+            provider_email=email,
+        )
+    )
+    db.commit()
+    db.refresh(user)
+
+    if is_new_user:
+        record_user_event(
+            db,
+            user_id=str(user.id),
+            event_type=USER_SIGNUP,
+            action="user.signup",
+            entity_type="user",
+            entity_id=str(user.id),
+            metadata={"email": user.email, "provider": "apple"},
+            ip_address=request_ip(request),
+            user_agent=request_user_agent(request),
+        )
+
+    return build_auth_token(
+        db,
+        user,
+        request=request,
+        login_event_type=USER_APPLE_AUTH,
+        login_method="apple",
     )
 
 

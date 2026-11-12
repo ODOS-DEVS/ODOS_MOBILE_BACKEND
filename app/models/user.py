@@ -62,8 +62,9 @@ class VendorStatus(str, enum.Enum):
 
 class AuthProvider:
     GOOGLE = "google"
+    APPLE = "apple"
     PASSWORD = "password"
-    CHOICES = (GOOGLE, PASSWORD)
+    CHOICES = (GOOGLE, APPLE, PASSWORD)
 
 
 class User(Base):

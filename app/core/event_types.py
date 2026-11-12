@@ -6,6 +6,7 @@ USER_LOGIN = "user.login"
 USER_LOGIN_FAILED = "user.login_failed"
 USER_LOGOUT = "user.logout"
 USER_GOOGLE_AUTH = "user.google_auth"
+USER_APPLE_AUTH = "user.apple_auth"
 USER_PROFILE_UPDATED = "user.profile_updated"
 
 # Commerce (also mirrored from behavior where applicable)
