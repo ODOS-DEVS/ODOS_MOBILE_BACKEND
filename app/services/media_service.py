@@ -35,10 +35,15 @@ def _matches_declared_image_type(content_type: str, file_bytes: bytes) -> bool:
         return file_bytes[8:12] == b"WEBP"
     return True
 
-# Server-side backstop — the mobile client already caps picks at 8MB, but that's a
+# Server-side backstop — the mobile client caps picks below this, but that's a
 # client-side convenience only. Without this, a direct API call (bypassing the app)
 # could upload an arbitrarily large file with nothing to stop it.
-MAX_IMAGE_UPLOAD_BYTES = 10 * 1024 * 1024
+#
+# Raised from 10MB when the clients stopped pre-compressing. A true phone
+# original is several megabytes and is now the platform's quality ceiling:
+# every delivered size is derived from this file by Cloudinary, so rejecting
+# it here would put the old downscaled-and-re-encoded pipeline back.
+MAX_IMAGE_UPLOAD_BYTES = 20 * 1024 * 1024
 MAX_CHAT_AUDIO_BYTES = 8 * 1024 * 1024
 MAX_CHAT_DOCUMENT_BYTES = 15 * 1024 * 1024
 
