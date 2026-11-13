@@ -866,6 +866,15 @@ def create_kutanapay_checkout_session(
         payment_reference=reference,
     )
 
+    # The client tells us where it wants the customer back — the website sends
+    # its own origin, the app sends its deep link — and the reference rides
+    # along so the landing screen can verify without guessing.
+    redirect_url = _append_query_params(
+        payload.callback_url or "odosmobileexpo://payments/return",
+        reference=reference,
+        orderId=str(order.id),
+    )
+
     checkout = kutanapay_create_checkout(
         # Cedis, not pesewas. KutanaPay quotes major units; the ledger below
         # stores subunits, which is why the two are converted separately.
@@ -882,6 +891,7 @@ def create_kutanapay_checkout_session(
         customer_phone=payload.payment_phone or current_user.phone_number,
         description=f"Order {order.order_number}",
         order_id=str(order.id),
+        redirect_url=redirect_url,
     )
 
     transaction = PaymentTransaction(

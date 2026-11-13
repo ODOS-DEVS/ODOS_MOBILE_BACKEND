@@ -198,6 +198,7 @@ def create_checkout(
     customer_phone: str | None = None,
     description: str | None = None,
     order_id: str | None = None,
+    redirect_url: str | None = None,
 ) -> dict[str, Any]:
     """Create a hosted checkout and return KutanaPay's ``data`` object.
 
@@ -223,6 +224,18 @@ def create_checkout(
         body["description"] = description
     if order_id:
         body["meta_data"]["order_id"] = order_id
+    # Where KutanaPay sends the customer once they have paid. Overrides the
+    # "Success redirect URL" saved in the merchant dashboard, which is the
+    # whole reason to send it: the dashboard holds one address for every
+    # payment the account takes, while this one carries THIS payment's
+    # reference, so the page they land on knows what to confirm instead of
+    # having to guess from browser storage.
+    #
+    # The API requires an https address or an app link (odosmobileexpo://…)
+    # and rejects anything else with a 400, so callers hand over one of those
+    # or nothing at all.
+    if redirect_url:
+        body["redirect_url"] = redirect_url
 
     try:
         response = requests.post(

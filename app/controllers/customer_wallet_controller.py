@@ -490,6 +490,14 @@ def _initialize_kutanapay_topup(
     ensure_kutanapay_configured()
     reference = generate_kutanapay_reference()
 
+    # Same as the order path: the client names where it wants the shopper
+    # back, and the reference travels with them so the wallet knows which
+    # top-up to confirm.
+    redirect_url = _append_query_params(
+        payload.callback_url or "odosmobileexpo://wallet/topup-return",
+        reference=reference,
+    )
+
     checkout = kutanapay_create_checkout(
         # Cedis, not pesewas -- the ledger below stores subunits, so the two
         # are converted separately.
@@ -502,6 +510,7 @@ def _initialize_kutanapay_topup(
         # number routes the charge to the wrong network and it never arrives.
         customer_phone=payload.payment_phone or current_user.phone_number,
         description="ODOS wallet top up",
+        redirect_url=redirect_url,
     )
 
     metadata = {
