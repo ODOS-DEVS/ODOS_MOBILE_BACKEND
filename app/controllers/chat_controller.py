@@ -682,14 +682,6 @@ async def post_chat_message(
             detail="Add a message or an attachment before sending.",
         )
 
-    attachment_url: str | None = None
-    attachment_type: str | None = None
-    attachment_name: str | None = None
-    if attachment is not None:
-        attachment_url, attachment_type, attachment_name = await save_chat_attachment_upload(
-            attachment
-        )
-
     thread = _load_thread(db, thread_id)
     if not thread:
         raise HTTPException(
@@ -701,6 +693,16 @@ async def post_chat_message(
 
     if user.id == thread.vendor_user_id and thread.thread_type == ChatThreadType.STORE:
         require_vendor_access(user)
+
+    # Only upload once the sender is known to belong to the thread; otherwise
+    # anyone could push files into storage by posting to arbitrary thread ids.
+    attachment_url: str | None = None
+    attachment_type: str | None = None
+    attachment_name: str | None = None
+    if attachment is not None:
+        attachment_url, attachment_type, attachment_name = await save_chat_attachment_upload(
+            attachment
+        )
 
     if thread.thread_type == ChatThreadType.SUPPORT and user.role == UserRole.ADMIN:
         thread.vendor_user_id = user.id

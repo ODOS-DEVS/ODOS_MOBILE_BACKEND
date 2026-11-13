@@ -1,5 +1,8 @@
+import asyncio
 import hashlib
+import logging
 import time
+import uuid
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -7,11 +10,15 @@ import requests
 from fastapi import HTTPException, UploadFile, status
 
 from app.core.config import settings
+from app.services import object_storage
+from app.services.image_variants import VARIANT_WIDTHS, VariantError, build_variants
 from app.services.image_validation import (
     ImageRejected,
     ensure_safe_image_dimensions,
     safe_upload_filename,
 )
+
+logger = logging.getLogger(__name__)
 
 ALLOWED_IMAGE_CONTENT_TYPES = {
     "image/jpeg": ".jpg",
@@ -52,6 +59,59 @@ MAX_IMAGE_UPLOAD_BYTES = 20 * 1024 * 1024
 MAX_CHAT_AUDIO_BYTES = 8 * 1024 * 1024
 MAX_CHAT_DOCUMENT_BYTES = 15 * 1024 * 1024
 
+# A single request may carry at most this many images. Each one costs a
+# Cloudinary round trip and up to MAX_IMAGE_UPLOAD_BYTES of memory.
+MAX_IMAGES_PER_REQUEST = 10
+
+_READ_CHUNK_BYTES = 1024 * 1024
+
+_AUDIO_SIGNATURES: tuple[tuple[int, bytes], ...] = (
+    (4, b"ftyp"),  # m4a / mp4 / aac in an MP4 container
+    (0, b"RIFF"),  # wav
+    (0, b"\x1a\x45\xdf\xa3"),  # webm / matroska
+    (0, b"ID3"),  # mp3 with tag
+    (0, b"\xff\xfb"),  # mp3 frame sync
+    (0, b"\xff\xf3"),
+    (0, b"\xff\xf1"),  # aac ADTS
+    (0, b"\xff\xf9"),
+)
+
+_DOCUMENT_EXTENSIONS = {
+    "application/pdf": ".pdf",
+    "application/msword": ".doc",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+    "application/vnd.ms-excel": ".xls",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+    "text/plain": ".txt",
+}
+
+_ZIP_MAGIC = (b"PK\x03\x04",)
+_OLE_MAGIC = (b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1",)
+
+
+def _looks_like_audio(file_bytes: bytes) -> bool:
+    return any(file_bytes[offset : offset + len(sig)] == sig for offset, sig in _AUDIO_SIGNATURES)
+
+
+async def _read_upload_capped(upload: UploadFile, limit: int, too_large_detail: str) -> bytes:
+    """Read an upload without ever buffering more than `limit` bytes (+1 chunk)."""
+    declared = getattr(upload, "size", None)
+    if declared is not None and declared > limit:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=too_large_detail)
+
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await upload.read(_READ_CHUNK_BYTES)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > limit:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=too_large_detail)
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 ALLOWED_CHAT_AUDIO_CONTENT_TYPES = {
     "audio/m4a",
     "audio/mp4",
@@ -63,11 +123,11 @@ ALLOWED_CHAT_AUDIO_CONTENT_TYPES = {
 }
 ALLOWED_CHAT_DOCUMENT_CONTENT_TYPES = {
     "application/pdf": (b"%PDF",),
-    "application/msword": (),
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": (),
-    "application/vnd.ms-excel": (),
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": (),
-    "text/plain": (),
+    "application/msword": _OLE_MAGIC,
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": _ZIP_MAGIC,
+    "application/vnd.ms-excel": _OLE_MAGIC,
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": _ZIP_MAGIC,
+    "text/plain": (),  # no signature; checked for NUL bytes instead
 }
 
 UPLOAD_TARGETS = {
@@ -100,6 +160,51 @@ def _require_cloudinary_configuration() -> None:
             "environment before uploading images."
         ),
     )
+
+
+def _require_storage_configuration() -> None:
+    if settings.s3_is_configured:
+        return
+    _require_cloudinary_configuration()
+
+
+def image_variant_url(url: str | None, width: int) -> str | None:
+    """URL of the `width`-pixel rendition of an image stored in object storage.
+
+    Falls back to the URL itself for anything we did not generate variants for
+    (Cloudinary URLs, external avatars, legacy rows), so callers can apply it
+    to any image URL unconditionally."""
+    if not url or width not in VARIANT_WIDTHS:
+        return url
+    if object_storage.key_from_url(url) is None or "/original." not in url:
+        return url
+    head, _, _ = url.rpartition("/original.")
+    return f"{head}/w{width}.webp"
+
+
+def _store_image_set(
+    file_bytes: bytes, content_type: str, extension: str, asset_folder: str
+) -> str:
+    """Write the original plus resized WebP variants. Blocking; run in a thread.
+
+    The original is stored untouched so nothing ever has to be re-derived from
+    a lossy copy. Everything lands under one uuid directory so a delete is a
+    single prefix removal and a half-finished upload can be cleaned up."""
+    variants = build_variants(file_bytes)
+    prefix = f"{asset_folder}/{uuid.uuid4().hex}/"
+    original_key = f"{prefix}original{extension}"
+    try:
+        object_storage.put_object(original_key, file_bytes, content_type)
+        for width, data in variants.items():
+            object_storage.put_object(f"{prefix}w{width}.webp", data, "image/webp")
+    except Exception:
+        logger.exception("Object storage upload failed for %s", prefix)
+        try:
+            object_storage.delete_prefix(prefix)
+        except Exception:
+            logger.warning("Could not clean up partial upload %s", prefix, exc_info=True)
+        raise
+    return object_storage.public_url(original_key)
 
 
 def _cloudinary_upload_url() -> str:
@@ -183,7 +288,7 @@ def _cloudinary_request_error(response: requests.Response) -> HTTPException:
 
 
 async def save_image_upload(upload: UploadFile, folder: str) -> str:
-    _require_cloudinary_configuration()
+    _require_storage_configuration()
 
     content_type = upload.content_type or ""
     extension = ALLOWED_IMAGE_CONTENT_TYPES.get(content_type)
@@ -193,16 +298,15 @@ async def save_image_upload(upload: UploadFile, folder: str) -> str:
             detail="Only JPG, PNG, and WEBP images are supported.",
         )
 
-    file_bytes = await upload.read()
+    file_bytes = await _read_upload_capped(
+        upload,
+        MAX_IMAGE_UPLOAD_BYTES,
+        f"Images must be {MAX_IMAGE_UPLOAD_BYTES // (1024 * 1024)}MB or smaller.",
+    )
     if not file_bytes:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="The uploaded image was empty.",
-        )
-    if len(file_bytes) > MAX_IMAGE_UPLOAD_BYTES:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Images must be {MAX_IMAGE_UPLOAD_BYTES // (1024 * 1024)}MB or smaller.",
         )
     if not _matches_declared_image_type(content_type, file_bytes):
         raise HTTPException(
@@ -221,13 +325,31 @@ async def save_image_upload(upload: UploadFile, folder: str) -> str:
         ) from exc
 
     target = _resolve_target(folder)
+
+    if settings.s3_is_configured:
+        try:
+            return await asyncio.to_thread(
+                _store_image_set, file_bytes, content_type, extension, target["asset_folder"]
+            )
+        except VariantError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="That image appears to be corrupt. Try exporting it again.",
+            ) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="We couldn't store that image right now. Please try again.",
+            ) from exc
+
     timestamp = str(int(time.time()))
     upload_payload = {
         "timestamp": timestamp,
         "folder": target["asset_folder"],
     }
 
-    response = requests.post(
+    response = await asyncio.to_thread(
+        requests.post,
         _cloudinary_upload_url(),
         data={
             **upload_payload,
@@ -261,6 +383,11 @@ async def save_image_upload(upload: UploadFile, folder: str) -> str:
 async def save_image_uploads(uploads: list[UploadFile] | None, *, folder: str) -> list[str]:
     if not uploads:
         return []
+    if len(uploads) > MAX_IMAGES_PER_REQUEST:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"You can upload at most {MAX_IMAGES_PER_REQUEST} images at a time.",
+        )
 
     image_urls: list[str] = []
     for upload in uploads:
@@ -276,16 +403,39 @@ async def _upload_raw_to_cloudinary(
     resource_type: str,
     folder: str,
 ) -> str:
-    _require_cloudinary_configuration()
+    _require_storage_configuration()
 
     target = _resolve_target(folder)
+
+    if settings.s3_is_configured:
+        key = f"{target['asset_folder']}/{uuid.uuid4().hex}/{filename}"
+        # Documents are downloads, never rendered in the browser: a public
+        # bucket serving user-supplied text/PDF inline is an XSS surface.
+        disposition = f'attachment; filename="{filename}"' if resource_type == "raw" else None
+        try:
+            await asyncio.to_thread(
+                object_storage.put_object,
+                key,
+                file_bytes,
+                content_type,
+                content_disposition=disposition,
+            )
+        except Exception as exc:
+            logger.exception("Object storage upload failed for %s", key)
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="We couldn't store that file right now. Please try again.",
+            ) from exc
+        return object_storage.public_url(key)
+
     timestamp = str(int(time.time()))
     upload_payload = {
         "timestamp": timestamp,
         "folder": target["asset_folder"],
     }
 
-    response = requests.post(
+    response = await asyncio.to_thread(
+        requests.post,
         f"https://api.cloudinary.com/v1_1/{settings.cloudinary_cloud_name.strip()}/{resource_type}/upload",
         data={
             **upload_payload,
@@ -325,20 +475,24 @@ async def save_chat_attachment_upload(upload: UploadFile) -> tuple[str, str, str
         return url, "image", None
 
     if content_type in ALLOWED_CHAT_AUDIO_CONTENT_TYPES:
-        file_bytes = await upload.read()
+        file_bytes = await _read_upload_capped(
+            upload,
+            MAX_CHAT_AUDIO_BYTES,
+            f"Voice notes must be {MAX_CHAT_AUDIO_BYTES // (1024 * 1024)}MB or smaller.",
+        )
         if not file_bytes:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="That voice note was empty.",
             )
-        if len(file_bytes) > MAX_CHAT_AUDIO_BYTES:
+        if not _looks_like_audio(file_bytes):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Voice notes must be {MAX_CHAT_AUDIO_BYTES // (1024 * 1024)}MB or smaller.",
+                detail="That doesn't look like a valid voice note. Try recording again.",
             )
         url = await _upload_raw_to_cloudinary(
             file_bytes,
-            upload.filename or "voice-note.m4a",
+            safe_upload_filename(upload.filename, ".m4a"),
             content_type,
             resource_type="video",
             folder=folder,
@@ -347,30 +501,36 @@ async def save_chat_attachment_upload(upload: UploadFile) -> tuple[str, str, str
 
     if content_type in ALLOWED_CHAT_DOCUMENT_CONTENT_TYPES:
         signatures = ALLOWED_CHAT_DOCUMENT_CONTENT_TYPES[content_type]
-        file_bytes = await upload.read()
+        file_bytes = await _read_upload_capped(
+            upload,
+            MAX_CHAT_DOCUMENT_BYTES,
+            f"Files must be {MAX_CHAT_DOCUMENT_BYTES // (1024 * 1024)}MB or smaller.",
+        )
         if not file_bytes:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="That file was empty.",
             )
-        if len(file_bytes) > MAX_CHAT_DOCUMENT_BYTES:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Files must be {MAX_CHAT_DOCUMENT_BYTES // (1024 * 1024)}MB or smaller.",
-            )
-        if signatures and not any(file_bytes.startswith(sig) for sig in signatures):
+        if signatures:
+            valid = any(file_bytes.startswith(sig) for sig in signatures)
+        else:
+            valid = b"\x00" not in file_bytes[:8192]
+        if not valid:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="That file doesn't look valid. Try a different file.",
             )
+        safe_name = safe_upload_filename(
+            upload.filename, _DOCUMENT_EXTENSIONS.get(content_type, "")
+        )
         url = await _upload_raw_to_cloudinary(
             file_bytes,
-            upload.filename or "file",
+            safe_name,
             content_type,
             resource_type="raw",
             folder=folder,
         )
-        return url, "file", upload.filename
+        return url, "file", safe_name
 
     raise HTTPException(
         status_code=status.HTTP_400_BAD_REQUEST,
@@ -401,7 +561,11 @@ def is_managed_avatar_url(url: str | None) -> bool:
     if not url:
         return False
     cleaned = url.strip()
-    return "res.cloudinary.com" in cleaned or cleaned.startswith("/uploads")
+    return (
+        "res.cloudinary.com" in cleaned
+        or cleaned.startswith("/uploads")
+        or object_storage.key_from_url(cleaned) is not None
+    )
 
 
 def import_avatar_from_url(source_url: str | None) -> str | None:
@@ -409,17 +573,39 @@ def import_avatar_from_url(source_url: str | None) -> str | None:
     if not normalized:
         return None
 
-    if not settings.cloudinary_is_configured:
+    if not (settings.s3_is_configured or settings.cloudinary_is_configured):
         return normalized[:500]
 
     try:
-        download = requests.get(normalized, timeout=12)
-        download.raise_for_status()
+        with requests.get(normalized, timeout=12, stream=True) as download:
+            download.raise_for_status()
+            content_type = (
+                (download.headers.get("content-type") or "image/jpeg").split(";")[0].strip()
+            )
+            downloaded = bytearray()
+            for chunk in download.iter_content(chunk_size=64 * 1024):
+                downloaded.extend(chunk)
+                if len(downloaded) > MAX_IMAGE_UPLOAD_BYTES:
+                    return normalized[:500]
     except requests.RequestException:
         return normalized[:500]
 
-    content_type = (download.headers.get("content-type") or "image/jpeg").split(";")[0].strip()
-    extension = ALLOWED_IMAGE_CONTENT_TYPES.get(content_type, ".jpg")
+    extension = ALLOWED_IMAGE_CONTENT_TYPES.get(content_type)
+    image_bytes = bytes(downloaded)
+    if not extension or not _matches_declared_image_type(content_type, image_bytes):
+        return normalized[:500]
+    try:
+        ensure_safe_image_dimensions(content_type, image_bytes)
+    except ImageRejected:
+        return normalized[:500]
+
+    if settings.s3_is_configured:
+        try:
+            return _store_image_set(
+                image_bytes, content_type, extension, _resolve_target("users/avatars")["asset_folder"]
+            )
+        except Exception:
+            return normalized[:500]
 
     target = _resolve_target("users/avatars")
     timestamp = str(int(time.time()))
@@ -439,7 +625,7 @@ def import_avatar_from_url(source_url: str | None) -> str | None:
             files={
                 "file": (
                     f"google-avatar{extension}",
-                    download.content,
+                    image_bytes,
                     content_type,
                 )
             },
@@ -459,12 +645,24 @@ def import_avatar_from_url(source_url: str | None) -> str | None:
     return str(secure_url)
 
 
-def remove_media_file(file_url: str | None) -> None:
-    _require_cloudinary_configuration()
+def remove_media_file(file_url: str | None, resource_type: str = "image") -> None:
+    """Destroy an uploaded asset. Pass the resource type it was uploaded as:
+    chat voice notes are "video" and documents are "raw"."""
+    stored_key = object_storage.key_from_url(file_url)
+    if stored_key is not None:
+        directory, separator, _ = stored_key.rpartition("/")
+        if separator:
+            try:
+                object_storage.delete_prefix(f"{directory}/")
+            except Exception:
+                logger.warning("Object storage delete failed for %s", stored_key, exc_info=True)
+        return
 
     public_id = _cloudinary_public_id_from_url(file_url)
     if not public_id:
         return
+
+    _require_cloudinary_configuration()
 
     timestamp = str(int(time.time()))
     destroy_payload = {
@@ -474,7 +672,7 @@ def remove_media_file(file_url: str | None) -> None:
 
     try:
         response = requests.post(
-            _cloudinary_destroy_url(),
+            _cloudinary_destroy_url().replace("/image/destroy", f"/{resource_type}/destroy"),
             data={
                 **destroy_payload,
                 "api_key": settings.cloudinary_api_key,
@@ -484,6 +682,8 @@ def remove_media_file(file_url: str | None) -> None:
         )
         response.raise_for_status()
     except requests.RequestException:
+        # Never fail the caller over a leaked remote asset, but leave a trail.
+        logger.warning("Cloudinary destroy failed for %s", public_id, exc_info=True)
         return
 
 

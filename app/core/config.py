@@ -26,6 +26,17 @@ class Settings(BaseSettings):
         "https://odos-admin.onrender.com"
     )
     media_root: str = "uploads"
+    # S3-compatible object storage (Contabo). When all of these are set it is
+    # used for uploads; otherwise Cloudinary is used. Production sets them,
+    # dev and test leave them empty.
+    s3_endpoint_url: str = ""
+    s3_region: str = "usc1"
+    s3_bucket: str = ""
+    s3_access_key: str = ""
+    s3_secret_key: str = ""
+    # Public prefix objects are served from, e.g.
+    # https://usc1.contabostorage.com/<tenant-id>:<bucket>
+    s3_public_base_url: str = ""
     cloudinary_cloud_name: str = ""
     cloudinary_api_key: str = ""
     cloudinary_api_secret: str = ""
@@ -184,6 +195,16 @@ class Settings(BaseSettings):
             self.brevo_api_key.strip()
             and self.brevo_sender_name.strip()
             and self.brevo_sender_email.strip()
+        )
+
+    @property
+    def s3_is_configured(self) -> bool:
+        return bool(
+            self.s3_endpoint_url.strip()
+            and self.s3_bucket.strip()
+            and self.s3_access_key.strip()
+            and self.s3_secret_key.strip()
+            and self.s3_public_base_url.strip()
         )
 
     @property
