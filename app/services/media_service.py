@@ -7,6 +7,11 @@ import requests
 from fastapi import HTTPException, UploadFile, status
 
 from app.core.config import settings
+from app.services.image_validation import (
+    ImageRejected,
+    ensure_safe_image_dimensions,
+    safe_upload_filename,
+)
 
 ALLOWED_IMAGE_CONTENT_TYPES = {
     "image/jpeg": ".jpg",
@@ -204,6 +209,16 @@ async def save_image_upload(upload: UploadFile, folder: str) -> str:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="That file doesn't look like a valid image. Try a different file.",
         )
+    # Byte size alone cannot catch a decompression bomb: a 30000x30000 PNG of
+    # flat colour is a few hundred kilobytes on the wire and gigabytes once
+    # decoded. Dimensions are read from the header, before any decoder sees it.
+    try:
+        ensure_safe_image_dimensions(content_type, file_bytes)
+    except ImageRejected as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
 
     target = _resolve_target(folder)
     timestamp = str(int(time.time()))
@@ -221,7 +236,7 @@ async def save_image_upload(upload: UploadFile, folder: str) -> str:
         },
         files={
             "file": (
-                upload.filename or f"upload{extension}",
+                safe_upload_filename(upload.filename, extension),
                 file_bytes,
                 content_type,
             )
