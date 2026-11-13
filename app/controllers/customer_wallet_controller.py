@@ -496,6 +496,7 @@ def _initialize_kutanapay_topup(
     redirect_url = _append_query_params(
         payload.callback_url or "odosmobileexpo://wallet/topup-return",
         reference=reference,
+        kind="topup",
     )
 
     checkout = kutanapay_create_checkout(

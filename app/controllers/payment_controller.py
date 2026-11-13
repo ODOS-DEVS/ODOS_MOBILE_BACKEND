@@ -873,6 +873,10 @@ def create_kutanapay_checkout_session(
         payload.callback_url or "odosmobileexpo://payments/return",
         reference=reference,
         orderId=str(order.id),
+        # Named rather than inferred: the landing page may be opened on a
+        # different device from the one that started the payment, where there
+        # is no local record to tell an order from a wallet top-up.
+        kind="order",
     )
 
     checkout = kutanapay_create_checkout(
