@@ -122,6 +122,7 @@ def search_services(
     *,
     query: str | None = None,
     category_id: str | None = None,
+    store_id: str | None = None,
     city: str | None = None,
     min_price: float | None = None,
     max_price: float | None = None,
@@ -149,6 +150,10 @@ def search_services(
         stmt = stmt.where(
             or_(Service.category_id == category_id, Service.subcategory_id == category_id)
         )
+    if store_id:
+        # One business's public services, for its storefront page — a shop that sells goods and
+        # offers work should present both from the same profile.
+        stmt = stmt.where(Service.store_id == store_id)
     if city:
         # Either the provider is based there or they travel there.
         stmt = stmt.where(
@@ -500,6 +505,29 @@ def list_provider_bookings(
     if status_filter:
         stmt = stmt.where(Booking.status == status_filter)
     return list(db.scalars(stmt))
+
+
+def list_availability_rules(
+    db: Session, service_id: str, current_user: User
+) -> list[ServiceAvailabilityRule]:
+    """The current weekly pattern for one service.
+
+    `replace_availability_rules` is a whole-week write on the premise that the client holds the
+    complete picture — but nothing returned that picture, so a provider could only replace their
+    hours blind. An editor opening on an empty week would wipe real availability on save.
+    """
+
+    service = _owned_service(db, service_id, current_user)
+    return list(
+        db.scalars(
+            select(ServiceAvailabilityRule)
+            .where(ServiceAvailabilityRule.service_id == service.id)
+            .order_by(
+                ServiceAvailabilityRule.weekday,
+                ServiceAvailabilityRule.start_time,
+            )
+        )
+    )
 
 
 def replace_availability_rules(

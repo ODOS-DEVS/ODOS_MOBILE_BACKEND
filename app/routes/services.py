@@ -37,6 +37,7 @@ from app.controllers.service_controller import (
     list_provider_bookings,
     list_provider_services,
     quote_service,
+    list_availability_rules,
     replace_availability_rules,
     search_services,
     set_service_status,
@@ -86,6 +87,7 @@ def get_categories(db: Session = Depends(get_db)):
 def get_services(
     q: str | None = Query(default=None, max_length=120),
     category_id: str | None = None,
+    store_id: str | None = Query(default=None, max_length=100),
     city: str | None = Query(default=None, max_length=120),
     min_price: float | None = Query(default=None, ge=0),
     max_price: float | None = Query(default=None, ge=0),
@@ -100,6 +102,7 @@ def get_services(
         db,
         query=q,
         category_id=category_id,
+        store_id=store_id,
         city=city,
         min_price=min_price,
         max_price=max_price,
@@ -294,6 +297,18 @@ def post_service_status(
     db: Session = Depends(get_db),
 ):
     return set_service_status(db, service_id, new_status, current_user)
+
+
+@vendor_router.get(
+    "/{service_id}/availability", response_model=list[AvailabilityRuleRead]
+)
+def get_availability(
+    service_id: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    """The service's current weekly pattern, so an editor can load before it replaces."""
+    return list_availability_rules(db, service_id, current_user)
 
 
 @vendor_router.put(
