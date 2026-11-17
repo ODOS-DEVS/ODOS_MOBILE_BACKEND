@@ -213,7 +213,11 @@ class Service(Base):
 
     pricing_model: Mapped[str] = mapped_column(String(20), nullable=False, default="fixed")
     booking_type: Mapped[str] = mapped_column(String(20), nullable=False, default="request")
-    payment_timing: Mapped[str] = mapped_column(String(20), nullable=False, default="on_completion")
+    #: "upfront" is the escrow model: the customer pays in full and Odos holds it. The default
+    #: was left at "on_completion" when escrow dropped deposits, which both this column's own
+    #: check constraint and ServiceWrite's validator reject -- so any service created without an
+    #: explicit payment_timing failed.
+    payment_timing: Mapped[str] = mapped_column(String(20), nullable=False, default="upfront")
 
     #: Float with `round_money`, matching `Order.total_amount` and the ledger.
     #: Products store integer prices, but an hourly rate of 37.50 and a 30%
@@ -221,7 +225,7 @@ class Service(Base):
     #: float throughout.
     base_price: Mapped[float] = mapped_column(Float, nullable=False, default=0.0, server_default="0")
     currency: Mapped[str] = mapped_column(String(10), nullable=False, default="GHS", server_default="GHS")
-    #: Only meaningful when payment_timing = 'deposit'.
+    #: Legacy. Deposits were removed when escrow landed; no permitted payment_timing uses it.
     deposit_percent: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     #: How long one appointment occupies the calendar. Null for services with

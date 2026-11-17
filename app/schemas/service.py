@@ -151,7 +151,7 @@ class ServiceWrite(BaseModel):
     subcategory_id: str | None = None
     pricing_model: str = "fixed"
     booking_type: str = "request"
-    payment_timing: str = "on_completion"
+    payment_timing: str = "upfront"
     base_price: float = Field(default=0.0, ge=0)
     duration_minutes: int | None = Field(default=None, gt=0)
     buffer_minutes: int = Field(default=0, ge=0, le=240)
