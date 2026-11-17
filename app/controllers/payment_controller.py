@@ -1113,5 +1113,15 @@ def handle_kutanapay_webhook(
     if transaction.status == "success":
         return {"status": "success"}
 
+    # Service bookings settle differently from orders: the money is held
+    # rather than released, and there is no order to activate. Routed here
+    # because the order verifier requires a transaction.order and would
+    # otherwise 500, making KutanaPay retry this delivery forever.
+    if transaction.booking_id is not None:
+        from app.controllers.booking_payment_controller import verify_booking_payment
+
+        outcome = verify_booking_payment(db, transaction)
+        return {"status": outcome["payment_status"], "event": event_type or ""}
+
     result = _verify_kutanapay_payment(db, transaction)
     return {"status": result.payment_status, "event": event_type or ""}

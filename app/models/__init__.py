@@ -63,6 +63,20 @@ from app.models.payment import (
     PlatformTreasuryAccount,
 )
 from app.models.promo_analytics import PromoAnalyticsEvent
+from app.models.service import (
+    Booking,
+    BookingAddon,
+    BookingStatusEvent,
+    Service,
+    ServiceAddon,
+    ServiceAvailabilityException,
+    ServiceAvailabilityRule,
+    ServiceCategory,
+    ServiceImage,
+    ServicePackage,
+    ServiceQuotation,
+    ServiceReview,
+)
 from app.models.system_event_log import SystemEventLog
 from app.models.user import (
     AuthProvider,
@@ -87,6 +101,19 @@ from app.models.wallet import (
 )
 
 __all__ = [
+    "Booking",
+    "BookingAddon",
+    "BookingStatusEvent",
+    "Service",
+    "ServiceAddon",
+    "ServiceAvailabilityException",
+    "ServiceAvailabilityRule",
+    "ServiceCategory",
+    "ServiceImage",
+    "ServicePackage",
+    "ServiceQuotation",
+    "ServiceReview",
+
     "AssistantConversation",
     "AssistantMessage",
     "AssistantMessageFeedback",

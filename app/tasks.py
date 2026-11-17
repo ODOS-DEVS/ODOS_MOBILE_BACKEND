@@ -85,6 +85,26 @@ def delivery_auto_release() -> str:
     return _run("delivery_auto_release", process_delivery_auto_release)
 
 
+@celery_app.task(name="app.tasks.booking_escrow_release")
+def booking_escrow_release() -> str:
+    """Release service payments Odos is holding once the grace window passes.
+
+    The counterpart of delivery auto-release: a customer who never confirms
+    must not strand a provider's money indefinitely.
+    """
+    from app.services.service_escrow import process_booking_escrow_release
+
+    return _run("booking_escrow_release", process_booking_escrow_release)
+
+
+@celery_app.task(name="app.tasks.services_maintenance")
+def services_maintenance() -> str:
+    """Expire unpaid bookings holding slots, and quotes nobody answered."""
+    from app.services.service_maintenance import process_services_maintenance
+
+    return _run("services_maintenance", process_services_maintenance)
+
+
 @celery_app.task(name="app.tasks.financial_integrity_check")
 def financial_integrity_check() -> str:
     """Assert that wallet balances still equal the sum of their transactions.

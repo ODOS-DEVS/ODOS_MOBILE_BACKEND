@@ -43,6 +43,8 @@ VENDOR_REMINDER_INTERVAL_SECONDS = 180
 DELIVERY_SLA_MONITOR_INTERVAL_SECONDS = 120
 PROMO_REMINDER_INTERVAL_SECONDS = 1800
 PAYMENT_RECONCILIATION_INTERVAL_SECONDS = 300
+BOOKING_ESCROW_INTERVAL_SECONDS = 900
+SERVICES_MAINTENANCE_INTERVAL_SECONDS = 300
 DELIVERY_AUTO_RELEASE_INTERVAL_SECONDS = 1800
 # Hourly: this detects slow drift rather than a live incident, and it scans
 # every wallet on each run.
@@ -116,6 +118,14 @@ celery_app.conf.beat_schedule = {
     "delivery-auto-release": {
         "task": "app.tasks.delivery_auto_release",
         "schedule": float(DELIVERY_AUTO_RELEASE_INTERVAL_SECONDS),
+    },
+    "booking-escrow-release": {
+        "task": "app.tasks.booking_escrow_release",
+        "schedule": float(BOOKING_ESCROW_INTERVAL_SECONDS),
+    },
+    "services-maintenance": {
+        "task": "app.tasks.services_maintenance",
+        "schedule": float(SERVICES_MAINTENANCE_INTERVAL_SECONDS),
     },
     "financial-integrity-check": {
         "task": "app.tasks.financial_integrity_check",

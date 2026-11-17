@@ -257,6 +257,139 @@ def record_payment_collection(
     return account
 
 
+def record_booking_payment_collection(
+    db: Session,
+    booking,
+    payment_transaction: PaymentTransaction,
+    *,
+    processor_fee_amount: float,
+) -> PlatformTreasuryAccount:
+    """Book a verified service payment into the same treasury as an order.
+
+    The sibling of `record_payment_collection`, kept separate rather than
+    generalised because the two derive their split differently and conflating
+    them would make both harder to audit. An order fans out across several
+    vendors via `vendor_allocation_map`; a booking has exactly one provider,
+    and its commission was frozen onto the row when the booking was agreed —
+    so a later change to the platform rate cannot restate what the provider
+    was promised for work already done.
+
+    Partial payments are handled honestly: a deposit recognises only the
+    proportion of commission and vendor liability it actually covers, so the
+    books never show money the platform has not collected.
+    """
+
+    existing_entry = db.scalar(
+        select(PlatformLedgerEntry.id).where(
+            PlatformLedgerEntry.payment_transaction_id == payment_transaction.id,
+            PlatformLedgerEntry.kind == "customer_payment_received",
+        )
+    )
+    if existing_entry:
+        # A retried webhook or a second verify of the same transaction. The
+        # money was already booked; saying so again would double the balance.
+        return get_or_create_platform_treasury_account(
+            db, currency=payment_transaction.currency
+        )
+
+    account = get_or_create_platform_treasury_account(
+        db, currency=payment_transaction.currency
+    )
+
+    gross_amount = round_money(amount_from_subunit(payment_transaction.amount_subunit))
+    fee_amount = round_money(processor_fee_amount)
+
+    # Split this instalment in the same ratio as the booking as a whole. A
+    # 30% deposit recognises 30% of the commission, not all of it.
+    total = round_money(booking.total_amount) or gross_amount
+    share = (gross_amount / total) if total > 0 else 1.0
+    commission_total = round_money(booking.commission_amount * share)
+    vendor_net_total = round_money(gross_amount - commission_total)
+
+    reference_label = f"booking #{booking.booking_number}"
+
+    account.current_balance = round_money(account.current_balance + gross_amount)
+    account.gross_collected_total = round_money(
+        account.gross_collected_total + gross_amount
+    )
+    _create_ledger_entry(
+        db,
+        account,
+        kind="customer_payment_received",
+        direction="credit",
+        title=f"Customer payment received for {reference_label}",
+        description="Service booking payment confirmed.",
+        amount=gross_amount,
+        payment_transaction_id=payment_transaction.id,
+        metadata={
+            "payment_reference": payment_transaction.reference,
+            "booking_number": booking.booking_number,
+            "booking_id": str(booking.id),
+            "purpose": payment_transaction.purpose,
+        },
+    )
+
+    if fee_amount > 0:
+        account.current_balance = round_money(account.current_balance - fee_amount)
+        account.processor_fee_total = round_money(account.processor_fee_total + fee_amount)
+        _create_ledger_entry(
+            db,
+            account,
+            kind="processor_fee_recorded",
+            direction="debit",
+            title=f"Processor fee recorded for {reference_label}",
+            description="Processor fee deducted from collected funds.",
+            amount=fee_amount,
+            payment_transaction_id=payment_transaction.id,
+            metadata={
+                "payment_reference": payment_transaction.reference,
+                "booking_number": booking.booking_number,
+            },
+        )
+
+    if vendor_net_total > 0:
+        account.vendor_liability_balance = round_money(
+            account.vendor_liability_balance + vendor_net_total
+        )
+        _create_ledger_entry(
+            db,
+            account,
+            kind="vendor_liability_reserved",
+            direction="credit",
+            title=f"Provider settlement reserved for {reference_label}",
+            description="Provider funds are held in treasury until the service completes.",
+            amount=vendor_net_total,
+            payment_transaction_id=payment_transaction.id,
+            metadata={
+                "payment_reference": payment_transaction.reference,
+                "booking_number": booking.booking_number,
+                "store_id": booking.store_id,
+            },
+        )
+
+    if commission_total > 0:
+        account.commission_balance = round_money(
+            account.commission_balance + commission_total
+        )
+        _create_ledger_entry(
+            db,
+            account,
+            kind="platform_commission_earned",
+            direction="credit",
+            title=f"Platform commission earned on {reference_label}",
+            description="ODOS commission recognized from the verified booking payment.",
+            amount=commission_total,
+            payment_transaction_id=payment_transaction.id,
+            metadata={
+                "payment_reference": payment_transaction.reference,
+                "booking_number": booking.booking_number,
+                "commission_rate": booking.commission_rate,
+            },
+        )
+
+    return account
+
+
 def record_refund_adjustments(
     db: Session,
     request: ReturnRequest,

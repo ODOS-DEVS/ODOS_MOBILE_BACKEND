@@ -8,6 +8,7 @@ from sqlalchemy import (
     ForeignKey,
     Integer,
     String,
+    Text,
     UniqueConstraint,
     func,
 )
@@ -188,6 +189,36 @@ class Store(Base):
     )
     vacation_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
     business_hours: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
+    # --- What this business actually sells ------------------------------
+    # A store is the single vendor identity in Odos, so a photographer who
+    # also sells prints is one store with both capabilities, not two
+    # accounts. Defaults to products only, which is every store that exists
+    # today -- enabling services is an explicit act, so no existing shop is
+    # silently listed as a service provider.
+    #
+    # Read by the services marketplace to decide who may publish a listing;
+    # see app/services/service_catalog_service.py.
+    offerings: Mapped[list[str] | None] = mapped_column(
+        ARRAY(String(20)),
+        nullable=True,
+        server_default="{products}",
+    )
+    #: Separate from `status`: a shop can be trading while its service-provider
+    #: credentials are still being checked. unverified | pending | verified.
+    provider_verification: Mapped[str] = mapped_column(
+        String(20),
+        default="unverified",
+        server_default="unverified",
+        nullable=False,
+    )
+    provider_headline: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    provider_bio: Mapped[str | None] = mapped_column(Text, nullable=True)
+    provider_years_experience: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: Free-form credential list, e.g. ["Certified electrician (GhIE)"].
+    provider_credentials: Mapped[list[str] | None] = mapped_column(
+        ARRAY(String(200)), nullable=True
+    )
 
     # --- What this shop charges to deliver ------------------------------
     # Null means "use whatever the platform default is", which is how every

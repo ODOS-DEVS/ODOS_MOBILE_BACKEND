@@ -116,6 +116,14 @@ class VendorWalletTransaction(Base):
         nullable=True,
         index=True,
     )
+    #: Set when this movement came from a service booking rather than an
+    #: order. SET NULL on delete so a payout record outlives its booking.
+    booking_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("bookings.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     return_request_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("return_requests.id", ondelete="SET NULL"),

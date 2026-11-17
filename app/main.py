@@ -41,6 +41,8 @@ from app.routes import (
     realtime,
     recommendations,
     reviews,
+    admin_services,
+    services,
     vendor,
     vendor_analytics,
     vendor_campaigns,
@@ -49,6 +51,8 @@ from app.routes import (
     wishlist,
 )
 from app.services.delivery_auto_release_service import process_delivery_auto_release
+from app.services.service_escrow import process_booking_escrow_release
+from app.services.service_maintenance import process_services_maintenance
 from app.services.delivery_ops_monitor_service import process_delivery_sla_alerts
 from app.services.financial_integrity_service import run_financial_integrity_check
 from app.services.payment_reconciliation_service import process_stuck_payment_reconciliation
@@ -62,6 +66,12 @@ VENDOR_REMINDER_INTERVAL_SECONDS = 180
 DELIVERY_SLA_MONITOR_INTERVAL_SECONDS = 120
 PROMO_REMINDER_INTERVAL_SECONDS = 1800
 PAYMENT_RECONCILIATION_INTERVAL_SECONDS = 300
+#: Holds release on a 48-hour grace, so a 15-minute sweep is ample
+#: precision and keeps the query off the database the rest of the time.
+BOOKING_ESCROW_INTERVAL_SECONDS = 900
+#: Payment windows are measured in minutes, so this sweeps more
+#: often than the escrow release -- a held slot is unsellable.
+SERVICES_MAINTENANCE_INTERVAL_SECONDS = 300
 DELIVERY_AUTO_RELEASE_INTERVAL_SECONDS = 1800
 FINANCIAL_INTEGRITY_INTERVAL_SECONDS = 3600
 logger = logging.getLogger(__name__)
@@ -164,6 +174,24 @@ async def _delivery_auto_release_loop() -> None:
         await asyncio.sleep(DELIVERY_AUTO_RELEASE_INTERVAL_SECONDS)
 
 
+async def _booking_escrow_loop() -> None:
+    while True:
+        try:
+            await asyncio.to_thread(process_booking_escrow_release)
+        except Exception:
+            logger.exception("Booking escrow release loop failed")
+        await asyncio.sleep(BOOKING_ESCROW_INTERVAL_SECONDS)
+
+
+async def _services_maintenance_loop() -> None:
+    while True:
+        try:
+            await asyncio.to_thread(process_services_maintenance)
+        except Exception:
+            logger.exception("Services maintenance loop failed")
+        await asyncio.sleep(SERVICES_MAINTENANCE_INTERVAL_SECONDS)
+
+
 @app.on_event("startup")
 async def on_startup() -> None:
     # Initialize payment providers
@@ -173,7 +201,7 @@ async def on_startup() -> None:
     realtime_manager.bind_loop(asyncio.get_running_loop())
     asyncio.create_task(asyncio.to_thread(get_redis))
 
-    # The five periodic jobs run EITHER here as asyncio loops, or in a Celery worker driven by
+    # The periodic jobs run EITHER here as asyncio loops, or in a Celery worker driven by
     # beat — never both, or every job fires twice. SCHEDULER_ENABLED defaults to True, so a
     # deployment that knows nothing about Celery behaves exactly as it always has; the Docker
     # Compose stack sets it False on the API and runs the worker/beat services instead.
@@ -189,6 +217,8 @@ async def on_startup() -> None:
     asyncio.create_task(_payment_reconciliation_loop())
     asyncio.create_task(_delivery_auto_release_loop())
     asyncio.create_task(_financial_integrity_loop())
+    asyncio.create_task(_booking_escrow_loop())
+    asyncio.create_task(_services_maintenance_loop())
 
 
 @app.on_event("shutdown")
@@ -233,6 +263,11 @@ app.include_router(loyalty.router, prefix="/api")
 app.include_router(guides.router, prefix="/api")
 app.include_router(guides.admin_router, prefix="/api")
 app.include_router(home_feed.router, prefix="/api")
+app.include_router(services.router, prefix="/api")
+app.include_router(services.bookings_router, prefix="/api")
+app.include_router(services.vendor_router, prefix="/api")
+app.include_router(services.quotations_router, prefix="/api")
+app.include_router(admin_services.router, prefix="/api")
 app.include_router(customer_wallet.router, prefix="/api")
 app.include_router(realtime.router, prefix="/api")
 app.include_router(reviews.router, prefix="/api")

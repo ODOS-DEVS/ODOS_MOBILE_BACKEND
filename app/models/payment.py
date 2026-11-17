@@ -74,13 +74,24 @@ class PaymentTransaction(Base):
         primary_key=True,
         default=uuid.uuid4,
     )
-    order_id: Mapped[uuid.UUID] = mapped_column(
+    # Exactly one parent, enforced by ck_payment_transactions_single_parent.
+    # Orders keep their one-payment-per-order rule via a partial unique index;
+    # bookings deliberately allow several rows so a deposit and a balance can
+    # settle the same job. See migration j4y5g62y4g62.
+    order_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("orders.id", ondelete="CASCADE"),
-        nullable=False,
-        unique=True,
+        nullable=True,
         index=True,
     )
+    booking_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("bookings.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    #: deposit | balance | full -- which part of a booking this settles.
+    purpose: Mapped[str | None] = mapped_column(String(20), nullable=True)
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("users.id", ondelete="CASCADE"),
@@ -128,7 +139,7 @@ class PaymentTransaction(Base):
         nullable=False,
     )
 
-    order: Mapped["Order"] = relationship(back_populates="payment_transaction")
+    order: Mapped["Order | None"] = relationship(back_populates="payment_transaction")
     user: Mapped["User"] = relationship(back_populates="payment_transactions")
     ledger_entries: Mapped[list["PlatformLedgerEntry"]] = relationship(
         back_populates="payment_transaction",
