@@ -21,4 +21,13 @@ echo "==> Alembic current revision (post-upgrade):"
 python -m alembic current || true
 
 echo "==> Starting API"
-exec python -m uvicorn app.main:app --host 0.0.0.0 --port "${PORT:-8000}"
+# --proxy-headers / --forwarded-allow-ips match the Dockerfile CMD: without them uvicorn ignores
+# X-Forwarded-Proto from the reverse proxy and generates http:// URLs behind TLS. This script is
+# meant to be a drop-in replacement for that CMD on platforms that run migrations as part of
+# start-up rather than as a separate release step, so the two must not drift.
+exec python -m uvicorn app.main:app \
+  --host 0.0.0.0 \
+  --port "${PORT:-8000}" \
+  --proxy-headers \
+  --forwarded-allow-ips='*'
+

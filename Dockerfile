@@ -66,5 +66,15 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
 # would race to `alembic upgrade head` on boot; Compose runs them once in a dedicated `migrate`
 # service, and a real deployment runs them as a release step.
 #
+# THAT RELEASE STEP IS NOT OPTIONAL. A platform that builds this image and runs this CMD with no
+# migrate step deploys code ahead of its schema: the models reference columns the database does
+# not have, and every query touching them fails with UndefinedColumn. That is what happened when
+# the services marketplace shipped -- `stores.offerings` existed in the model and not in
+# production, so anything selecting Store returned 500 while the rest of the API looked healthy.
+#
+# On a single-replica platform with no release-step support (Coolify, Render), set the start
+# command to `scripts/render_start.sh`, which migrates and then execs this same uvicorn
+# invocation. Keep the two in step.
+#
 # --proxy-headers so uvicorn honours X-Forwarded-Proto from nginx and generates https:// URLs.
 CMD ["sh", "-c", "exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers --forwarded-allow-ips='*'"]
