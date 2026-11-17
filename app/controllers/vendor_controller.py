@@ -1294,10 +1294,10 @@ def update_vendor_product_status(
     db: Session,
     user: User,
     product_id: str,
-    status: str,
+    next_status: str,
 ) -> VendorProductRead:
     require_vendor_access(user)
-    normalized_status = status.strip().lower()
+    normalized_status = next_status.strip().lower()
     if normalized_status not in VENDOR_SELF_SERVICE_PRODUCT_STATUSES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1414,7 +1414,7 @@ def bulk_update_vendor_products(
     *,
     product_ids: list[str],
     stock: int | None = None,
-    status: str | None = None,
+    next_status: str | None = None,
 ) -> list[VendorProductRead]:
     from app.services.inventory_service import (
         compute_reserved_stock_map,
@@ -1448,8 +1448,8 @@ def bulk_update_vendor_products(
             detail="One or more products were not found in your catalog.",
         )
 
-    next_status = (status or "").strip().lower() or None
-    if next_status and next_status not in {"active", "hidden"}:
+    normalized_status = (next_status or "").strip().lower() or None
+    if normalized_status and normalized_status not in {"active", "hidden"}:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Bulk status may only be active or hidden.",
@@ -1470,10 +1470,10 @@ def bulk_update_vendor_products(
                 note="Bulk stock update",
                 actor=user,
             )
-        if next_status == "hidden":
+        if normalized_status == "hidden":
             product.status = "hidden"
             product.is_active = False
-        elif next_status == "active":
+        elif normalized_status == "active":
             if int(product.stock or 0) <= 0:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,

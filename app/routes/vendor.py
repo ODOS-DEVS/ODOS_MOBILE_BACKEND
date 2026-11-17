@@ -424,7 +424,7 @@ def patch_vendor_products_bulk(
         current_user,
         product_ids=payload.product_ids,
         stock=payload.stock,
-        status=payload.status,
+        next_status=payload.status,
     )
 
 

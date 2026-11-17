@@ -47,13 +47,21 @@ class Settings(BaseSettings):
     arkesel_otp_message: str = "Your ODOS verification code is %otp_code%. Do not share it."
     password_reset_code_expire_minutes: int = 10
     password_reset_token_expire_minutes: int = 15
-    # ODOS takes 0.1% of the goods subtotal — temporarily reduced from 4%
-    # while the marketplace grows; it will go back up. Delivery fees are never
-    # commissioned — see vendor_allocation_map in services/finance_math.py.
+    # ODOS takes 1% of the goods subtotal (was 0.1%, itself temporarily reduced
+    # from 4%). Delivery fees are never commissioned — see vendor_allocation_map
+    # in services/finance_math.py.
     #
     # Overridable per environment via VENDOR_COMMISSION_RATE. Changing this
     # default does NOT change a deployment that already sets that variable.
-    vendor_commission_rate: float = 0.001
+    #
+    # NOTE: commission is recomputed at read time, not stored per order. A
+    # settled order's real commission is frozen on its VendorWalletTransaction,
+    # but the vendor-facing order view recalculates from this rate, so orders
+    # settled at the old rate now *display* 1% while their wallet entry (and the
+    # money actually paid) still reflects 0.1%. Accepted deliberately when this
+    # rate changed; persisting the rate per order is the fix if that drift ever
+    # needs to go away.
+    vendor_commission_rate: float = 0.01
     vendor_withdrawal_minimum: float = 20.0
 
     # Loyalty tier discounts (silver 5%, gold 10%) are ADVERTISED in the app's

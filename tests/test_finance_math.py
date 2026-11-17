@@ -132,7 +132,7 @@ def test_a_vendor_is_never_allocated_a_negative_amount():
     assert allocation["net_amount"] >= 0.0
 
 
-def test_default_commission_rate_is_point_one_percent():
+def test_default_commission_rate_is_one_percent():
     """The commercial rate, pinned.
 
     Every production caller of `vendor_allocation_map` omits `commission_rate`
@@ -145,19 +145,30 @@ def test_default_commission_rate_is_point_one_percent():
     """
     from app.core.config import settings
 
-    assert settings.vendor_commission_rate == pytest.approx(0.001)
+    assert settings.vendor_commission_rate == pytest.approx(0.01)
 
 
-def test_commission_defaults_to_point_one_percent_in_allocation():
-    """A vendor keeps 99.9% of the goods they sold."""
+def test_commission_defaults_to_one_percent_in_allocation():
+    """A vendor keeps 99% of the goods they sold."""
     vendor = uuid.uuid4()
     order = build_order([(vendor, 200.0, "store-1")])
 
     allocation = vendor_allocation_map(order)[vendor]
 
     assert allocation["gross_amount"] == pytest.approx(200.0)
-    assert allocation["commission_amount"] == pytest.approx(0.2)
-    assert allocation["net_amount"] == pytest.approx(199.8)
+    assert allocation["commission_amount"] == pytest.approx(2.0)
+    assert allocation["net_amount"] == pytest.approx(198.0)
+
+
+def test_commission_on_a_hundred_cedi_order():
+    """The worked example the rate change was specified against: 100 -> 1 / 99."""
+    vendor = uuid.uuid4()
+    order = build_order([(vendor, 100.0, "store-1")])
+
+    allocation = vendor_allocation_map(order)[vendor]
+
+    assert allocation["commission_amount"] == pytest.approx(1.0)
+    assert allocation["net_amount"] == pytest.approx(99.0)
 
 
 # --- platform-funded promotion lines (the loyalty tier discount) ---
