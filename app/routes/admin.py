@@ -82,6 +82,7 @@ from app.controllers.admin_metrics_controller import (
 from app.controllers.campaign_controller import (
     archive_admin_campaign,
     create_admin_campaign,
+    set_admin_campaign_artwork,
     duplicate_admin_campaign,
     get_admin_campaign,
     list_admin_campaign_opt_ins,
@@ -787,6 +788,33 @@ async def patch_merchandising_campaign(
     db: Session = Depends(get_db),
 ):
     return await update_admin_campaign(db, current_user, campaign_id, payload)
+
+
+@router.post(
+    "/merchandising-campaigns/{campaign_id}/artwork",
+    response_model=AdminMerchandisingCampaignRead,
+)
+async def post_merchandising_campaign_artwork(
+    campaign_id: UUID,
+    current_user: RequirePromotionsAdmin,
+    db: Session = Depends(get_db),
+    banner_image: UploadFile | None = File(default=None),
+    thumbnail_image: UploadFile | None = File(default=None),
+):
+    """Upload campaign artwork.
+
+    Separate from the JSON upsert rather than converting that to multipart: the upsert is already
+    used by the admin dashboard and the mobile tooling, and changing its content type would break
+    both. This writes the two image columns and leaves every other field alone, so artwork can be
+    replaced without resubmitting the whole campaign.
+    """
+    return await set_admin_campaign_artwork(
+        db,
+        current_user,
+        campaign_id,
+        banner_image=banner_image,
+        thumbnail_image=thumbnail_image,
+    )
 
 
 @router.delete("/merchandising-campaigns/{campaign_id}")

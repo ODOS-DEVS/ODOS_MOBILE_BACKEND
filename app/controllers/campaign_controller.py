@@ -215,7 +215,12 @@ def get_public_campaign_detail(
     serialized = serialize_catalog_products(db, products)
     base = _serialize_public_campaign(db, campaign, include_product_count=False)
     return MerchandisingCampaignDetailRead(
-        **base.model_dump(),
+        # `product_count` is excluded rather than relying on include_product_count=False: that
+        # flag only skips *computing* the count, while the field keeps its default and still
+        # comes out of model_dump() — so passing the real total alongside it raised
+        # "got multiple values for keyword argument 'product_count'" and every campaign landing
+        # page returned a 500.
+        **base.model_dump(exclude={"product_count"}),
         product_count=total,
         products=serialized,
         has_more=offset + len(serialized) < total,
@@ -325,6 +330,46 @@ async def create_admin_campaign(
     db.commit()
     db.refresh(campaign)
     invalidate_merchandising_campaigns()
+    return _serialize_admin_campaign(db, campaign)
+
+
+async def set_admin_campaign_artwork(
+    db: Session,
+    _current_user: User,
+    campaign_id: uuid.UUID,
+    *,
+    banner_image: UploadFile | None = None,
+    thumbnail_image: UploadFile | None = None,
+) -> AdminMerchandisingCampaignRead:
+    """Replace a campaign's artwork without resubmitting the rest of it.
+
+    `create_admin_campaign` and `update_admin_campaign` already accept these files, but their
+    routes take a JSON body and FastAPI cannot mix a JSON body with file parts — so artwork had
+    no way in from the dashboard, and an admin had to paste a URL for an image they had on disk.
+
+    Only the files that are actually sent are written, so uploading a new banner leaves an
+    existing thumbnail alone.
+    """
+    # Authorisation is the route's RequirePromotionsAdmin dependency, as with every other admin
+    # campaign call in this module — none of them re-check here.
+    campaign = db.get(MerchandisingCampaign, campaign_id)
+    if campaign is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="That campaign was not found.",
+        )
+
+    if banner_image is not None and banner_image.filename:
+        campaign.banner_image_url = await save_image_upload(
+            banner_image, folder="merchandising-campaigns"
+        )
+    if thumbnail_image is not None and thumbnail_image.filename:
+        campaign.thumbnail_image_url = await save_image_upload(
+            thumbnail_image, folder="merchandising-campaigns"
+        )
+
+    db.commit()
+    db.refresh(campaign)
     return _serialize_admin_campaign(db, campaign)
 
 
