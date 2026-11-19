@@ -531,6 +531,33 @@ class MerchandisingCampaign(Base):
         server_default="false",
         nullable=False,
     )
+    # Last moment a vendor may nominate a product. Null means "until the campaign ends",
+    # which is how every campaign created before submission windows existed behaves.
+    submission_deadline: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    # Set in the same transaction that fans the invites out, so a retried publish cannot
+    # notify the same vendors twice.
+    vendors_notified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    vendors_notified_count: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        server_default="0",
+        nullable=False,
+    )
+    # Participation rules. `min_discount_percent` is the floor a proposed price must clear;
+    # `requires_proposed_price` decides whether a vendor must name one at all.
+    min_discount_percent: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    requires_proposed_price: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        server_default="false",
+        nullable=False,
+    )
     eligibility_rules: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -624,6 +651,14 @@ class MerchandisingCampaignOptIn(Base):
         server_default="pending",
         index=True,
     )
+    # What the vendor proposes the product should cost while the campaign runs. Kept here and
+    # never written onto `products.price`: the shelf price must not move because a nomination
+    # was submitted, only once an admin approves and the campaign is actually running.
+    proposed_price: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # The shelf price as it stood at submission, so the discount the admin reviews is the
+    # discount that was offered even if the vendor reprices afterwards.
+    proposed_old_price: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    vendor_note: Mapped[str | None] = mapped_column(String(255), nullable=True)
     review_notes: Mapped[str | None] = mapped_column(String(255), nullable=True)
     reviewed_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),

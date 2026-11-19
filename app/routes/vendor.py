@@ -9,8 +9,10 @@ from sqlalchemy.orm import Session
 
 from app.controllers.campaign_controller import (
     create_vendor_campaign_opt_in,
+    get_vendor_campaign_brief,
     list_vendor_campaign_opt_ins,
     list_vendor_open_campaigns,
+    submit_vendor_campaign_products,
 )
 from app.controllers.flash_sale_nominations_controller import (
     create_vendor_flash_sale_nomination,
@@ -77,7 +79,12 @@ from app.core.auth import get_current_user
 from app.core.database import get_db
 from app.models import User
 from app.schemas.admin import AdminMerchandisingCampaignOptInRead
-from app.schemas.catalog import MerchandisingCampaignRead
+from app.schemas.catalog import (
+    VendorCampaignBriefRead,
+    VendorCampaignSubmissionPayload,
+    VendorCampaignSubmissionResult,
+    VendorCampaignWorkspaceRead,
+)
 from app.schemas.user import MessageResponse
 from app.schemas.vendor import (
     VendorAnalyticsRead,
@@ -648,7 +655,7 @@ class VendorCampaignOptInCreate(BaseModel):
     product_id: str = Field(min_length=1, max_length=100)
 
 
-@router.get("/merchandising-campaigns/open", response_model=list[MerchandisingCampaignRead])
+@router.get("/merchandising-campaigns/open", response_model=list[VendorCampaignBriefRead])
 def get_vendor_open_merchandising_campaigns(
     current_user: Annotated[User, Depends(get_current_user)],
     db: Session = Depends(get_db),
@@ -683,6 +690,38 @@ def post_vendor_merchandising_campaign_opt_in(
         campaign_id=payload.campaign_id,
         product_id=payload.product_id,
     )
+
+
+@router.get(
+    "/merchandising-campaigns/{slug}/workspace",
+    response_model=VendorCampaignWorkspaceRead,
+)
+def get_vendor_campaign_workspace(
+    slug: str,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    """The campaign brief plus this vendor's own submissions to it.
+
+    Scoped to the authenticated caller — the route takes no vendor identifier, so there is
+    nothing a browser could change to read another store's nominations.
+    """
+    return get_vendor_campaign_brief(db, current_user, slug)
+
+
+@router.post(
+    "/merchandising-campaigns/{slug}/submissions",
+    response_model=VendorCampaignSubmissionResult,
+    status_code=status.HTTP_201_CREATED,
+)
+def post_vendor_campaign_submissions(
+    slug: str,
+    payload: VendorCampaignSubmissionPayload,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    """Nominate several products at once. Each item succeeds or fails on its own."""
+    return submit_vendor_campaign_products(db, current_user, slug, payload.items)
 
 
 @router.patch("/orders/{order_id}/status", response_model=VendorOrderRead)

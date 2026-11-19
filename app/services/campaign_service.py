@@ -43,6 +43,46 @@ def campaign_is_live(campaign: MerchandisingCampaign, *, now: datetime | None = 
     return not (campaign.ends_at and campaign.ends_at < current)
 
 
+def submission_window_closes_at(campaign: MerchandisingCampaign) -> datetime | None:
+    """When nominations stop being accepted.
+
+    An explicit deadline wins. Without one the window runs to the end of the campaign,
+    which is how every campaign created before submission windows existed behaves. A
+    campaign with neither never closes on time alone.
+    """
+    return campaign.submission_deadline or campaign.ends_at
+
+
+def campaign_accepts_submissions(
+    campaign: MerchandisingCampaign,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """Whether a vendor may nominate products right now.
+
+    Deliberately not the same question as `campaign_is_live`. A campaign can be visible to
+    shoppers while its submission window has closed (late nominations would miss the run),
+    and a scheduled campaign that has not started can still be collecting nominations —
+    which is the normal case, since stock has to be lined up before the sale opens.
+    """
+    current = now or datetime.now(UTC)
+    if not campaign.allow_vendor_opt_in:
+        return False
+    if not campaign.is_active:
+        return False
+    if campaign.status in {"draft", "archived", "ended"}:
+        return False
+    if campaign.ends_at and campaign.ends_at < current:
+        return False
+    closes = submission_window_closes_at(campaign)
+    return not (closes and closes < current)
+
+
+def campaign_is_published(campaign: MerchandisingCampaign) -> bool:
+    """Published = out of draft and switched on. Says nothing about the schedule."""
+    return campaign.is_active and campaign.status not in {"draft", "archived"}
+
+
 def derive_campaign_status(
     campaign: MerchandisingCampaign,
     *,

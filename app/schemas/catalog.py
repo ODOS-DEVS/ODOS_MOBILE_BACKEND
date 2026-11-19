@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class CategoryRead(BaseModel):
@@ -219,3 +219,95 @@ class StoreSectionRead(BaseModel):
     products: list[ProductRead]
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class VendorCampaignBriefRead(BaseModel):
+    """A campaign as its vendor submission page needs it: identity plus participation rules."""
+
+    id: uuid.UUID
+    slug: str
+    title: str
+    subtitle: str | None = None
+    description: str | None = None
+    banner_image_url: str | None = None
+    thumbnail_image_url: str | None = None
+    theme_color: str | None = None
+    status: str
+    starts_at: datetime | None = None
+    ends_at: datetime | None = None
+    submission_deadline: datetime | None = None
+    #: Effective close: the explicit deadline, or the campaign end when there is none.
+    submission_closes_at: datetime | None = None
+    accepts_submissions: bool = False
+    requires_proposed_price: bool = False
+    min_discount_percent: int | None = None
+    max_products: int | None = None
+    product_count: int = 0
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class VendorCampaignSubmissionRead(BaseModel):
+    id: uuid.UUID
+    campaign_id: uuid.UUID
+    product_id: str
+    product_title: str
+    product_image_url: str | None = None
+    #: The product's price today, for comparison against what was proposed.
+    current_price: int | None = None
+    proposed_price: int | None = None
+    proposed_old_price: int | None = None
+    discount_percent: int | None = None
+    vendor_note: str | None = None
+    status: str
+    review_notes: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class VendorCampaignWorkspaceRead(BaseModel):
+    campaign: VendorCampaignBriefRead
+    submissions: list[VendorCampaignSubmissionRead] = []
+
+
+class VendorCampaignSubmissionItem(BaseModel):
+    product_id: str = Field(min_length=1, max_length=100)
+    proposed_price: int | None = Field(default=None, ge=1)
+    vendor_note: str | None = Field(default=None, max_length=255)
+
+
+class VendorCampaignSubmissionPayload(BaseModel):
+    items: list[VendorCampaignSubmissionItem] = Field(min_length=1, max_length=100)
+
+
+class VendorCampaignSubmissionOutcome(BaseModel):
+    product_id: str
+    accepted: bool
+    #: Machine-readable refusal: duplicate, not_yours, already_submitted, price_required,
+    #: price_invalid, discount_too_small. Null when accepted.
+    reason: str | None = None
+    detail: str | None = None
+
+
+class VendorCampaignSubmissionResult(BaseModel):
+    campaign_slug: str
+    submitted: int
+    rejected: int
+    outcomes: list[VendorCampaignSubmissionOutcome] = []
+
+
+class CampaignParticipationRead(BaseModel):
+    """Admin-facing participation counters for one campaign."""
+
+    campaign_id: uuid.UUID
+    campaign_slug: str
+    vendors_notified: int = 0
+    vendors_notified_at: datetime | None = None
+    vendors_submitted: int = 0
+    eligible_vendors: int = 0
+    products_nominated: int = 0
+    products_approved: int = 0
+    products_rejected: int = 0
+    products_pending: int = 0

@@ -21,18 +21,31 @@ from app.models.catalog import (
     MerchandisingCampaignOptIn,
     MerchandisingCampaignProduct,
 )
+from app.models.user import VendorStatus
 from app.schemas.admin import (
     AdminMerchandisingCampaignOptInRead,
     AdminMerchandisingCampaignRead,
     AdminMerchandisingCampaignUpsert,
 )
-from app.schemas.catalog import MerchandisingCampaignDetailRead, MerchandisingCampaignRead
+from app.schemas.catalog import (
+    CampaignParticipationRead,
+    MerchandisingCampaignDetailRead,
+    MerchandisingCampaignRead,
+    VendorCampaignBriefRead,
+    VendorCampaignSubmissionItem,
+    VendorCampaignSubmissionOutcome,
+    VendorCampaignSubmissionRead,
+    VendorCampaignSubmissionResult,
+    VendorCampaignWorkspaceRead,
+)
 from app.schemas.pagination import AdminPageRead
 from app.services.campaign_service import (
     CAMPAIGN_STATUSES,
     PRODUCT_SORT_MODES,
     VISIBILITY_MODES,
+    campaign_accepts_submissions,
     campaign_is_live,
+    campaign_is_published,
     count_campaign_products,
     derive_campaign_status,
     get_campaign_by_slug,
@@ -41,6 +54,7 @@ from app.services.campaign_service import (
     replace_campaign_targets,
     resolve_campaign_products,
     slugify_campaign,
+    submission_window_closes_at,
     sync_campaign_schedule_status,
 )
 from app.services.email_service import send_admin_campaign_opt_in_email
@@ -152,6 +166,11 @@ def _serialize_admin_campaign(db: Session, campaign: MerchandisingCampaign) -> A
         hide_out_of_stock=campaign.hide_out_of_stock,
         include_entire_marketplace=campaign.include_entire_marketplace,
         allow_vendor_opt_in=campaign.allow_vendor_opt_in,
+        submission_deadline=campaign.submission_deadline,
+        requires_proposed_price=campaign.requires_proposed_price,
+        min_discount_percent=campaign.min_discount_percent,
+        vendors_notified_at=campaign.vendors_notified_at,
+        vendors_notified_count=campaign.vendors_notified_count or 0,
         product_ids=[row.product_id for row in manual_rows],
         pinned_product_ids=[row.product_id for row in manual_rows if row.is_pinned],
         category_slugs=categories,
@@ -197,6 +216,53 @@ def list_public_campaigns(
     return [_serialize_public_campaign(db, campaign) for campaign in campaigns]
 
 
+def _apply_campaign_pricing(
+    db: Session,
+    campaign: MerchandisingCampaign,
+    products: list,
+) -> list:
+    """Overlay the approved campaign price onto the products this campaign returns.
+
+    The campaign price lives on the approved nomination, never on `products.price`: a
+    product in a Christmas sale is still its normal price everywhere else on ODOS, and
+    the moment the campaign ends it costs what it always did with nothing to undo.
+
+    Only approved nominations count, and only ones that actually undercut the shelf price
+    — a stale nomination from before a price drop must not invent a higher "sale" price.
+    """
+    if not products:
+        return products
+
+    priced = dict(
+        db.execute(
+            select(
+                MerchandisingCampaignOptIn.product_id,
+                MerchandisingCampaignOptIn.proposed_price,
+            ).where(
+                MerchandisingCampaignOptIn.campaign_id == campaign.id,
+                MerchandisingCampaignOptIn.status == "approved",
+                MerchandisingCampaignOptIn.proposed_price.is_not(None),
+            )
+        ).all()
+    )
+    if not priced:
+        return products
+
+    for product in products:
+        campaign_price = priced.get(product.id)
+        if campaign_price is None or campaign_price >= product.price:
+            continue
+        # Strike through what the shopper would pay today, not any older RRP the product
+        # carries. The saving a campaign advertises has to be the saving it actually gives,
+        # and it has to match the percentage the admin approved.
+        was = product.price
+        product.old_price = was
+        product.price = campaign_price
+        product.discount = f"-{int(round((1 - campaign_price / was) * 100))}%"
+
+    return products
+
+
 def get_public_campaign_detail(
     db: Session,
     slug: str,
@@ -212,7 +278,7 @@ def get_public_campaign_detail(
         )
 
     products, total = resolve_campaign_products(db, campaign, limit=limit, offset=offset)
-    serialized = serialize_catalog_products(db, products)
+    serialized = _apply_campaign_pricing(db, campaign, serialize_catalog_products(db, products))
     base = _serialize_public_campaign(db, campaign, include_product_count=False)
     return MerchandisingCampaignDetailRead(
         # `product_count` is excluded rather than relying on include_product_count=False: that
@@ -306,6 +372,9 @@ async def create_admin_campaign(
         hide_out_of_stock=bool(payload.hide_out_of_stock),
         include_entire_marketplace=bool(payload.include_entire_marketplace),
         allow_vendor_opt_in=bool(payload.allow_vendor_opt_in),
+        submission_deadline=payload.submission_deadline,
+        requires_proposed_price=bool(payload.requires_proposed_price),
+        min_discount_percent=payload.min_discount_percent,
     )
     if banner_file is not None and banner_file.filename:
         campaign.banner_image_url = await save_image_upload(
@@ -330,6 +399,11 @@ async def create_admin_campaign(
     db.commit()
     db.refresh(campaign)
     invalidate_merchandising_campaigns()
+    # Invites go out on publication, never on a saved draft: a vendor asked to prepare
+    # stock for a campaign that is not real yet has been misled.
+    if payload.notify_vendors:
+        notify_vendors_of_campaign(db, campaign)
+        db.refresh(campaign)
     return _serialize_admin_campaign(db, campaign)
 
 
@@ -418,6 +492,9 @@ async def update_admin_campaign(
     campaign.hide_out_of_stock = bool(payload.hide_out_of_stock)
     campaign.include_entire_marketplace = bool(payload.include_entire_marketplace)
     campaign.allow_vendor_opt_in = bool(payload.allow_vendor_opt_in)
+    campaign.submission_deadline = payload.submission_deadline
+    campaign.requires_proposed_price = bool(payload.requires_proposed_price)
+    campaign.min_discount_percent = payload.min_discount_percent
 
     if banner_file is not None and banner_file.filename:
         campaign.banner_image_url = await save_image_upload(
@@ -441,6 +518,12 @@ async def update_admin_campaign(
     db.commit()
     db.refresh(campaign)
     invalidate_merchandising_campaigns()
+    # A draft saved with `notify_vendors` set is not an invitation: the fan-out checks
+    # publication itself and no-ops, so the flag can stay on through the whole edit cycle
+    # and fires exactly once, on the save that actually publishes.
+    if payload.notify_vendors:
+        notify_vendors_of_campaign(db, campaign)
+        db.refresh(campaign)
     return _serialize_admin_campaign(db, campaign)
 
 
@@ -578,6 +661,14 @@ def list_admin_campaign_opt_ins(
                 product_title=product.title if product else row.product_id,
                 vendor_user_id=row.vendor_user_id,
                 vendor_name=(vendor.full_name or vendor.email) if vendor else None,
+                proposed_price=row.proposed_price,
+                proposed_old_price=row.proposed_old_price,
+                current_price=product.price if product else None,
+                discount_percent=_discount_percent(
+                    row.proposed_old_price or (product.price if product else None),
+                    row.proposed_price,
+                ),
+                vendor_note=row.vendor_note,
                 status=row.status,
                 review_notes=row.review_notes,
                 units_sold_since_approval=_units_sold_since_approval(db, row),
@@ -596,6 +687,7 @@ def review_admin_campaign_opt_in(
     *,
     status_value: str,
     review_notes: str | None = None,
+    campaign_price: int | None = None,
 ) -> AdminMerchandisingCampaignOptInRead:
     row = db.get(MerchandisingCampaignOptIn, opt_in_id)
     if not row:
@@ -611,6 +703,18 @@ def review_admin_campaign_opt_in(
     row.status = cleaned
     row.review_notes = review_notes
     row.reviewed_by_user_id = current_user.id
+    if campaign_price is not None:
+        # An admin may settle on a different campaign price than the vendor proposed. It is
+        # still only the campaign price — `products.price` is never touched here.
+        product_now = db.get(Product, row.product_id)
+        if product_now and (campaign_price <= 0 or campaign_price >= product_now.price):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"The campaign price must be below the current price of {product_now.price}.",
+            )
+        row.proposed_price = campaign_price
+        if product_now and row.proposed_old_price is None:
+            row.proposed_old_price = product_now.price
     db.add(row)
 
     if cleaned == "approved":
@@ -692,6 +796,14 @@ def review_admin_campaign_opt_in(
         product_title=product.title if product else row.product_id,
         vendor_user_id=row.vendor_user_id,
         vendor_name=(vendor.full_name or vendor.email) if vendor else None,
+        proposed_price=row.proposed_price,
+        proposed_old_price=row.proposed_old_price,
+        current_price=product.price if product else None,
+        discount_percent=_discount_percent(
+            row.proposed_old_price or (product.price if product else None),
+            row.proposed_price,
+        ),
+        vendor_note=row.vendor_note,
         status=row.status,
         review_notes=row.review_notes,
         units_sold_since_approval=_units_sold_since_approval(db, row),
@@ -743,6 +855,17 @@ def list_vendor_campaign_opt_ins(
                 products.get(row.product_id).title if products.get(row.product_id) else row.product_id
             ),
             vendor_user_id=row.vendor_user_id,
+            proposed_price=row.proposed_price,
+            proposed_old_price=row.proposed_old_price,
+            current_price=(
+                products.get(row.product_id).price if products.get(row.product_id) else None
+            ),
+            discount_percent=_discount_percent(
+                row.proposed_old_price
+                or (products.get(row.product_id).price if products.get(row.product_id) else None),
+                row.proposed_price,
+            ),
+            vendor_note=row.vendor_note,
             status=row.status,
             review_notes=row.review_notes,
             units_sold_since_approval=_units_sold_since_approval(db, row),
@@ -753,16 +876,38 @@ def list_vendor_campaign_opt_ins(
     ]
 
 
-def list_vendor_open_campaigns(db: Session, vendor_user: User) -> list[MerchandisingCampaignRead]:
+def list_vendor_open_campaigns(db: Session, vendor_user: User) -> list[VendorCampaignBriefRead]:
+    """Campaigns a vendor can nominate into right now.
+
+    Not the same set as the shopper-facing live list, and deliberately so: nominations for a
+    Christmas sale are collected in November, while `list_live_campaigns` would not show that
+    campaign until December. Querying published campaigns directly is what lets a vendor
+    prepare before the sale opens.
+    """
     from app.controllers.vendor_controller import require_vendor_access
 
     require_vendor_access(vendor_user)
-    campaigns = [
-        campaign
-        for campaign in list_live_campaigns(db, limit=60)
-        if campaign.allow_vendor_opt_in
+    rows = list(
+        db.scalars(
+            select(MerchandisingCampaign)
+            .where(
+                MerchandisingCampaign.allow_vendor_opt_in.is_(True),
+                MerchandisingCampaign.is_active.is_(True),
+                MerchandisingCampaign.status.notin_(["draft", "archived", "ended"]),
+            )
+            .order_by(
+                MerchandisingCampaign.is_featured.desc(),
+                MerchandisingCampaign.display_priority.asc(),
+                MerchandisingCampaign.updated_at.desc(),
+            )
+            .limit(60)
+        ).all()
+    )
+    return [
+        _serialize_campaign_brief(db, campaign)
+        for campaign in rows
+        if campaign_accepts_submissions(campaign)
     ]
-    return [_serialize_public_campaign(db, campaign) for campaign in campaigns]
 
 
 def create_vendor_campaign_opt_in(
@@ -832,3 +977,510 @@ def create_vendor_campaign_opt_in(
         created_at=row.created_at,
         updated_at=row.updated_at,
     )
+
+
+# ---------------------------------------------------------------------------
+# Vendor invitations
+# ---------------------------------------------------------------------------
+
+#: Vendors are notified in chunks so a marketplace with thousands of approved
+#: vendors does not build one enormous transaction, and a failure part-way
+#: through leaves the vendors already notified actually notified.
+VENDOR_NOTIFY_CHUNK = 200
+
+
+def _format_deadline(moment: datetime | None) -> str | None:
+    if not moment:
+        return None
+    stamped = moment if moment.tzinfo else moment.replace(tzinfo=UTC)
+    return stamped.strftime("%-d %B %Y")
+
+
+def eligible_vendor_ids(db: Session) -> list[uuid.UUID]:
+    """Approved vendors only.
+
+    Suspended, rejected, pending and withdrawn vendors are excluded by the same
+    `vendor_status == approved` test `require_vendor_access` enforces on the way in, so
+    nobody is ever invited to a workflow the API would then refuse them.
+    """
+    return list(
+        db.scalars(
+            select(User.id).where(User.vendor_status == VendorStatus.APPROVED)
+        ).all()
+    )
+
+
+def notify_vendors_of_campaign(
+    db: Session,
+    campaign: MerchandisingCampaign,
+    *,
+    force: bool = False,
+) -> int:
+    """Invite every eligible vendor to submit products. Returns how many were notified.
+
+    Idempotent by `vendors_notified_at`: the second call for the same campaign is a no-op,
+    so republishing, a double-click in the admin, or a retried request cannot produce a
+    second invitation. `force` re-sends deliberately (a deadline extension, say) and is
+    only reachable from the explicit admin action.
+    """
+    if not campaign_is_published(campaign) or not campaign.allow_vendor_opt_in:
+        return 0
+    if campaign.vendors_notified_at and not force:
+        return 0
+
+    vendor_ids = eligible_vendor_ids(db)
+    if not vendor_ids:
+        campaign.vendors_notified_at = datetime.now(UTC)
+        campaign.vendors_notified_count = 0
+        db.add(campaign)
+        db.commit()
+        return 0
+
+    deadline = _format_deadline(submission_window_closes_at(campaign))
+    title = f"New campaign: {campaign.title}"
+    body = (
+        f"ODOS is preparing {campaign.title} and your store is invited. "
+        "Pick the products you want featured and submit them for review."
+    )
+    if deadline:
+        body = f"{body} Submissions close {deadline}."
+
+    # Claim the fan-out before sending. Committing the stamp first means a crash mid-send
+    # cannot be replayed into a second round of notifications for everyone.
+    campaign.vendors_notified_at = datetime.now(UTC)
+    db.add(campaign)
+    db.commit()
+
+    notified = 0
+    for start in range(0, len(vendor_ids), VENDOR_NOTIFY_CHUNK):
+        chunk = vendor_ids[start : start + VENDOR_NOTIFY_CHUNK]
+        vendors = list(db.scalars(select(User).where(User.id.in_(chunk))).all())
+        for vendor in vendors:
+            try:
+                event = create_notification_event(
+                    db,
+                    vendor,
+                    kind="vendor_campaign_invite",
+                    title=title,
+                    body=body,
+                    icon="megaphone-outline",
+                    accent="promo",
+                    action_label="Submit products",
+                    # The slug, not the id: it is what both clients route on, and it is
+                    # what the submission page is addressed by.
+                    route_type="vendor_campaign_submit",
+                    route_target_id=campaign.slug,
+                    image_url=campaign.thumbnail_image_url or campaign.banner_image_url,
+                )
+                notified += 1
+            except Exception:
+                logger.exception(
+                    "Failed to create campaign invite for vendor %s on campaign %s",
+                    vendor.id,
+                    campaign.slug,
+                )
+                continue
+
+            if vendor.expo_push_token and vendor.allow_notifications:
+                try:
+                    send_expo_push_notification(
+                        user=vendor,
+                        title=title,
+                        body=body,
+                        data=build_push_data(
+                            push_type="vendor_campaign_invite",
+                            route_type="vendor_campaign_submit",
+                            route_target_id=campaign.slug,
+                            notification_event=event,
+                            extra={"campaignSlug": campaign.slug},
+                        ),
+                    )
+                except Exception:
+                    # A dead push token must not cost the vendor their in-app notification,
+                    # which is already committed below.
+                    logger.exception("Failed to push campaign invite to vendor %s", vendor.id)
+        db.commit()
+
+    campaign.vendors_notified_count = notified
+    db.add(campaign)
+    db.commit()
+    logger.info("Invited %s vendors to campaign %s", notified, campaign.slug)
+    return notified
+
+
+# ---------------------------------------------------------------------------
+# Vendor submissions
+# ---------------------------------------------------------------------------
+
+
+def _vendor_campaign_or_404(db: Session, slug: str) -> MerchandisingCampaign:
+    campaign = get_campaign_by_slug(db, slug)
+    if not campaign or not campaign_is_published(campaign) or not campaign.allow_vendor_opt_in:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="That campaign is not open for vendor participation.",
+        )
+    return campaign
+
+
+def _discount_percent(old_price: int | None, new_price: int | None) -> int | None:
+    if not old_price or new_price is None or old_price <= 0:
+        return None
+    return int(round((1 - (new_price / old_price)) * 100))
+
+
+def _serialize_campaign_brief(
+    db: Session,
+    campaign: MerchandisingCampaign,
+) -> VendorCampaignBriefRead:
+    closes = submission_window_closes_at(campaign)
+    return VendorCampaignBriefRead(
+        id=campaign.id,
+        slug=campaign.slug,
+        title=campaign.title,
+        subtitle=campaign.subtitle,
+        description=campaign.description,
+        banner_image_url=campaign.banner_image_url,
+        thumbnail_image_url=campaign.thumbnail_image_url,
+        theme_color=campaign.theme_color,
+        status=derive_campaign_status(campaign),
+        starts_at=campaign.starts_at,
+        ends_at=campaign.ends_at,
+        submission_deadline=campaign.submission_deadline,
+        submission_closes_at=closes,
+        accepts_submissions=campaign_accepts_submissions(campaign),
+        requires_proposed_price=campaign.requires_proposed_price,
+        min_discount_percent=campaign.min_discount_percent,
+        max_products=campaign.max_products,
+        product_count=count_campaign_products(db, campaign),
+    )
+
+
+def _serialize_vendor_submission(
+    row: MerchandisingCampaignOptIn,
+    product: Product | None,
+) -> VendorCampaignSubmissionRead:
+    return VendorCampaignSubmissionRead(
+        id=row.id,
+        campaign_id=row.campaign_id,
+        product_id=row.product_id,
+        product_title=product.title if product else row.product_id,
+        product_image_url=(product.image_url if product else None),
+        current_price=product.price if product else None,
+        proposed_price=row.proposed_price,
+        proposed_old_price=row.proposed_old_price,
+        discount_percent=_discount_percent(row.proposed_old_price, row.proposed_price),
+        vendor_note=row.vendor_note,
+        status=row.status,
+        review_notes=row.review_notes,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+def get_vendor_campaign_brief(
+    db: Session,
+    vendor_user: User,
+    slug: str,
+) -> VendorCampaignWorkspaceRead:
+    """Everything the submission page needs: the campaign, its rules, and this vendor's entries."""
+    from app.controllers.vendor_controller import require_vendor_access
+
+    require_vendor_access(vendor_user)
+    campaign = _vendor_campaign_or_404(db, slug)
+
+    rows = list(
+        db.scalars(
+            select(MerchandisingCampaignOptIn)
+            .where(
+                MerchandisingCampaignOptIn.campaign_id == campaign.id,
+                # Scoped to the caller, not to a vendor id supplied by the browser.
+                MerchandisingCampaignOptIn.vendor_user_id == vendor_user.id,
+            )
+            .order_by(MerchandisingCampaignOptIn.created_at.desc())
+        ).all()
+    )
+    products = {
+        product.id: product
+        for product in db.scalars(
+            select(Product).where(Product.id.in_([row.product_id for row in rows]))
+        ).all()
+    } if rows else {}
+
+    return VendorCampaignWorkspaceRead(
+        campaign=_serialize_campaign_brief(db, campaign),
+        submissions=[_serialize_vendor_submission(row, products.get(row.product_id)) for row in rows],
+    )
+
+
+def submit_vendor_campaign_products(
+    db: Session,
+    vendor_user: User,
+    slug: str,
+    items: list[VendorCampaignSubmissionItem],
+) -> VendorCampaignSubmissionResult:
+    """Nominate several products in one request.
+
+    Each item is accepted or refused on its own. One ineligible product in a batch of ten
+    must not discard the other nine — the vendor would have no way to tell which of their
+    selections actually landed.
+    """
+    from app.controllers.vendor_controller import require_vendor_access
+
+    require_vendor_access(vendor_user)
+    campaign = _vendor_campaign_or_404(db, slug)
+
+    if not campaign_accepts_submissions(campaign):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Submissions for this campaign have closed.",
+        )
+    if not items:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Choose at least one product to submit.",
+        )
+
+    # One product cannot be submitted twice inside a single batch either.
+    seen: set[str] = set()
+    outcomes: list[VendorCampaignSubmissionOutcome] = []
+    accepted = 0
+
+    existing_ids = set(
+        db.scalars(
+            select(MerchandisingCampaignOptIn.product_id).where(
+                MerchandisingCampaignOptIn.campaign_id == campaign.id,
+                MerchandisingCampaignOptIn.vendor_user_id == vendor_user.id,
+            )
+        ).all()
+    )
+
+    for item in items:
+        product_id = (item.product_id or "").strip()
+        if not product_id or product_id in seen:
+            outcomes.append(
+                VendorCampaignSubmissionOutcome(
+                    product_id=product_id,
+                    accepted=False,
+                    reason="duplicate",
+                    detail="That product appears twice in this submission.",
+                )
+            )
+            continue
+        seen.add(product_id)
+
+        product = db.get(Product, product_id)
+        # Ownership is checked against the authenticated vendor, never against anything
+        # the browser sent. A product belonging to another store is reported as not found
+        # rather than as forbidden, so this cannot be used to probe the catalogue.
+        if not product or product.vendor_user_id != vendor_user.id:
+            outcomes.append(
+                VendorCampaignSubmissionOutcome(
+                    product_id=product_id,
+                    accepted=False,
+                    reason="not_yours",
+                    detail="We couldn't find that product in your store.",
+                )
+            )
+            continue
+
+        if product_id in existing_ids:
+            outcomes.append(
+                VendorCampaignSubmissionOutcome(
+                    product_id=product_id,
+                    accepted=False,
+                    reason="already_submitted",
+                    detail="You have already submitted this product to this campaign.",
+                )
+            )
+            continue
+
+        proposed = item.proposed_price
+        if campaign.requires_proposed_price and proposed is None:
+            outcomes.append(
+                VendorCampaignSubmissionOutcome(
+                    product_id=product_id,
+                    accepted=False,
+                    reason="price_required",
+                    detail="This campaign requires a campaign price for every product.",
+                )
+            )
+            continue
+
+        if proposed is not None:
+            if proposed <= 0 or proposed >= product.price:
+                outcomes.append(
+                    VendorCampaignSubmissionOutcome(
+                        product_id=product_id,
+                        accepted=False,
+                        reason="price_invalid",
+                        detail=f"The campaign price must be below the current price of {product.price}.",
+                    )
+                )
+                continue
+            floor = campaign.min_discount_percent
+            if floor:
+                offered = _discount_percent(product.price, proposed) or 0
+                if offered < floor:
+                    outcomes.append(
+                        VendorCampaignSubmissionOutcome(
+                            product_id=product_id,
+                            accepted=False,
+                            reason="discount_too_small",
+                            detail=f"This campaign needs at least {floor}% off; that price is {offered}%.",
+                        )
+                    )
+                    continue
+
+        db.add(
+            MerchandisingCampaignOptIn(
+                id=uuid.uuid4(),
+                campaign_id=campaign.id,
+                product_id=product_id,
+                vendor_user_id=vendor_user.id,
+                status="pending",
+                proposed_price=proposed,
+                # Snapshot of the shelf price. The product's own price is left untouched:
+                # nothing about a nomination may change what shoppers pay today.
+                proposed_old_price=product.price if proposed is not None else None,
+                vendor_note=(item.vendor_note or "").strip() or None,
+            )
+        )
+        existing_ids.add(product_id)
+        accepted += 1
+        outcomes.append(
+            VendorCampaignSubmissionOutcome(product_id=product_id, accepted=True, reason=None, detail=None)
+        )
+
+    if accepted:
+        db.commit()
+        _dispatch_admin_campaign_submission_alert(
+            db,
+            vendor=vendor_user,
+            campaign_title=campaign.title,
+            product_count=accepted,
+        )
+    else:
+        db.rollback()
+
+    return VendorCampaignSubmissionResult(
+        campaign_slug=campaign.slug,
+        submitted=accepted,
+        rejected=len(outcomes) - accepted,
+        outcomes=outcomes,
+    )
+
+
+def _dispatch_admin_campaign_submission_alert(
+    db: Session,
+    *,
+    vendor: User,
+    campaign_title: str,
+    product_count: int,
+) -> None:
+    """One alert per batch, not one per product — a vendor submitting twenty products
+    should not bury the admin's notification list."""
+    vendor_name = vendor.full_name or vendor.email or "A vendor"
+    title = "New campaign submissions"
+    body = (
+        f"{vendor_name} submitted {product_count} "
+        f"{'product' if product_count == 1 else 'products'} to {campaign_title}."
+    )
+    try:
+        for admin in list_admins_with_feature(db, "promotions"):
+            create_notification_event(
+                db,
+                admin,
+                kind="admin_campaign_opt_in",
+                title=title,
+                body=body,
+                icon="megaphone-outline",
+                accent="promo",
+                action_label="Review submissions",
+                route_type="admin_campaigns",
+            )
+        db.commit()
+    except Exception:
+        # The vendor's submission is already committed; failing to tell an admin must not
+        # undo it. The nominations are still visible in the admin review queue.
+        logger.exception("Failed to alert admins about campaign submissions")
+        db.rollback()
+
+
+def get_campaign_participation(
+    db: Session,
+    campaign_id: uuid.UUID,
+) -> CampaignParticipationRead:
+    """Who was invited, who turned up, and where their products got to."""
+    campaign = db.get(MerchandisingCampaign, campaign_id)
+    if not campaign:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Campaign not found.")
+
+    rows = list(
+        db.execute(
+            select(
+                MerchandisingCampaignOptIn.status,
+                func.count(MerchandisingCampaignOptIn.id),
+            )
+            .where(MerchandisingCampaignOptIn.campaign_id == campaign_id)
+            .group_by(MerchandisingCampaignOptIn.status)
+        ).all()
+    )
+    by_status = {str(name): int(count) for name, count in rows}
+
+    vendors_submitted = int(
+        db.scalar(
+            select(func.count(func.distinct(MerchandisingCampaignOptIn.vendor_user_id))).where(
+                MerchandisingCampaignOptIn.campaign_id == campaign_id
+            )
+        )
+        or 0
+    )
+    eligible = int(
+        db.scalar(select(func.count(User.id)).where(User.vendor_status == VendorStatus.APPROVED))
+        or 0
+    )
+
+    return CampaignParticipationRead(
+        campaign_id=campaign.id,
+        campaign_slug=campaign.slug,
+        vendors_notified=campaign.vendors_notified_count or 0,
+        vendors_notified_at=campaign.vendors_notified_at,
+        vendors_submitted=vendors_submitted,
+        eligible_vendors=eligible,
+        products_nominated=sum(by_status.values()),
+        products_approved=by_status.get("approved", 0),
+        products_rejected=by_status.get("rejected", 0),
+        products_pending=by_status.get("pending", 0),
+    )
+
+
+def notify_campaign_vendors_action(
+    db: Session,
+    campaign_id: uuid.UUID,
+    *,
+    force: bool = False,
+) -> CampaignParticipationRead:
+    """Admin-triggered invite. Refuses rather than silently doing nothing when the
+    campaign is not in a state where vendors could act on the invitation."""
+    campaign = db.get(MerchandisingCampaign, campaign_id)
+    if not campaign:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Campaign not found.")
+    if not campaign_is_published(campaign):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Publish the campaign before inviting vendors.",
+        )
+    if not campaign.allow_vendor_opt_in:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Turn on vendor participation before inviting vendors.",
+        )
+    if campaign.vendors_notified_at and not force:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Vendors have already been invited to this campaign.",
+        )
+
+    notify_vendors_of_campaign(db, campaign, force=force)
+    return get_campaign_participation(db, campaign_id)

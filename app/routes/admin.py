@@ -82,12 +82,14 @@ from app.controllers.admin_metrics_controller import (
 from app.controllers.campaign_controller import (
     archive_admin_campaign,
     create_admin_campaign,
-    set_admin_campaign_artwork,
     duplicate_admin_campaign,
     get_admin_campaign,
+    get_campaign_participation,
     list_admin_campaign_opt_ins,
     list_admin_campaigns,
+    notify_campaign_vendors_action,
     review_admin_campaign_opt_in,
+    set_admin_campaign_artwork,
     update_admin_campaign,
 )
 from app.controllers.delivery_settings_controller import (
@@ -169,6 +171,7 @@ from app.schemas.admin import (
     AdminVoucherUpsert,
     NotificationMarkReadResponse,
 )
+from app.schemas.catalog import CampaignParticipationRead
 from app.schemas.delivery_settings import (
     AdminDeliverySettingsRead,
     AdminDeliverySettingsUpdate,
@@ -841,6 +844,40 @@ def post_duplicate_merchandising_campaign(
 
 
 @router.get(
+    "/merchandising-campaigns/{campaign_id}/participation",
+    response_model=CampaignParticipationRead,
+)
+def get_merchandising_campaign_participation(
+    campaign_id: UUID,
+    current_user: RequirePromotionsAdmin,
+    db: Session = Depends(get_db),
+):
+    """Who was invited, who submitted, and where their products got to."""
+    return get_campaign_participation(db, campaign_id)
+
+
+@router.post(
+    "/merchandising-campaigns/{campaign_id}/notify-vendors",
+    response_model=CampaignParticipationRead,
+)
+def post_notify_merchandising_campaign_vendors(
+    campaign_id: UUID,
+    current_user: RequirePromotionsAdmin,
+    db: Session = Depends(get_db),
+    force: bool = Query(
+        default=False,
+        description="Re-send to vendors already invited (a deadline extension, say).",
+    ),
+):
+    """Invite every approved vendor to submit products.
+
+    Idempotent without `force`: a campaign whose vendors have already been invited is
+    refused with 409 rather than quietly notifying everyone a second time.
+    """
+    return notify_campaign_vendors_action(db, campaign_id, force=force)
+
+
+@router.get(
     "/merchandising-campaign-opt-ins",
     response_model=AdminPageRead[AdminMerchandisingCampaignOptInRead],
 )
@@ -872,6 +909,11 @@ def post_review_merchandising_campaign_opt_in(
     db: Session = Depends(get_db),
     status_value: str = Query(alias="status", min_length=1, max_length=30),
     review_notes: str | None = Query(default=None, max_length=255),
+    campaign_price: int | None = Query(
+        default=None,
+        ge=1,
+        description="Override the campaign price the vendor proposed. Never changes the shelf price.",
+    ),
 ):
     return review_admin_campaign_opt_in(
         db,
@@ -879,6 +921,7 @@ def post_review_merchandising_campaign_opt_in(
         opt_in_id,
         status_value=status_value,
         review_notes=review_notes,
+        campaign_price=campaign_price,
     )
 
 

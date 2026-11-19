@@ -1137,6 +1137,11 @@ class AdminMerchandisingCampaignRead(BaseModel):
     hide_out_of_stock: bool
     include_entire_marketplace: bool
     allow_vendor_opt_in: bool
+    submission_deadline: datetime | None = None
+    requires_proposed_price: bool = False
+    min_discount_percent: int | None = None
+    vendors_notified_at: datetime | None = None
+    vendors_notified_count: int = 0
     product_ids: list[str] = Field(default_factory=list)
     pinned_product_ids: list[str] = Field(default_factory=list)
     category_slugs: list[str] = Field(default_factory=list)
@@ -1167,6 +1172,13 @@ class AdminMerchandisingCampaignUpsert(BaseModel):
     hide_out_of_stock: bool = True
     include_entire_marketplace: bool = False
     allow_vendor_opt_in: bool = False
+    #: Last moment vendors may nominate. Null runs the window to the campaign end.
+    submission_deadline: datetime | None = None
+    requires_proposed_price: bool = False
+    min_discount_percent: int | None = Field(default=None, ge=1, le=99)
+    #: Invite every approved vendor when this save publishes the campaign. Ignored on a
+    #: campaign that has already been notified — the fan-out is idempotent either way.
+    notify_vendors: bool = False
     product_ids: list[str] = Field(default_factory=list)
     pinned_product_ids: list[str] = Field(default_factory=list)
     category_slugs: list[str] = Field(default_factory=list)
@@ -1218,6 +1230,13 @@ class AdminMerchandisingCampaignOptInRead(BaseModel):
     product_title: str
     vendor_user_id: uuid.UUID
     vendor_name: str | None = None
+    #: What the vendor asked the product to cost during the campaign, and the shelf price
+    #: at the moment they asked. Never written back onto the product itself.
+    proposed_price: int | None = None
+    proposed_old_price: int | None = None
+    current_price: int | None = None
+    discount_percent: int | None = None
+    vendor_note: str | None = None
     status: str
     review_notes: str | None = None
     units_sold_since_approval: int | None = None
