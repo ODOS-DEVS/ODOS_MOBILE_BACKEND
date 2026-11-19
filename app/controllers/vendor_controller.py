@@ -93,6 +93,33 @@ from app.services.realtime_service import realtime_manager
 from app.services.sms_service import notify_admins_by_sms
 
 logger = logging.getLogger(__name__)
+
+# A Ghana Card number is printed on the card as GHA-123456789-0: the fixed "GHA" prefix,
+# nine digits, then a check digit. Stored in that exact printed form so two applications
+# carrying the same card can never differ by spacing or a missing hyphen.
+GHANA_CARD_DIGIT_COUNT = 10
+
+
+def normalise_ghana_card_number(value: str | None) -> str | None:
+    """Return the number as printed, or raise 422 if it is not one.
+
+    Absent stays absent: older clients never collected this field, and an application
+    that simply omits it must keep applying successfully.
+    """
+    if value is None or not value.strip():
+        return None
+
+    digits = "".join(character for character in value if character.isdigit())
+    if len(digits) != GHANA_CARD_DIGIT_COUNT:
+        # Deliberately no echo of the submitted value — it is identity data and this
+        # message reaches logs and error reporters.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Enter your Ghana Card number as printed on the card, like GHA-123456789-0.",
+        )
+    return f"GHA-{digits[:9]}-{digits[9]}"
+
+
 VENDOR_ACTIVE_ORDER_STATUSES = {"pending", "confirmed", "processing", "ready", "out_for_delivery"}
 VENDOR_OPEN_RETURN_STATUSES = {"requested", "under_review", "approved"}
 # Canonical countable sales statuses for dashboard + analytics (keep in sync).
@@ -738,9 +765,7 @@ async def submit_vendor_application(
     )
     application.store_name = store_name.strip()
     application.store_description = store_description.strip() if store_description else None
-    application.ghana_card_number = (
-        ghana_card_number.strip() if ghana_card_number else None
-    )
+    application.ghana_card_number = normalise_ghana_card_number(ghana_card_number)
     application.business_registration_number = (
         business_registration_number.strip()
         if business_registration_number
