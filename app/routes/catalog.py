@@ -1,3 +1,5 @@
+from typing import Annotated
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.orm import Session
 
@@ -6,10 +8,6 @@ from app.controllers.campaign_controller import (
     list_public_campaigns,
 )
 from app.controllers.catalog_controller import (
-    list_my_flash_sale_reminders,
-    list_upcoming_flash_sale_events,
-    set_flash_sale_reminder,
-    unset_flash_sale_reminder,
     get_catalog_product,
     get_store,
     list_active_flash_sale_events,
@@ -17,15 +15,17 @@ from app.controllers.catalog_controller import (
     list_catalog_products,
     list_flash_sale_event_products,
     list_markets,
+    list_my_flash_sale_reminders,
     list_promo_banners,
     list_stores,
+    list_upcoming_flash_sale_events,
     search_products,
     serialize_catalog_product,
     serialize_catalog_products,
+    set_flash_sale_reminder,
+    unset_flash_sale_reminder,
 )
 from app.controllers.deals_controller import get_deals_hub
-from typing import Annotated
-
 from app.core.auth import get_current_user, get_optional_current_user
 from app.core.cache import (
     TTL_CATEGORIES,
@@ -57,6 +57,7 @@ from app.schemas.catalog import (
     ProductRead,
     PromoBannerRead,
     StoreRead,
+    StoreSectionDetailRead,
     StoreSectionRead,
 )
 from app.services.deal_catalog_service import list_deal_products
@@ -242,11 +243,62 @@ def get_store_sections(store_id: str, db: Session = Depends(get_db)):
                 id=section.id,
                 title=section.title,
                 slug=section.slug,
+                description=section.description,
+                cover_image_url=section.cover_image_url,
                 sort_order=section.sort_order,
                 products=[ProductRead.model_validate(p) for p in products],
             )
         )
     return payload
+
+
+@router.get(
+    "/stores/{store_id}/sections/{section_slug}",
+    response_model=StoreSectionDetailRead,
+)
+def get_store_section_detail(
+    store_id: str,
+    section_slug: str,
+    db: Session = Depends(get_db),
+):
+    """One shelf and the shop it belongs to.
+
+    Separate from the list endpoint so a section page fetches only its own
+    products instead of every shelf in the store. Hidden shelves 404 rather
+    than render empty — an unpublished section is not a public page.
+    """
+    store = get_store(db, store_id)
+    if not store:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="That store was not found.",
+        )
+
+    section = next(
+        (
+            candidate
+            for candidate in list_sections(db, store_id)
+            if candidate.slug == section_slug and candidate.is_active
+        ),
+        None,
+    )
+    if not section:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="That section was not found.",
+        )
+
+    products = products_in_section(db, section.id, visible_only=True)
+    return StoreSectionDetailRead(
+        id=section.id,
+        title=section.title,
+        slug=section.slug,
+        description=section.description,
+        cover_image_url=section.cover_image_url,
+        sort_order=section.sort_order,
+        store=StoreRead.model_validate(store),
+        products=[ProductRead.model_validate(p) for p in products],
+    )
 
 
 @router.get("/stores/{store_id}", response_model=StoreRead)

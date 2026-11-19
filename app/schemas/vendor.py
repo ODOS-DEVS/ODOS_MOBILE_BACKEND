@@ -784,6 +784,8 @@ class VendorStoreSectionRead(BaseModel):
     id: uuid.UUID
     title: str
     slug: str
+    description: str | None = None
+    cover_image_url: str | None = None
     sort_order: int
     is_active: bool
     product_count: int = 0
@@ -793,6 +795,7 @@ class VendorStoreSectionRead(BaseModel):
 
 class VendorStoreSectionCreate(BaseModel):
     title: str = Field(min_length=1, max_length=80)
+    description: str | None = Field(default=None, max_length=500)
 
     @field_validator("title", mode="before")
     @classmethod
@@ -802,6 +805,9 @@ class VendorStoreSectionCreate(BaseModel):
 
 class VendorStoreSectionUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=80)
+    #: Sent as "" to clear. Absent means "leave it alone", which is why this is
+    #: not simply `str | None` with None meaning both.
+    description: str | None = Field(default=None, max_length=500)
     is_active: bool | None = None
 
     @field_validator("title", mode="before")
@@ -816,6 +822,17 @@ class VendorStoreSectionReorder(BaseModel):
 
 class VendorStoreSectionProductsUpdate(BaseModel):
     product_ids: list[str] = Field(min_length=1)
+
+
+class VendorStoreSectionProductsReplace(BaseModel):
+    """The complete shelf after editing.
+
+    Replace rather than add, because a multi-select picker has to be able to
+    express a removal: with add-only semantics, unticking a product in the
+    editor would silently leave it on the shelf.
+    """
+
+    product_ids: list[str] = Field(default_factory=list)
 
 
 class VendorStoreSectionSuggestions(BaseModel):

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import HTTPException, status
+from fastapi import HTTPException, UploadFile, status
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
@@ -18,12 +18,14 @@ from app.controllers.vendor_controller import get_vendor_store, require_vendor_a
 from app.models import Product, Store, StoreSection, StoreSectionProduct, User
 from app.schemas.vendor import (
     VendorStoreSectionCreate,
+    VendorStoreSectionProductsReplace,
     VendorStoreSectionProductsUpdate,
     VendorStoreSectionRead,
     VendorStoreSectionReorder,
     VendorStoreSectionSuggestions,
     VendorStoreSectionUpdate,
 )
+from app.services.media_service import save_image_upload
 from app.services.store_section_service import (
     list_sections,
     next_sort_order,
@@ -67,6 +69,8 @@ def _serialize(sections: list[StoreSection], counts: dict[uuid.UUID, int]):
             id=section.id,
             title=section.title,
             slug=section.slug,
+            description=section.description,
+            cover_image_url=section.cover_image_url,
             sort_order=section.sort_order,
             is_active=section.is_active,
             product_count=counts.get(section.id, 0),
@@ -113,6 +117,7 @@ def create_vendor_section(
         store_id=store.id,
         title=payload.title,
         slug=slug,
+        description=(payload.description or "").strip() or None,
         sort_order=next_sort_order(db, store.id),
     )
     db.add(section)
@@ -122,6 +127,8 @@ def create_vendor_section(
         id=section.id,
         title=section.title,
         slug=section.slug,
+        description=section.description,
+        cover_image_url=section.cover_image_url,
         sort_order=section.sort_order,
         is_active=section.is_active,
         product_count=0,
@@ -153,6 +160,10 @@ def update_vendor_section(
             )
         section.title = payload.title
         section.slug = slug
+
+    if payload.description is not None:
+        # "" clears it; absent leaves it alone.
+        section.description = payload.description.strip() or None
 
     if payload.is_active is not None:
         section.is_active = payload.is_active
@@ -284,3 +295,97 @@ def remove_product_from_section(
     )
     db.commit()
     return _serialize([section], product_counts(db, [section.id]))[0]
+
+
+def replace_section_products(
+    db: Session,
+    user: User,
+    section_id: uuid.UUID,
+    payload: VendorStoreSectionProductsReplace,
+) -> VendorStoreSectionRead:
+    """Set the shelf to exactly these products, in this order.
+
+    Add-only assignment cannot express a removal, so a multi-select editor that
+    posted additions would silently keep anything the vendor had unticked. This
+    takes the finished shelf instead: what is sent is what the shelf becomes.
+
+    Rows for products that stay are left in place rather than deleted and
+    reinserted, so `created_at` keeps meaning when the product was first shelved.
+    """
+    store = _require_store(db, user)
+    section = _owned_section(db, store, section_id)
+
+    wanted: list[str] = []
+    seen: set[str] = set()
+    for product_id in payload.product_ids:
+        cleaned = (product_id or "").strip()
+        if cleaned and cleaned not in seen:
+            seen.add(cleaned)
+            wanted.append(cleaned)
+
+    if wanted:
+        # Only this store's products may be shelved here; without this a vendor
+        # could place a competitor's product on their own page.
+        owned = set(
+            db.scalars(
+                select(Product.id).where(
+                    Product.id.in_(wanted), Product.store_id == store.id
+                )
+            ).all()
+        )
+        rejected = [pid for pid in wanted if pid not in owned]
+        if rejected:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Some of those products are not in your store.",
+            )
+
+    existing = {
+        row.product_id: row
+        for row in db.scalars(
+            select(StoreSectionProduct).where(
+                StoreSectionProduct.section_id == section.id
+            )
+        ).all()
+    }
+
+    for product_id, row in existing.items():
+        if product_id not in seen:
+            db.delete(row)
+
+    for position, product_id in enumerate(wanted):
+        row = existing.get(product_id)
+        if row is None:
+            db.add(
+                StoreSectionProduct(
+                    section_id=section.id,
+                    product_id=product_id,
+                    sort_order=position,
+                )
+            )
+        else:
+            row.sort_order = position
+
+    db.commit()
+    counts = product_counts(db, [section.id])
+    return _serialize([section], counts)[0]
+
+
+async def set_section_cover(
+    db: Session,
+    user: User,
+    section_id: uuid.UUID,
+    cover_image: UploadFile,
+) -> VendorStoreSectionRead:
+    """Replace the shelf's cover photo. Ownership is checked before the upload
+    is read, so an unauthorised request never costs a file write."""
+    store = _require_store(db, user)
+    section = _owned_section(db, store, section_id)
+
+    section.cover_image_url = await save_image_upload(
+        cover_image, folder="store-sections"
+    )
+    db.commit()
+    db.refresh(section)
+    counts = product_counts(db, [section.id])
+    return _serialize([section], counts)[0]

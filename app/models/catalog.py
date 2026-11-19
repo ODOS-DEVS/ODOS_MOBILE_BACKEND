@@ -707,6 +707,10 @@ class StoreSection(Base):
     )
     title: Mapped[str] = mapped_column(String(80), nullable=False)
     slug: Mapped[str] = mapped_column(String(80), nullable=False)
+    #: What this shelf is for, in the shop's own words. Shown on the section's
+    #: own page, which is otherwise just a grid with a heading.
+    description: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    cover_image_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     sort_order: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"
     )
@@ -775,4 +779,43 @@ class StoreSectionProduct(Base):
         UniqueConstraint(
             "section_id", "product_id", name="uq_store_section_products_section_product"
         ),
+    )
+
+
+class SavedStore(Base):
+    """A shop a shopper kept.
+
+    Scoped to the account rather than the browser so a save survives logout and
+    follows the shopper to another device. The unique constraint is what makes
+    saving idempotent: pressing save twice is the same save, not two rows that
+    would list the shop twice.
+    """
+
+    __tablename__ = "saved_stores"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        primary_key=True,
+        default=uuid.uuid4,
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    store_id: Mapped[str] = mapped_column(
+        String(50),
+        ForeignKey("stores.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "store_id", name="uq_saved_stores_user_store"),
     )

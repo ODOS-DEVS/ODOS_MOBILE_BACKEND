@@ -27,6 +27,8 @@ from app.controllers.store_section_controller import (
     fetch_vendor_sections,
     remove_product_from_section,
     reorder_vendor_sections,
+    replace_section_products,
+    set_section_cover,
     update_vendor_section,
 )
 from app.controllers.vendor_controller import (
@@ -114,6 +116,7 @@ from app.schemas.vendor import (
     VendorReviewReplyUpdate,
     VendorStoreRead,
     VendorStoreSectionCreate,
+    VendorStoreSectionProductsReplace,
     VendorStoreSectionProductsUpdate,
     VendorStoreSectionRead,
     VendorStoreSectionReorder,
@@ -944,6 +947,27 @@ def post_store_section_products(
     db: Session = Depends(get_db),
 ):
     return add_products_to_section(db, current_user, section_id, payload)
+
+
+@router.put("/store/sections/{section_id}/products", response_model=VendorStoreSectionRead)
+def put_store_section_products(
+    section_id: uuid.UUID,
+    payload: VendorStoreSectionProductsReplace,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    """Set the shelf to exactly these products. An empty list clears it."""
+    return replace_section_products(db, current_user, section_id, payload)
+
+
+@router.post("/store/sections/{section_id}/cover", response_model=VendorStoreSectionRead)
+async def post_store_section_cover(
+    section_id: uuid.UUID,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+    cover_image: UploadFile = File(...),
+):
+    return await set_section_cover(db, current_user, section_id, cover_image)
 
 
 @router.delete(

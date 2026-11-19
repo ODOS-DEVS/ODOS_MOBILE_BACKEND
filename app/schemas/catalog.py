@@ -183,6 +183,11 @@ class StoreRead(BaseModel):
     #: What this shop charges for standard delivery, after platform fallback.
     #: Surfaced so a store page can say the number rather than only the badge.
     delivery_fee_from: float | None = None
+    #: True when the owning vendor's application is approved and not suspended.
+    #: Computed from `users.vendor_status`, never stored on the store row, so a
+    #: revoked vendor loses the badge immediately rather than leaving a stale
+    #: flag behind. Carries no detail about *how* they were verified.
+    is_verified: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -215,10 +220,36 @@ class StoreSectionRead(BaseModel):
     id: uuid.UUID
     title: str
     slug: str
+    description: str | None = None
+    cover_image_url: str | None = None
     sort_order: int
     products: list[ProductRead]
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class StoreSectionDetailRead(BaseModel):
+    """One shelf and the store it belongs to, for the section's own page.
+
+    Carries the store so the page can show whose shelf this is without a second
+    round trip, and so a shared section link renders a complete header.
+    """
+
+    id: uuid.UUID
+    title: str
+    slug: str
+    description: str | None = None
+    cover_image_url: str | None = None
+    sort_order: int
+    store: StoreRead
+    products: list[ProductRead]
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class SavedStoreRead(BaseModel):
+    store: StoreRead
+    saved_at: datetime
 
 
 class VendorCampaignBriefRead(BaseModel):

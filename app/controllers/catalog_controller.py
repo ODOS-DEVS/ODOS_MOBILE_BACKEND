@@ -270,6 +270,26 @@ def list_markets(db: Session) -> list[Market]:
     )
 
 
+def annotate_store_verification(db: Session, stores: list[Store] | Store | None) -> None:
+    """Attach `is_verified` to store rows for serialization.
+
+    Mirrors `annotate_store_delivery`: computed at read time rather than stored,
+    because the answer lives on the vendor's own approval status and a copy on
+    the store row would go stale the moment a vendor was suspended.
+
+    Resolved in one query for the whole list — doing it per store would put a
+    round trip behind every card on the stores page.
+    """
+    from app.controllers.saved_store_controller import verified_store_ids
+
+    rows = [stores] if isinstance(stores, Store) else [s for s in (stores or []) if s]
+    if not rows:
+        return
+    verified = verified_store_ids(db, [store.id for store in rows])
+    for store in rows:
+        store.is_verified = store.id in verified
+
+
 def list_stores(
     db: Session,
     *,
@@ -298,6 +318,7 @@ def list_stores(
     # "Free delivery" is the strongest badge a shop can wear on a card, so it
     # has to reach the browse list, not only the store page.
     annotate_store_delivery(stores, get_delivery_config(db))
+    annotate_store_verification(db, stores)
     return stores
 
 
@@ -311,6 +332,7 @@ def get_store(db: Session, store_id: str) -> Store | None:
         )
     )
     annotate_store_delivery(store, get_delivery_config(db))
+    annotate_store_verification(db, store)
     return store
 
 

@@ -16,6 +16,7 @@ from app.middleware.unhandled_errors import UnhandledExceptionMiddleware
 from app.routes import (
     account,
     admin,
+    admin_services,
     advanced_analytics,
     assistant,
     auth,
@@ -41,7 +42,7 @@ from app.routes import (
     realtime,
     recommendations,
     reviews,
-    admin_services,
+    saved_stores,
     services,
     vendor,
     vendor_analytics,
@@ -51,13 +52,13 @@ from app.routes import (
     wishlist,
 )
 from app.services.delivery_auto_release_service import process_delivery_auto_release
-from app.services.service_escrow import process_booking_escrow_release
-from app.services.service_maintenance import process_services_maintenance
 from app.services.delivery_ops_monitor_service import process_delivery_sla_alerts
 from app.services.financial_integrity_service import run_financial_integrity_check
 from app.services.payment_reconciliation_service import process_stuck_payment_reconciliation
 from app.services.promo_reminder_service import process_promo_expiry_reminders
 from app.services.realtime_service import realtime_manager
+from app.services.service_escrow import process_booking_escrow_release
+from app.services.service_maintenance import process_services_maintenance
 from app.services.vendor_order_reminder_service import process_vendor_order_reminders
 
 app = FastAPI(title="ODOS Mobile Backend")
@@ -282,6 +283,7 @@ app.include_router(customer_segmentation.router, prefix="/api")
 app.include_router(advanced_analytics.router, prefix="/api")
 app.include_router(admin.router, prefix="/api")
 app.include_router(promo_analytics.router, prefix="/api")
+app.include_router(saved_stores.router, prefix="/api")
 app.include_router(wishlist.router, prefix="/api")
 
 app.mount("/uploads", StaticFiles(directory=uploads_directory), name="uploads")
