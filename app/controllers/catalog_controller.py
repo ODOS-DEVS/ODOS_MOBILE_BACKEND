@@ -19,7 +19,11 @@ from app.models import (
 from app.schemas.catalog import FlashSaleEventRead, ProductRead
 from app.services.delivery_service import get_delivery_config
 from app.services.package_pricing_service import annotate_store_delivery
-from app.services.pricing_service import get_flash_sale_context_map, resolve_effective_product_price
+from app.services.pricing_service import (
+    get_campaign_price_map,
+    get_flash_sale_context_map,
+    resolve_effective_product_price,
+)
 
 
 class FlashProductContext(TypedDict):
@@ -468,12 +472,17 @@ def serialize_catalog_products(db: Session, products: list[Product]) -> list[Pro
 
     product_ids = [product.id for product in products]
     flash_map = get_flash_sale_context_map(db, product_ids)
+    # Campaign prices are resolved here too, so a product in a live campaign shows the same
+    # price in a grid, on its own page and in the cart. Painting it on in the campaign
+    # response alone is what let a shopper be shown 350 and charged 450.
+    campaign_map = get_campaign_price_map(db, product_ids)
     now = datetime.now(UTC)
     serialized: list[ProductRead] = []
     for product in products:
         pricing = resolve_effective_product_price(
             product,
             flash_context=flash_map.get(product.id),
+            campaign_context=campaign_map.get(product.id),
             now=now,
         )
         payload = ProductRead.model_validate(product).model_dump()

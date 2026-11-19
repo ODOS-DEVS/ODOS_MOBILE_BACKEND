@@ -216,53 +216,6 @@ def list_public_campaigns(
     return [_serialize_public_campaign(db, campaign) for campaign in campaigns]
 
 
-def _apply_campaign_pricing(
-    db: Session,
-    campaign: MerchandisingCampaign,
-    products: list,
-) -> list:
-    """Overlay the approved campaign price onto the products this campaign returns.
-
-    The campaign price lives on the approved nomination, never on `products.price`: a
-    product in a Christmas sale is still its normal price everywhere else on ODOS, and
-    the moment the campaign ends it costs what it always did with nothing to undo.
-
-    Only approved nominations count, and only ones that actually undercut the shelf price
-    — a stale nomination from before a price drop must not invent a higher "sale" price.
-    """
-    if not products:
-        return products
-
-    priced = dict(
-        db.execute(
-            select(
-                MerchandisingCampaignOptIn.product_id,
-                MerchandisingCampaignOptIn.proposed_price,
-            ).where(
-                MerchandisingCampaignOptIn.campaign_id == campaign.id,
-                MerchandisingCampaignOptIn.status == "approved",
-                MerchandisingCampaignOptIn.proposed_price.is_not(None),
-            )
-        ).all()
-    )
-    if not priced:
-        return products
-
-    for product in products:
-        campaign_price = priced.get(product.id)
-        if campaign_price is None or campaign_price >= product.price:
-            continue
-        # Strike through what the shopper would pay today, not any older RRP the product
-        # carries. The saving a campaign advertises has to be the saving it actually gives,
-        # and it has to match the percentage the admin approved.
-        was = product.price
-        product.old_price = was
-        product.price = campaign_price
-        product.discount = f"-{int(round((1 - campaign_price / was) * 100))}%"
-
-    return products
-
-
 def get_public_campaign_detail(
     db: Session,
     slug: str,
@@ -278,7 +231,7 @@ def get_public_campaign_detail(
         )
 
     products, total = resolve_campaign_products(db, campaign, limit=limit, offset=offset)
-    serialized = _apply_campaign_pricing(db, campaign, serialize_catalog_products(db, products))
+    serialized = serialize_catalog_products(db, products)
     base = _serialize_public_campaign(db, campaign, include_product_count=False)
     return MerchandisingCampaignDetailRead(
         # `product_count` is excluded rather than relying on include_product_count=False: that

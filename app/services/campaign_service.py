@@ -272,25 +272,36 @@ def resolve_campaign_products(
         Product.status == "active",
     ]
 
-    id_candidates: set[str] = set(manual_ids)
-    id_candidates.update(approved_opt_in_ids)
-
-    or_clauses = []
-    if id_candidates:
-        or_clauses.append(Product.id.in_(list(id_candidates)))
-    if category_slugs:
-        or_clauses.append(Product.category_slugs.overlap(category_slugs))
-    if store_ids:
-        or_clauses.append(Product.store_id.in_(store_ids))
-    # Backward-compatible placement tag membership.
-    or_clauses.append(Product.placement_tags.contains([campaign.slug]))
-
-    if campaign.include_entire_marketplace:
-        query = select(Product).where(*filters)
-    elif or_clauses:
-        query = select(Product).where(and_(*filters, or_(*or_clauses)))
+    # A campaign that collects vendor nominations is made *of* those nominations. Letting a
+    # category rule or a marketplace sweep also pour products in meant a shopper saw items the
+    # vendor never offered at a campaign price, and two different campaigns showed the same
+    # catalogue. Opting in is therefore the switch between two kinds of campaign:
+    #   - vendor opt-in ON  -> exactly the approved nominations, nothing else
+    #   - vendor opt-in OFF -> admin-curated, exactly as before
+    if campaign.allow_vendor_opt_in:
+        if not approved_opt_in_ids:
+            return [], 0
+        query = select(Product).where(and_(*filters, Product.id.in_(approved_opt_in_ids)))
     else:
-        return [], 0
+        id_candidates: set[str] = set(manual_ids)
+        id_candidates.update(approved_opt_in_ids)
+
+        or_clauses = []
+        if id_candidates:
+            or_clauses.append(Product.id.in_(list(id_candidates)))
+        if category_slugs:
+            or_clauses.append(Product.category_slugs.overlap(category_slugs))
+        if store_ids:
+            or_clauses.append(Product.store_id.in_(store_ids))
+        # Backward-compatible placement tag membership.
+        or_clauses.append(Product.placement_tags.contains([campaign.slug]))
+
+        if campaign.include_entire_marketplace:
+            query = select(Product).where(*filters)
+        elif or_clauses:
+            query = select(Product).where(and_(*filters, or_(*or_clauses)))
+        else:
+            return [], 0
 
     products = list(db.scalars(query.limit(2000)).all())
     total = len(products)
