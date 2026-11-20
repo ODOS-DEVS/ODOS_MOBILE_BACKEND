@@ -182,6 +182,14 @@ class ChatMessage(Base):
     attachment_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
     attachment_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     attachment_duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: Set when this message *is* an offer card. The card renders from the offer
+    #: row, not from `body`, so what the card says can never drift from the
+    #: state machine behind it.
+    negotiation_offer_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("negotiation_offers.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     is_read: Mapped[bool] = mapped_column(
         Boolean,
         default=False,

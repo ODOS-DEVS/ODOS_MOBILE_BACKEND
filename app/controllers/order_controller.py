@@ -440,7 +440,9 @@ def prepare_order_for_checkout(
     _validate_checkout_items(db, payload.items)
     product_snapshot_map = _load_product_snapshot_map(db, payload)
     try:
-        server_subtotal, resolved_prices = compute_server_subtotal(db, payload.items)
+        server_subtotal, resolved_prices = compute_server_subtotal(
+            db, payload.items, user_id=user.id
+        )
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -630,6 +632,12 @@ def prepare_order_for_checkout(
     )
     db.flush()
 
+    # Consume any negotiated agreements this order used. Done after the order
+    # exists so the agreement records which order spent it, and inside the same
+    # transaction so an order can never be created without its agreement being
+    # marked, nor an agreement marked without an order to show for it.
+    _consume_negotiated_agreements(db, order, resolved_prices)
+
     record_order_status_event(
         db,
         order,
@@ -638,6 +646,62 @@ def prepare_order_for_checkout(
         note="Order placed, awaiting payment confirmation",
     )
     return order
+
+
+def _consume_negotiated_agreements(db, order, resolved_prices) -> None:
+    """Spend each agreement that priced a line of this order.
+
+    The update is conditional on the agreement still being `accepted`, and the
+    row count decides the outcome. Two checkouts racing for the same agreement
+    both reach this point, but only one update matches — the loser is told the
+    agreement is already spent rather than both orders quietly getting the
+    discount. The partial unique index on `order_id` is the second line of
+    defence if the condition itself were ever weakened.
+    """
+    from sqlalchemy import update
+
+    from app.models.negotiation import (
+        AgreementStatus,
+        NegotiationAgreement,
+        NegotiationStatus,
+        PriceNegotiation,
+    )
+
+    spent: set = set()
+    for pricing in resolved_prices.values():
+        agreement_id = getattr(pricing, "negotiated_agreement_id", None)
+        if not agreement_id or agreement_id in spent:
+            continue
+        spent.add(agreement_id)
+
+        result = db.execute(
+            update(NegotiationAgreement)
+            .where(
+                NegotiationAgreement.id == agreement_id,
+                NegotiationAgreement.status == AgreementStatus.ACCEPTED.value,
+                NegotiationAgreement.order_id.is_(None),
+            )
+            .values(
+                status=AgreementStatus.USED.value,
+                order_id=order.id,
+                order_number=order.order_number,
+                used_at=datetime.now(UTC),
+            )
+        )
+        if result.rowcount != 1:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "That agreed price has already been used for another order. "
+                    "Refresh your cart and try again."
+                ),
+            )
+
+        agreement = db.get(NegotiationAgreement, agreement_id)
+        if agreement:
+            negotiation = db.get(PriceNegotiation, agreement.negotiation_id)
+            if negotiation:
+                negotiation.status = NegotiationStatus.COMPLETED.value
 
 
 def _maybe_send_order_payment_confirmation_sms(

@@ -35,6 +35,11 @@ class EffectiveProductPrice:
     is_campaign_price: bool = False
     campaign_slug: str | None = None
     campaign_title: str | None = None
+    #: True when a private negotiated agreement set this price. The agreement id
+    #: is carried so order creation knows which row to consume.
+    is_negotiated_price: bool = False
+    negotiated_agreement_id: object | None = None
+    negotiated_reference: str | None = None
 
 
 def _is_within_sale_window(
@@ -188,6 +193,7 @@ def resolve_effective_product_price(
     *,
     flash_context: dict[str, object] | None = None,
     campaign_context: dict[str, object] | None = None,
+    negotiated_context: dict[str, object] | None = None,
     now: datetime | None = None,
 ) -> EffectiveProductPrice:
     current = now or datetime.now(UTC)
@@ -242,6 +248,24 @@ def resolve_effective_product_price(
                 campaign_slug = str(campaign_context.get("campaign_slug") or "") or None
                 campaign_title = str(campaign_context.get("campaign_title") or "") or None
 
+    # A privately agreed price is applied last and wins outright, even against a
+    # cheaper public offer. The two parties settled on this number for these
+    # units; silently substituting a different one in either direction would
+    # make the agreement a lie.
+    is_negotiated_price = False
+    negotiated_agreement_id = None
+    negotiated_reference = None
+    if negotiated_context:
+        raw_agreed = negotiated_context.get("agreed_unit_price")
+        if raw_agreed is not None:
+            agreed = float(raw_agreed)
+            reference_price = float(negotiated_context.get("listed_unit_price") or 0) or regular
+            catalog_price = agreed
+            compare_at = reference_price if reference_price > agreed else None
+            is_negotiated_price = True
+            negotiated_agreement_id = negotiated_context.get("agreement_id")
+            negotiated_reference = negotiated_context.get("reference")
+
     sale_window_active = _is_within_sale_window(
         starts_at=product.sale_starts_at,
         ends_at=product.sale_ends_at,
@@ -265,7 +289,7 @@ def resolve_effective_product_price(
     # campaign has replaced the price, that sentence is about numbers the shopper is no longer
     # being offered — a product reduced to 180 from 260 was still advertising "4% off" — so an
     # overridden price always gets a freshly computed label.
-    if is_flash_sale or is_campaign_price:
+    if is_flash_sale or is_campaign_price or is_negotiated_price:
         label = _build_discount_label(compare_at, catalog_price) if compare_at is not None else None
     else:
         label = product.discount
@@ -290,12 +314,65 @@ def resolve_effective_product_price(
         is_campaign_price=is_campaign_price,
         campaign_slug=campaign_slug,
         campaign_title=campaign_title,
+        is_negotiated_price=is_negotiated_price,
+        negotiated_agreement_id=negotiated_agreement_id,
+        negotiated_reference=negotiated_reference,
     )
+
+
+def get_negotiated_price_map(
+    db: Session,
+    items: list[OrderItemCreate],
+    user_id,
+) -> dict[str, dict[str, object]]:
+    """This shopper's live agreements for the lines they are buying.
+
+    Looked up from the authenticated user id and the product, never from
+    anything in the request body. There is no agreement reference to forge,
+    borrow or repoint: a shopper who has not negotiated simply has no row, and
+    one who negotiated a different variant fails the variant check below.
+
+    A line asking for more units than were agreed is refused outright rather
+    than silently falling back to the list price — the shopper built that cart
+    expecting the negotiated figure, and charging them list without saying so
+    is the same failure as charging them list after showing them a discount.
+    """
+    if not items or user_id is None:
+        return {}
+
+    from app.services.negotiation_service import live_agreement_for
+
+    resolved: dict[str, dict[str, object]] = {}
+    for item in items:
+        agreement = live_agreement_for(
+            db,
+            customer_user_id=user_id,
+            product_id=item.product_id,
+            selected_color=item.selected_color,
+            selected_size=item.selected_size,
+        )
+        if agreement is None:
+            continue
+        if item.quantity > agreement.quantity:
+            raise ValueError(
+                f"Your agreed price covers {agreement.quantity} of "
+                f"{item.title}. Reduce the quantity or negotiate again."
+            )
+        resolved[item.product_id] = {
+            "agreement_id": agreement.id,
+            "reference": agreement.reference,
+            "agreed_unit_price": float(agreement.agreed_unit_price),
+            "listed_unit_price": float(agreement.listed_unit_price),
+            "quantity": agreement.quantity,
+        }
+    return resolved
 
 
 def resolve_cart_line_prices(
     db: Session,
     items: list[OrderItemCreate],
+    *,
+    user_id=None,
 ) -> dict[str, EffectiveProductPrice]:
     product_ids = [item.product_id for item in items]
     if not product_ids:
@@ -308,6 +385,7 @@ def resolve_cart_line_prices(
     flash_map = get_flash_sale_context_map(db, product_ids)
     # The cart has to price a campaign product the same way the campaign page showed it.
     campaign_map = get_campaign_price_map(db, product_ids)
+    negotiated_map = get_negotiated_price_map(db, items, user_id)
     now = datetime.now(UTC)
 
     resolved: dict[str, EffectiveProductPrice] = {}
@@ -319,6 +397,7 @@ def resolve_cart_line_prices(
             product,
             flash_context=flash_map.get(product_id),
             campaign_context=campaign_map.get(product_id),
+            negotiated_context=negotiated_map.get(product_id),
             now=now,
         )
     return resolved
@@ -327,8 +406,10 @@ def resolve_cart_line_prices(
 def compute_server_subtotal(
     db: Session,
     items: list[OrderItemCreate],
+    *,
+    user_id=None,
 ) -> tuple[float, dict[str, EffectiveProductPrice]]:
-    resolved = resolve_cart_line_prices(db, items)
+    resolved = resolve_cart_line_prices(db, items, user_id=user_id)
     subtotal = 0.0
     for item in items:
         pricing = resolved.get(item.product_id)

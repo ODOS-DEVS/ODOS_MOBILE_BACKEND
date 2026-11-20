@@ -47,6 +47,15 @@ from app.models.delivery_settings import DeliverySettings
 from app.models.guide import GuideVideo
 from app.models.inventory import InventoryMovement
 from app.models.loyalty import LoyaltyAccount, LoyaltyTierBenefit, LoyaltyTransaction
+from app.models.negotiation import (
+    ActorRole,
+    AgreementStatus,
+    NegotiationAgreement,
+    NegotiationOffer,
+    NegotiationStatus,
+    OfferStatus,
+    PriceNegotiation,
+)
 from app.models.notification import NotificationEvent, NotificationRead
 from app.models.order import (
     Order,
@@ -176,6 +185,13 @@ __all__ = [
     "SavedAddress",
     "SavedPaymentMethod",
     "Store",
+    "ActorRole",
+    "AgreementStatus",
+    "NegotiationAgreement",
+    "NegotiationOffer",
+    "NegotiationStatus",
+    "OfferStatus",
+    "PriceNegotiation",
     "SavedStore",
     "StoreSection",
     "StoreSectionProduct",

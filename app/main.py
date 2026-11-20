@@ -33,6 +33,7 @@ from app.routes import (
     health,
     home_feed,
     loyalty,
+    negotiations,
     notifications,
     orders,
     payment_methods,
@@ -283,6 +284,7 @@ app.include_router(customer_segmentation.router, prefix="/api")
 app.include_router(advanced_analytics.router, prefix="/api")
 app.include_router(admin.router, prefix="/api")
 app.include_router(promo_analytics.router, prefix="/api")
+app.include_router(negotiations.router, prefix="/api")
 app.include_router(saved_stores.router, prefix="/api")
 app.include_router(wishlist.router, prefix="/api")
 

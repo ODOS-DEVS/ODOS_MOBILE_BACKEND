@@ -73,6 +73,9 @@ class Settings(BaseSettings):
     # rate changed; persisting the rate per order is the fix if that drift ever
     # needs to go away.
     vendor_commission_rate: float = 0.01
+    #: How long an accepted negotiated price stays good for. The shopper is shown
+    #: this deadline; after it the agreement can no longer create an order.
+    negotiation_agreement_hours: int = 24
     vendor_withdrawal_minimum: float = 20.0
 
     # Loyalty tier discounts (silver 5%, gold 10%) are ADVERTISED in the app's

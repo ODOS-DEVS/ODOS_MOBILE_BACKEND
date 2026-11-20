@@ -82,6 +82,21 @@ class Product(Base):
         nullable=False,
     )
     stock: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+
+    # --- Price negotiation ------------------------------------------------
+    # Whether a shopper may haggle. Read on every product card, which is why
+    # these live here rather than behind a join.
+    is_negotiable: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
+    #: The vendor's private floor. Never named in a public schema, never sent to
+    #: a shopper, and used only to judge offers on the server.
+    min_acceptable_price: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: Cap on how many units one agreement may cover. Null means stock decides.
+    negotiation_max_quantity: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: Vendor-written conditions shown to shoppers, e.g. "bulk orders only".
+    negotiation_note: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
     status: Mapped[str] = mapped_column(String(30), default="active", server_default="active", nullable=False)
     store_id: Mapped[str | None] = mapped_column(
         String(50),

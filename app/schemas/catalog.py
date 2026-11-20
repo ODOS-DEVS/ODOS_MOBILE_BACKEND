@@ -30,6 +30,11 @@ class ProductRead(BaseModel):
     price: int
     old_price: int | None
     discount: str | None
+    #: Whether a shopper may haggle. The vendor's floor, their quantity cap and
+    #: everything else private about negotiation is deliberately absent — this
+    #: boolean and the public note below are the whole of what a shopper sees.
+    is_negotiable: bool = False
+    negotiation_note: str | None = None
     rating: float | None
     reviews: str | None
     image_key: str
