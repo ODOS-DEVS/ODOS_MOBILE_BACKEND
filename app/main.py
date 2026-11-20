@@ -67,6 +67,7 @@ app = FastAPI(title="ODOS Mobile Backend")
 VENDOR_REMINDER_INTERVAL_SECONDS = 180
 DELIVERY_SLA_MONITOR_INTERVAL_SECONDS = 120
 PROMO_REMINDER_INTERVAL_SECONDS = 1800
+NEGOTIATION_REMINDER_INTERVAL_SECONDS = 600
 PAYMENT_RECONCILIATION_INTERVAL_SECONDS = 300
 #: Holds release on a 48-hour grace, so a 15-minute sweep is ample
 #: precision and keeps the query off the database the rest of the time.
@@ -149,6 +150,19 @@ async def _promo_reminder_loop() -> None:
         await asyncio.sleep(PROMO_REMINDER_INTERVAL_SECONDS)
 
 
+async def _negotiation_reminder_loop() -> None:
+    while True:
+        try:
+            from app.services.negotiation_reminder_service import (
+                process_negotiation_agreement_reminders,
+            )
+
+            await asyncio.to_thread(process_negotiation_agreement_reminders)
+        except Exception:
+            logger.exception("Negotiation agreement reminder loop failed")
+        await asyncio.sleep(NEGOTIATION_REMINDER_INTERVAL_SECONDS)
+
+
 async def _payment_reconciliation_loop() -> None:
     while True:
         try:
@@ -216,6 +230,7 @@ async def on_startup() -> None:
     asyncio.create_task(_vendor_order_reminder_loop())
     asyncio.create_task(_delivery_sla_monitor_loop())
     asyncio.create_task(_promo_reminder_loop())
+    asyncio.create_task(_negotiation_reminder_loop())
     asyncio.create_task(_payment_reconciliation_loop())
     asyncio.create_task(_delivery_auto_release_loop())
     asyncio.create_task(_financial_integrity_loop())

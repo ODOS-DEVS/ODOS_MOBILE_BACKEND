@@ -79,6 +79,14 @@ from app.controllers.admin_metrics_controller import (
     get_sales_chart_timeseries,
     get_top_vendors,
 )
+from app.controllers.admin_negotiation_controller import (
+    cancel_agreement,
+    get_admin_negotiation,
+    list_admin_negotiations,
+    negotiation_stats,
+    set_product_negotiable,
+    set_vendor_negotiable,
+)
 from app.controllers.campaign_controller import (
     archive_admin_campaign,
     create_admin_campaign,
@@ -177,6 +185,12 @@ from app.schemas.delivery_settings import (
     AdminDeliverySettingsUpdate,
 )
 from app.schemas.event_log import EventLogPageRead, EventLogStatsRead
+from app.schemas.negotiation import (
+    AdminNegotiationDetailRead,
+    AdminNegotiationRead,
+    AdminNegotiationStatsRead,
+    AdminNegotiationToggle,
+)
 from app.schemas.pagination import AdminPageRead
 from app.schemas.payment import (
     AdminFinanceOverviewRead,
@@ -897,6 +911,86 @@ def get_merchandising_campaign_opt_ins(
         limit=limit,
         offset=offset,
     )
+
+
+@router.get("/negotiations", response_model=AdminPageRead[AdminNegotiationRead])
+def get_admin_negotiations(
+    current_user: RequirePromotionsAdmin,
+    list_params: AdminListParams,
+    db: Session = Depends(get_db),
+    search: str | None = Query(default=None, max_length=120),
+    status_filter: str | None = Query(default=None, alias="status", max_length=20),
+    vendor_user_id: UUID | None = Query(default=None),
+    customer_user_id: UUID | None = Query(default=None),
+    product_id: str | None = Query(default=None, max_length=100),
+):
+    """Search negotiations by reference, agreement reference, order number or product."""
+    limit, offset = list_params
+    return list_admin_negotiations(
+        db,
+        search=search,
+        status_filter=status_filter,
+        vendor_user_id=vendor_user_id,
+        customer_user_id=customer_user_id,
+        product_id=product_id,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/negotiations/stats", response_model=AdminNegotiationStatsRead)
+def get_admin_negotiation_stats(
+    current_user: RequirePromotionsAdmin,
+    db: Session = Depends(get_db),
+):
+    return negotiation_stats(db)
+
+
+@router.get("/negotiations/{negotiation_id}", response_model=AdminNegotiationDetailRead)
+def get_admin_negotiation_detail(
+    negotiation_id: UUID,
+    current_user: RequirePromotionsAdmin,
+    db: Session = Depends(get_db),
+):
+    """The dispute view: every offer in order, with the agreement and linked order."""
+    return get_admin_negotiation(db, negotiation_id)
+
+
+@router.post("/negotiations/products/{product_id}/negotiable")
+def post_set_product_negotiable(
+    product_id: str,
+    payload: AdminNegotiationToggle,
+    current_user: RequirePromotionsAdmin,
+    db: Session = Depends(get_db),
+):
+    """Stop (or restart) new haggling on one product. Live agreements are untouched."""
+    return set_product_negotiable(
+        db, current_user, product_id, enabled=payload.enabled, reason=payload.reason
+    )
+
+
+@router.post("/negotiations/vendors/{vendor_user_id}/negotiable")
+def post_set_vendor_negotiable(
+    vendor_user_id: UUID,
+    payload: AdminNegotiationToggle,
+    current_user: RequirePromotionsAdmin,
+    db: Session = Depends(get_db),
+):
+    """Stop new haggling across a whole vendor. Live agreements are untouched."""
+    return set_vendor_negotiable(
+        db, current_user, vendor_user_id, enabled=payload.enabled, reason=payload.reason
+    )
+
+
+@router.post("/negotiations/agreements/{agreement_id}/cancel")
+def post_cancel_agreement(
+    agreement_id: UUID,
+    payload: AdminNegotiationToggle,
+    current_user: RequirePromotionsAdmin,
+    db: Session = Depends(get_db),
+):
+    """Void a live agreed price. Refuses one already spent on an order."""
+    return cancel_agreement(db, current_user, agreement_id, reason=payload.reason)
 
 
 @router.post(

@@ -110,6 +110,71 @@ class VendorNegotiationSettings(BaseModel):
     negotiation_note: str | None = Field(default=None, max_length=255)
 
 
+class AdminNegotiationRead(BaseModel):
+    """A negotiation as the admin queue lists it.
+
+    Carries both parties' display names because that is what an admin searches
+    by, and no contact detail beyond them.
+    """
+
+    id: uuid.UUID
+    reference: str
+    status: str
+    product_id: str
+    product_title: str
+    product_image_url: str | None = None
+    store_id: str
+    store_name: str | None = None
+    vendor_user_id: uuid.UUID
+    vendor_name: str | None = None
+    customer_user_id: uuid.UUID
+    customer_name: str | None = None
+    listed_unit_price: int
+    latest_offer_price: int | None = None
+    agreed_unit_price: int | None = None
+    quantity: int | None = None
+    agreement_reference: str | None = None
+    agreement_status: str | None = None
+    order_number: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminNegotiationDetailRead(AdminNegotiationRead):
+    """The dispute view: every offer in sequence, with the agreement it produced."""
+
+    current_listed_price: int | None = None
+    product_is_negotiable: bool = False
+    selected_color: str | None = None
+    selected_size: str | None = None
+    offers: list[NegotiationOfferRead] = []
+    agreement: NegotiationAgreementRead | None = None
+
+
+class AdminNegotiationStatsRead(BaseModel):
+    total: int = 0
+    open: int = 0
+    agreed: int = 0
+    completed: int = 0
+    rejected: int = 0
+    expired: int = 0
+    agreements_live: int = 0
+    agreements_used: int = 0
+    agreements_expired: int = 0
+    negotiable_products: int = 0
+    #: The deepest discount anyone actually completed a purchase at — the fastest
+    #: way to spot a vendor being gamed, or gaming.
+    deepest_discount_reference: str | None = None
+    deepest_discount_percent: int | None = None
+
+
+class AdminNegotiationToggle(BaseModel):
+    enabled: bool
+    reason: str | None = Field(default=None, max_length=255)
+
+
 class NegotiationCountsRead(BaseModel):
     total: int = 0
     awaiting_me: int = 0

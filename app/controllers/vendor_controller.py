@@ -1140,6 +1140,23 @@ async def create_vendor_product(
     return serialized_product
 
 
+def _review_fingerprint(product: Product) -> tuple:
+    """The parts of a product a moderator actually looks at.
+
+    Title, description, imagery and taxonomy are what an approval is *about*. Price,
+    stock, returnability and negotiation settings are commercial choices that belong to
+    the vendor alone, so changing one must not cost them their listing.
+    """
+    return (
+        product.title,
+        product.description,
+        product.category,
+        product.subcategory,
+        product.image_url,
+        tuple(product.image_urls or ()),
+    )
+
+
 async def update_vendor_product(
     db: Session,
     user: User,
@@ -1159,6 +1176,10 @@ async def update_vendor_product(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="That vendor product was not found.",
         )
+
+    # Captured before anything is applied, so the comparison afterwards is against the
+    # real previous state rather than against values already overwritten.
+    review_snapshot_before = _review_fingerprint(product)
 
     data = payload.model_dump(exclude_unset=True)
     if "name" in data:
@@ -1258,9 +1279,21 @@ async def update_vendor_product(
         if store:
             product.audience_slug = (store.audience_slugs or [product.audience_slug])[0]
 
+    # Only content changes go back for review. Re-reviewing every edit meant a vendor who
+    # corrected a price, adjusted stock or flipped a setting took their own live product
+    # offline until an admin happened to look at it — a penalty for routine shop-keeping,
+    # and the reason enabling price negotiation un-published the product it was enabled on.
+    #
+    # A suspended product stays suspended regardless: that is a moderation decision, not a
+    # state a vendor may edit their way out of.
+    content_changed = _review_fingerprint(product) != review_snapshot_before
     if product.status != "suspended":
-        product.status = "pending"
-    product.is_active = False
+        if content_changed:
+            product.status = "pending"
+            product.is_active = False
+        elif product.status == "pending":
+            # Still awaiting its first approval. A settings tweak does not grant it.
+            product.is_active = False
 
     if next_stock is not None:
         from app.services.inventory_service import record_stock_change

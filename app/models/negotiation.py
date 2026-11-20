@@ -187,6 +187,12 @@ class NegotiationAgreement(Base):
     order_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
     order_number: Mapped[str | None] = mapped_column(String(50), nullable=True)
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: Set once the "about to expire" nudge has gone out, so a job running every
+    #: ten minutes across a three-hour window sends one warning rather than
+    #: eighteen. Says nothing about whether the agreement is still usable.
+    expiry_warned_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

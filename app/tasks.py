@@ -62,6 +62,16 @@ def promo_expiry_reminders() -> str:
     return _run("promo_expiry_reminders", process_promo_expiry_reminders)
 
 
+@celery_app.task(name="app.tasks.negotiation_agreement_reminders")
+def negotiation_agreement_reminders() -> str:
+    """Warn before an agreed price lapses, and close out the ones that have."""
+    from app.services.negotiation_reminder_service import (
+        process_negotiation_agreement_reminders,
+    )
+
+    return _run("negotiation_agreement_reminders", process_negotiation_agreement_reminders)
+
+
 @celery_app.task(name="app.tasks.payment_reconciliation")
 def payment_reconciliation() -> str:
     """Re-verify payments stuck `pending` directly against Paystack.

@@ -42,6 +42,9 @@ from app.core.config import settings
 VENDOR_REMINDER_INTERVAL_SECONDS = 180
 DELIVERY_SLA_MONITOR_INTERVAL_SECONDS = 120
 PROMO_REMINDER_INTERVAL_SECONDS = 1800
+#: Tighter than the promo loop: a negotiated price lives 24h, so a half-hourly
+#: tick could leave the "expiring soon" nudge arriving with 2.5h left instead of 3.
+NEGOTIATION_REMINDER_INTERVAL_SECONDS = 600
 PAYMENT_RECONCILIATION_INTERVAL_SECONDS = 300
 BOOKING_ESCROW_INTERVAL_SECONDS = 900
 SERVICES_MAINTENANCE_INTERVAL_SECONDS = 300
@@ -110,6 +113,10 @@ celery_app.conf.beat_schedule = {
     "promo-expiry-reminders": {
         "task": "app.tasks.promo_expiry_reminders",
         "schedule": float(PROMO_REMINDER_INTERVAL_SECONDS),
+    },
+    "negotiation-agreement-reminders": {
+        "task": "app.tasks.negotiation_agreement_reminders",
+        "schedule": float(NEGOTIATION_REMINDER_INTERVAL_SECONDS),
     },
     "payment-reconciliation": {
         "task": "app.tasks.payment_reconciliation",
