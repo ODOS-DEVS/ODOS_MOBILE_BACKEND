@@ -427,6 +427,10 @@ def serialize_vendor_product(
         size_options=product.size_options,
         specifications=product.specifications,
         is_returnable=product.is_returnable,
+        is_negotiable=bool(product.is_negotiable),
+        min_acceptable_price=product.min_acceptable_price,
+        negotiation_max_quantity=product.negotiation_max_quantity,
+        negotiation_note=product.negotiation_note,
         status=product.status,
         created_at=product.created_at,
         updated_at=product.updated_at,
@@ -1093,6 +1097,10 @@ async def create_vendor_product(
         size_options=normalize_list(payload.size_options),
         specifications=normalize_list(payload.specifications),
         is_returnable=payload.is_returnable,
+        is_negotiable=bool(payload.is_negotiable),
+        min_acceptable_price=payload.min_acceptable_price if payload.is_negotiable else None,
+        negotiation_max_quantity=payload.negotiation_max_quantity if payload.is_negotiable else None,
+        negotiation_note=(payload.negotiation_note or "").strip() or None,
         stock=0,
         status="pending",
         store_id=store.id,
@@ -1197,6 +1205,35 @@ async def update_vendor_product(
         product.subcategory_slugs = subcategory_slugs
         data.pop("category", None)
         data.pop("subcategory", None)
+
+    # The route builds `VendorProductUpdate` by passing every Form field
+    # explicitly, so a field the vendor did not touch still arrives as None and
+    # `exclude_unset` does not drop it. Writing that None into a NOT NULL column
+    # is a 500: a PATCH that only flips one switch was nulling `title` and
+    # failing outright. None means "leave alone" for any column that cannot
+    # hold it.
+    non_nullable = {
+        column.key
+        for column in Product.__table__.columns
+        if not column.nullable and column.key not in {"id"}
+    }
+    for key in [k for k, v in data.items() if v is None and k in non_nullable]:
+        data.pop(key)
+    if data.get("title", "__keep__") is None:
+        data.pop("title")
+
+    # The negotiation floor is nullable, so the rule above does not cover it:
+    # silently wiping a vendor's minimum because they edited the title would be
+    # worse than making them turn negotiation off to clear it.
+    for key in ("min_acceptable_price", "negotiation_max_quantity", "negotiation_note"):
+        if key in data and data[key] is None:
+            data.pop(key)
+
+    # Turning negotiation off retires the private floor with it, so a product
+    # switched back on later cannot quietly inherit an old, forgotten minimum.
+    if data.get("is_negotiable") is False:
+        data["min_acceptable_price"] = None
+        data["negotiation_max_quantity"] = None
 
     for key, value in data.items():
         setattr(product, key, value)

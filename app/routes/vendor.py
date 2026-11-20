@@ -401,6 +401,10 @@ async def add_vendor_product(
     size_options: Annotated[str | None, Form(max_length=255)] = None,
     specifications: Annotated[str | None, Form(max_length=3000)] = None,
     is_returnable: Annotated[bool, Form()] = True,
+    is_negotiable: Annotated[bool, Form()] = False,
+    min_acceptable_price: Annotated[str | None, Form()] = None,
+    negotiation_max_quantity: Annotated[str | None, Form()] = None,
+    negotiation_note: Annotated[str | None, Form(max_length=255)] = None,
     images: list[UploadFile] | None = File(default=None),
 ):
     payload = VendorProductCreate(
@@ -419,6 +423,10 @@ async def add_vendor_product(
         size_options=_split_csv_values(size_options),
         specifications=_split_multiline_values(specifications),
         is_returnable=is_returnable,
+        is_negotiable=is_negotiable,
+        min_acceptable_price=_parse_optional_int(min_acceptable_price),
+        negotiation_max_quantity=_parse_optional_int(negotiation_max_quantity),
+        negotiation_note=negotiation_note,
     )
     return await create_vendor_product(db, current_user, payload, images)
 
@@ -459,6 +467,10 @@ async def patch_vendor_product(
     size_options: Annotated[str | None, Form(max_length=255)] = None,
     specifications: Annotated[str | None, Form(max_length=3000)] = None,
     is_returnable: Annotated[bool | None, Form()] = None,
+    is_negotiable: Annotated[bool | None, Form()] = None,
+    min_acceptable_price: Annotated[str | None, Form()] = None,
+    negotiation_max_quantity: Annotated[str | None, Form()] = None,
+    negotiation_note: Annotated[str | None, Form(max_length=255)] = None,
     status_value: Annotated[str | None, Form(alias="status", max_length=30)] = None,
     images: list[UploadFile] | None = File(default=None),
 ):
@@ -479,6 +491,10 @@ async def patch_vendor_product(
         size_options=_split_csv_values(size_options),
         specifications=_split_multiline_values(specifications),
         is_returnable=is_returnable,
+        is_negotiable=is_negotiable,
+        min_acceptable_price=_parse_optional_int(min_acceptable_price),
+        negotiation_max_quantity=_parse_optional_int(negotiation_max_quantity),
+        negotiation_note=negotiation_note,
         status=status_value,
     )
     return await update_vendor_product(db, current_user, product_id, payload, images)

@@ -460,6 +460,12 @@ class VendorProductCreate(BaseModel):
     size_options: list[str] | None = None
     specifications: list[str] | None = None
     is_returnable: bool = True
+    #: Price negotiation. The floor is returned only here, on the vendor's own
+    #: authenticated view of their product — never in any public schema.
+    is_negotiable: bool = False
+    min_acceptable_price: int | None = Field(default=None, ge=1)
+    negotiation_max_quantity: int | None = Field(default=None, ge=1, le=99)
+    negotiation_note: str | None = Field(default=None, max_length=255)
 
     @field_validator(
         "name",
@@ -516,6 +522,12 @@ class VendorProductUpdate(BaseModel):
     size_options: list[str] | None = None
     specifications: list[str] | None = None
     is_returnable: bool | None = None
+    #: Price negotiation. The floor is returned only here, on the vendor's own
+    #: authenticated view of their product — never in any public schema.
+    is_negotiable: bool = False
+    min_acceptable_price: int | None = Field(default=None, ge=1)
+    negotiation_max_quantity: int | None = Field(default=None, ge=1, le=99)
+    negotiation_note: str | None = Field(default=None, max_length=255)
     status: str | None = Field(default=None, min_length=1, max_length=30)
 
     @field_validator(
@@ -640,6 +652,12 @@ class VendorProductRead(BaseModel):
     size_options: list[str] | None = None
     specifications: list[str] | None = None
     is_returnable: bool
+    #: Price negotiation. The floor appears here because this schema is only
+    #: ever returned to the vendor who owns the product.
+    is_negotiable: bool = False
+    min_acceptable_price: int | None = None
+    negotiation_max_quantity: int | None = None
+    negotiation_note: str | None = None
     status: str
     created_at: datetime
     updated_at: datetime
