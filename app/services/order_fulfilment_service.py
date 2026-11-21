@@ -53,6 +53,14 @@ def fulfilment_block_reason(order: Order) -> str | None:
             "Payment for this order has not been confirmed, so it cannot be fulfilled yet. "
             "It will appear in your orders once payment clears."
         )
+    # A cancellation the vendor has not answered freezes the order. Letting
+    # them keep packing while the buyer waits for a decision is how a parcel
+    # ends up dispatched against a request to stop it.
+    if (order.cancellation_status or "").strip().lower() == "requested":
+        return (
+            "The buyer has asked to cancel this order. Respond to the request before "
+            "preparing it any further."
+        )
     return None
 
 

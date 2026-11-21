@@ -66,6 +66,7 @@ from app.models.order import (
     ReturnStatusEvent,
     Review,
 )
+from app.models.order_refund import OrderRefund
 from app.models.payment import (
     PaymentTransaction,
     PaymentWebhookEvent,
@@ -186,6 +187,7 @@ __all__ = [
     "SavedPaymentMethod",
     "Store",
     "ActorRole",
+    "OrderRefund",
     "AgreementStatus",
     "NegotiationAgreement",
     "NegotiationOffer",

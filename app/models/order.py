@@ -60,6 +60,38 @@ class Order(Base):
     progress: Mapped[float | None] = mapped_column(Float, nullable=True)
     tracking_eta: Mapped[str | None] = mapped_column(String(120), nullable=True)
     cancellation_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    # --- Cancellation and refund, as dimensions of their own --------------
+    # Separate from `status` and from each other because they are separate
+    # facts. An order can be cancelled while its payment stays "paid" and its
+    # refund is still in flight, and the database has to be able to say so —
+    # overwriting `payment_status` on cancellation destroyed the record of
+    # whether money was ever taken.
+    cancellation_status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="none", server_default="none"
+    )
+    cancellation_requested_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    cancellation_requested_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    #: "customer" | "vendor" | "admin" | "system" — who asked, so a support
+    #: agent acting for a shopper still reads as an admin action.
+    cancellation_requested_role: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    #: Structured, alongside the free-text reason, so cancellations can be counted.
+    cancellation_reason_code: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    cancellation_decided_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    cancellation_decided_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    cancellation_decision_note: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    refund_status: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="not_applicable", server_default="not_applicable"
+    )
+
     delivery_instructions: Mapped[str | None] = mapped_column(String(280), nullable=True)
     delivery_rating: Mapped[int | None] = mapped_column(Integer, nullable=True)
     delivery_rated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -183,7 +215,10 @@ class Order(Base):
         nullable=False,
     )
 
-    user: Mapped["User"] = relationship(back_populates="orders")
+    # `foreign_keys` is explicit because orders now reference users four times:
+    # the buyer, plus whoever requested and whoever decided a cancellation.
+    # Without it SQLAlchemy cannot tell which one means "the customer".
+    user: Mapped["User"] = relationship(back_populates="orders", foreign_keys=[user_id])
     payment_transaction: Mapped["PaymentTransaction | None"] = relationship(
         back_populates="order",
         cascade="all, delete-orphan",

@@ -342,6 +342,9 @@ class User(Base):
     orders: Mapped[list["Order"]] = relationship(
         back_populates="user",
         cascade="all, delete-orphan",
+        # Orders point at users four times now — buyer, cancellation requester,
+        # cancellation decider — so the buyer link has to be named.
+        foreign_keys="Order.user_id",
     )
     payment_transactions: Mapped[list["PaymentTransaction"]] = relationship(
         back_populates="user",

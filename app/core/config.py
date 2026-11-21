@@ -76,6 +76,14 @@ class Settings(BaseSettings):
     #: How long an accepted negotiated price stays good for. The shopper is shown
     #: this deadline; after it the agreement can no longer create an order.
     negotiation_agreement_hours: int = 24
+    #: How long an unpaid order stays payable before it lapses and its stock
+    #: goes back on the shelf. KutanaPay checkouts are short-lived, so this is
+    #: deliberately generous enough to cover a slow mobile-money confirmation.
+    order_payment_window_minutes: int = 60
+    #: Share of a refund withheld to cover the payment-gateway charge. ODOS
+    #: policy puts this on the shopper. Left at zero until someone sets the
+    #: real KutanaPay rate, so nothing is silently deducted on a guess.
+    refund_gateway_fee_rate: float = 0.0
     vendor_withdrawal_minimum: float = 20.0
 
     # Loyalty tier discounts (silver 5%, gold 10%) are ADVERTISED in the app's
