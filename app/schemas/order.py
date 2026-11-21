@@ -310,3 +310,19 @@ class OrderRead(BaseModel):
     packages: list[OrderPackageRead] = []
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class OrderCancellationRequest(BaseModel):
+    """A shopper asking to cancel.
+
+    The reason is a code rather than free text so cancellations can be counted
+    and compared; the note is for anything the code cannot carry.
+    """
+
+    reason_code: str = Field(min_length=1, max_length=40)
+    note: str | None = Field(default=None, max_length=500)
+
+
+class OrderCancellationDecision(BaseModel):
+    approve: bool
+    note: str | None = Field(default=None, max_length=500)

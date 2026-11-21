@@ -4,8 +4,11 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Request, status
 from sqlalchemy.orm import Session
 
+from app.controllers.order_cancellation_controller import (
+    decide_cancellation,
+    request_cancellation,
+)
 from app.controllers.order_controller import (
-    cancel_order,
     confirm_order_delivery,
     create_order,
     create_return_request,
@@ -20,6 +23,8 @@ from app.core.auth import get_current_user
 from app.core.database import get_db
 from app.models import User
 from app.schemas.order import (
+    OrderCancellationDecision,
+    OrderCancellationRequest,
     OrderCreate,
     OrderDeliveryProblemRequest,
     OrderDeliveryRatingUpdate,
@@ -66,7 +71,56 @@ def cancel_existing_order(
     current_user: Annotated[User, Depends(get_current_user)],
     db: Session = Depends(get_db),
 ):
-    return cancel_order(db, current_user, order_id)
+    """Legacy cancel. Kept for older app builds, routed through the new rules.
+
+    The old implementation allowed only unpaid or processing orders and refused
+    anything paid, which left a shopper who paid thirty seconds ago with no way
+    out. It also overwrote `payment_status`. Both are gone: this now does what
+    `/cancellation-request` does, with a default reason.
+    """
+    return request_cancellation(
+        db, current_user, order_id, reason_code="other", note="Cancelled by customer"
+    )
+
+
+@router.post("/{order_id}/cancellation-request", response_model=OrderRead)
+def post_cancellation_request(
+    order_id: str,
+    payload: OrderCancellationRequest,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    """Ask to cancel.
+
+    Completes immediately where policy allows and is held for review where it
+    does not — the response carries `cancellation_status` so the client can say
+    which happened rather than claiming success either way.
+    """
+    return request_cancellation(
+        db,
+        current_user,
+        order_id,
+        reason_code=payload.reason_code,
+        note=payload.note,
+    )
+
+
+@router.post("/{order_id}/cancellation-decision", response_model=OrderRead)
+def post_cancellation_decision(
+    order_id: str,
+    payload: OrderCancellationDecision,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    """A vendor answering a held cancellation request on their own order."""
+    return decide_cancellation(
+        db,
+        current_user,
+        order_id,
+        approve=payload.approve,
+        note=payload.note,
+        actor_role="vendor",
+    )
 
 
 @router.patch("/{order_id}/deliver", response_model=OrderRead)
