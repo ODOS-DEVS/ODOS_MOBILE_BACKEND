@@ -20,12 +20,6 @@ from app.models import Order
 #: "cancelled" is written by the cancellation path — none of them are money.
 PAID_PAYMENT_STATUSES = frozenset({"paid", "success", "successful"})
 
-#: Cash on delivery is authorised fulfilment without prior payment: the vendor
-#: is meant to hand the goods over and collect then. It is the one legitimate
-#: way an unpaid order may be worked on, which is exactly why it is named here
-#: rather than being an accidental gap in a status check elsewhere.
-OFFLINE_PAYMENT_PROVIDERS = frozenset({"cash_on_delivery"})
-
 #: An order in one of these states is finished or void; no vendor should be
 #: preparing, dispatching or otherwise touching it whatever its payment says.
 CLOSED_ORDER_STATUSES = frozenset({"cancelled", "refunded", "expired", "payment_failed"})
@@ -34,10 +28,6 @@ CLOSED_ORDER_STATUSES = frozenset({"cancelled", "refunded", "expired", "payment_
 def order_payment_is_settled(order: Order) -> bool:
     """True when ODOS has verified it holds the money for this order."""
     return (order.payment_status or "").strip().lower() in PAID_PAYMENT_STATUSES
-
-
-def order_is_pay_on_delivery(order: Order) -> bool:
-    return (order.payment_provider or "").strip().lower() in OFFLINE_PAYMENT_PROVIDERS
 
 
 def order_is_closed(order: Order) -> bool:
@@ -55,8 +45,9 @@ def fulfilment_block_reason(order: Order) -> str | None:
             f"This order is {(order.status or 'closed').replace('_', ' ')} and cannot be "
             "fulfilled."
         )
-    if order_is_pay_on_delivery(order):
-        return None
+    # No exemption for an unpaid order. ODOS does not offer cash on delivery —
+    # every order is paid for before anyone picks it off a shelf — so there is
+    # no legitimate shape of unpaid order a vendor should be working on.
     if not order_payment_is_settled(order):
         return (
             "Payment for this order has not been confirmed, so it cannot be fulfilled yet. "

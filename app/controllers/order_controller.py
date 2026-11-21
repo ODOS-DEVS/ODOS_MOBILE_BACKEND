@@ -16,7 +16,6 @@ from app.controllers.vendor_controller import (
 )
 from app.core.admin_permissions import list_admins_with_feature
 from app.core.config import settings
-from app.core.event_types import ORDER_CREATED
 from app.helpers.promo_audit import log_promo_applied, log_promo_rejections
 from app.models import (
     CartItem,
@@ -50,7 +49,6 @@ from app.services.email_service import (
     send_admin_delivery_problem_email,
     send_admin_return_request_email,
 )
-from app.services.event_log_service import record_user_event
 from app.services.order_package_service import (
     build_packages_for_order,
     ensure_packages,
@@ -861,65 +859,26 @@ def activate_order_after_payment(
 
 
 def create_order(db: Session, user: User, payload: OrderCreate) -> Order:
-    if payload.payment_type != "cash_on_delivery":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Online orders must go through the payment checkout flow.",
-        )
+    """Refused. Every ODOS order is paid for before it is fulfilled.
 
-    order = prepare_order_for_checkout(
-        db,
-        user,
-        payload,
-        payment_provider="cash_on_delivery",
-    )
-    placed_event = activate_order_after_payment(db, user, order)
-    db.commit()
+    This endpoint used to accept `payment_type="cash_on_delivery"` — and only
+    that — then call `activate_order_after_payment`, which stamps
+    `payment_status="paid"`, decrements stock and notifies the vendor to start
+    work. ODOS does not offer cash on delivery, so the entire path was a way for
+    any signed-in shopper to conjure a fully paid, vendor-released order without
+    paying anything.
 
-    created_order = db.scalar(
-        select(Order)
-        .options(
-                selectinload(Order.items),
-                selectinload(Order.return_requests),
-                selectinload(Order.timeline),
-                selectinload(Order.packages),
-            )
-        .where(Order.id == order.id, Order.user_id == user.id)
-    )
-    if not created_order:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Your order was placed, but we couldn't reload it.",
-        )
-
-    _dispatch_order_push(
-        user=user,
-        title="Order placed successfully",
-        body=f"Order #{created_order.order_number} is now being prepared.",
-        order=created_order,
-        notification_event=placed_event,
-    )
-    db.commit()
-    db.refresh(created_order)
-    _broadcast_order_realtime(db, created_order)
-    _dispatch_vendor_new_order_alerts(db, created_order)
-    db.commit()
-
-    record_user_event(
-        db,
-        user_id=str(user.id),
-        event_type=ORDER_CREATED,
-        action="commerce.order_created",
-        entity_type="order",
-        entity_id=str(created_order.id),
-        metadata={
-            "order_number": created_order.order_number,
-            "total_amount": created_order.total_amount,
-            "payment_type": created_order.payment_type,
-        },
+    Neither the website nor the app ever called it; both create orders through
+    `/payments/checkout`, where the order is only activated after the provider's
+    own verification. The route stays so that an old client gets a clear refusal
+    rather than a 404 it might treat as a network blip.
+    """
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="Orders must be created through checkout so payment can be verified first.",
     )
 
-    return created_order
+
 
 
 def list_orders(db: Session, user: User) -> list[Order]:
