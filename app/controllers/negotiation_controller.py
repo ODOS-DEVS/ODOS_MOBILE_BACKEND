@@ -297,6 +297,14 @@ def _post_offer_card(
     cards — the mobile app renders it as an ordinary message today, so the
     sentence has to stand on its own.
     """
+    # The offer must exist before a message can point at it. `chat_messages` has a plain
+    # foreign key to `negotiation_offers` with no ORM relationship expressing it, so
+    # SQLAlchemy has no dependency to order the two inserts by and will happily emit the
+    # message first. That only fails once the pair already have a chat thread — the first
+    # negotiation between them is saved by `_ensure_thread`'s own flush, every one after
+    # that broke on the foreign key.
+    db.flush()
+
     thread = _ensure_thread(db, negotiation)
     if not thread:
         return
