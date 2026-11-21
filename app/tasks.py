@@ -72,6 +72,14 @@ def negotiation_agreement_reminders() -> str:
     return _run("negotiation_agreement_reminders", process_negotiation_agreement_reminders)
 
 
+@celery_app.task(name="app.tasks.order_lifecycle_maintenance")
+def order_lifecycle_maintenance() -> str:
+    """Expire unpaid orders, release their stock, finish held cancellations."""
+    from app.services.order_expiry_service import process_order_lifecycle_maintenance
+
+    return _run("order_lifecycle_maintenance", process_order_lifecycle_maintenance)
+
+
 @celery_app.task(name="app.tasks.payment_reconciliation")
 def payment_reconciliation() -> str:
     """Re-verify payments stuck `pending` directly against Paystack.
