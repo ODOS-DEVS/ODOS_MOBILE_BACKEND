@@ -72,6 +72,10 @@ from app.services.email_service import (
 from app.services.finance_math import vendor_allocation_map
 from app.services.inventory_service import LOW_STOCK_THRESHOLD
 from app.services.media_service import remove_media_file, save_image_upload, save_image_uploads
+from app.services.order_fulfilment_service import (
+    fulfilment_block_reason,
+    order_is_fulfilment_eligible,
+)
 from app.services.order_package_service import (
     VENDOR_STAGE_PROGRESS,
     ensure_packages,
@@ -603,7 +607,20 @@ def _serialize_vendor_order(db: Session, user: User, order: Order) -> VendorOrde
 
 
 
-def list_vendor_orders_payloads(db: Session, user: User) -> list[VendorOrderRead]:
+def list_vendor_orders_payloads(
+    db: Session,
+    user: User,
+    *,
+    include_unfulfillable: bool = False,
+) -> list[VendorOrderRead]:
+    """Orders this vendor may work on.
+
+    Unpaid and closed orders are excluded by default. They are still real
+    records — the shopper sees them, the admin desk sees them, reconciliation
+    needs them — but a vendor queue is a to-do list, and an order nobody has
+    paid for is not a job. `include_unfulfillable` is for the places that are
+    explicitly auditing rather than dispatching.
+    """
     order_ids = list(
         db.scalars(
             select(OrderItem.order_id)
@@ -630,6 +647,8 @@ def list_vendor_orders_payloads(db: Session, user: User) -> list[VendorOrderRead
 
     payloads: list[VendorOrderRead] = []
     for order in orders:
+        if not include_unfulfillable and not order_is_fulfilment_eligible(order):
+            continue
         payload = _serialize_vendor_order(db, user, order)
         if payload:
             payloads.append(payload)
@@ -2089,6 +2108,22 @@ def update_vendor_order_status(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="That order was not found for this vendor.",
         )
+
+    # Payment gate. Enforced here rather than by hiding a button, because the
+    # button is not what moves the order — this endpoint is. Before this guard
+    # existed a vendor could confirm, prepare and dispatch an order nobody had
+    # paid for, and the dev database contains orders that reached "delivered"
+    # with a payment that never settled.
+    #
+    # Cancelling is exempt: a vendor must always be able to stand down from an
+    # order, and refusing that on an unpaid order would strand it.
+    if next_status != "cancelled":
+        blocked = fulfilment_block_reason(order)
+        if blocked:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=blocked,
+            )
 
     # This vendor moves *their own package*, never the shared order.
     #
