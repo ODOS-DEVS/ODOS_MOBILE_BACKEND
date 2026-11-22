@@ -6,8 +6,8 @@ behind `vendors`. A support admin can see the marketplace without being able
 to release funds.
 """
 
-from typing import Annotated
 import uuid
+from typing import Annotated
 
 from fastapi import APIRouter, Body, Depends, Query, status
 from sqlalchemy.orm import Session
@@ -37,7 +37,11 @@ from app.schemas.service import (
 
 router = APIRouter(prefix="/admin/services", tags=["admin-services"])
 
-RequireCatalogAdmin = Annotated[User, Depends(require_admin_feature("catalog"))]
+# Was require_admin_feature("catalog") — a feature name that appeared in no
+# permission band, so every route below was reachable only by a super admin and
+# every other administrator got a 403. "services" is a real module in the
+# permission catalogue and in the bands, which is what was intended.
+RequireServicesAdmin = Annotated[User, Depends(require_admin_feature("services"))]
 RequireFinanceAdmin = Annotated[User, Depends(require_admin_feature("finance"))]
 RequireVendorsAdmin = Annotated[User, Depends(require_admin_feature("vendors"))]
 
@@ -46,7 +50,7 @@ RequireVendorsAdmin = Annotated[User, Depends(require_admin_feature("vendors"))]
 
 @router.get("/overview")
 def get_overview(
-    _: RequireCatalogAdmin,
+    _: RequireServicesAdmin,
     window_days: int = Query(default=30, ge=1, le=365),
     db: Session = Depends(get_db),
 ):
@@ -56,7 +60,7 @@ def get_overview(
 # --- Categories -----------------------------------------------------------
 
 @router.get("/categories", response_model=list[ServiceCategoryRead])
-def get_categories(_: RequireCatalogAdmin, db: Session = Depends(get_db)):
+def get_categories(_: RequireServicesAdmin, db: Session = Depends(get_db)):
     return list_all_categories(db)
 
 
@@ -67,7 +71,7 @@ def get_categories(_: RequireCatalogAdmin, db: Session = Depends(get_db)):
 )
 def post_category(
     payload: ServiceCategoryWrite,
-    _: RequireCatalogAdmin,
+    _: RequireServicesAdmin,
     db: Session = Depends(get_db),
 ):
     return create_category(db, payload)
@@ -77,7 +81,7 @@ def post_category(
 def patch_category(
     category_id: str,
     payload: ServiceCategoryWrite,
-    _: RequireCatalogAdmin,
+    _: RequireServicesAdmin,
     db: Session = Depends(get_db),
 ):
     return update_category(db, category_id, payload)
@@ -86,7 +90,7 @@ def patch_category(
 @router.delete("/categories/{category_id}", response_model=ServiceCategoryRead)
 def delete_category(
     category_id: str,
-    _: RequireCatalogAdmin,
+    _: RequireServicesAdmin,
     db: Session = Depends(get_db),
 ):
     """Deactivates rather than deletes, so existing listings keep their home."""
@@ -97,7 +101,7 @@ def delete_category(
 
 @router.get("/listings", response_model=list[ServiceDetailRead])
 def get_listings(
-    _: RequireCatalogAdmin,
+    _: RequireServicesAdmin,
     status_filter: str | None = Query(default=None, alias="status"),
     store_id: str | None = None,
     limit: int = Query(default=50, ge=1, le=200),
@@ -112,7 +116,7 @@ def get_listings(
 @router.post("/listings/{service_id}/status", response_model=ServiceDetailRead)
 def post_listing_status(
     service_id: str,
-    _: RequireCatalogAdmin,
+    _: RequireServicesAdmin,
     new_status: Annotated[str, Query(alias="status")],
     reason: str | None = Query(default=None, max_length=500),
     db: Session = Depends(get_db),

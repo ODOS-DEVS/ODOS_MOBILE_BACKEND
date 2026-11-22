@@ -88,6 +88,15 @@ from app.models.service import (
     ServiceQuotation,
     ServiceReview,
 )
+from app.models.admin_rbac import (
+    AdminInvitation,
+    AdminInvitationRole,
+    AdminPermission,
+    AdminPermissionOverride,
+    AdminRole,
+    AdminRolePermission,
+    AdminUserRole,
+)
 from app.models.system_event_log import SystemEventLog
 from app.models.user import (
     AuthProvider,
@@ -112,6 +121,13 @@ from app.models.wallet import (
 )
 
 __all__ = [
+    "AdminInvitation",
+    "AdminInvitationRole",
+    "AdminPermission",
+    "AdminPermissionOverride",
+    "AdminRole",
+    "AdminRolePermission",
+    "AdminUserRole",
     "Booking",
     "BookingAddon",
     "BookingStatusEvent",
