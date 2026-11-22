@@ -1,4 +1,13 @@
 from app.models.account import PaymentMethodType, SavedAddress, SavedPaymentMethod
+from app.models.admin_rbac import (
+    AdminInvitation,
+    AdminInvitationRole,
+    AdminPermission,
+    AdminPermissionOverride,
+    AdminRole,
+    AdminRolePermission,
+    AdminUserRole,
+)
 from app.models.assistant import (
     AssistantConversation,
     AssistantMessage,
@@ -87,15 +96,6 @@ from app.models.service import (
     ServicePackage,
     ServiceQuotation,
     ServiceReview,
-)
-from app.models.admin_rbac import (
-    AdminInvitation,
-    AdminInvitationRole,
-    AdminPermission,
-    AdminPermissionOverride,
-    AdminRole,
-    AdminRolePermission,
-    AdminUserRole,
 )
 from app.models.system_event_log import SystemEventLog
 from app.models.user import (
