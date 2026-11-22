@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.controllers.notification_controller import create_notification_event
 from app.models import Order, Product, User
 from app.models.order_refund import OrderRefund
+from app.schemas.order import AdminOrderRefundRead, OrderRefundRead
 from app.services import order_state_service as st
 from app.services.inventory_service import record_stock_change
 from app.services.order_timeline_service import record_order_status_event
@@ -501,6 +502,51 @@ def list_refunds(
     if cleaned and cleaned != "all":
         query = query.where(OrderRefund.status == cleaned)
     return list(db.scalars(query.offset(offset).limit(limit)).all())
+
+
+def list_refund_payloads(
+    db: Session,
+    *,
+    status_filter: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[AdminOrderRefundRead]:
+    """`list_refunds`, plus the order and payee context a transfer needs.
+
+    Built here rather than by widening OrderRefundRead, so customer contact
+    details never ride along on the shopper's own order payload.
+    """
+    rows = list_refunds(db, status_filter=status_filter, limit=limit, offset=offset)
+    if not rows:
+        return []
+
+    orders = {
+        order.id: order
+        for order in db.scalars(
+            select(Order)
+            .options(selectinload(Order.items))
+            .where(Order.id.in_({row.order_id for row in rows}))
+        ).all()
+    }
+
+    payloads: list[AdminOrderRefundRead] = []
+    for row in rows:
+        order = orders.get(row.order_id)
+        vendor = db.get(User, row.vendor_user_id) if row.vendor_user_id else None
+        payloads.append(
+            AdminOrderRefundRead(
+                **OrderRefundRead.model_validate(row).model_dump(),
+                order_id=row.order_id,
+                order_number=order.order_number if order else "",
+                customer_name=order.address_full_name if order else None,
+                customer_phone=order.address_phone if order else None,
+                vendor_user_id=row.vendor_user_id,
+                vendor_name=(vendor.full_name or vendor.email) if vendor else None,
+                order_total=float(order.total_amount or 0) if order else 0.0,
+                order_refunded_total=refunded_total(db, order) if order else 0.0,
+            )
+        )
+    return payloads
 
 
 def list_cancellation_requests(

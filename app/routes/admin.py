@@ -115,7 +115,7 @@ from app.controllers.flash_sale_nominations_controller import (
 from app.controllers.order_cancellation_controller import (
     decide_cancellation,
     list_cancellation_requests,
-    list_refunds,
+    list_refund_payloads,
     mark_refund_failed,
     mark_refund_paid,
 )
@@ -199,6 +199,7 @@ from app.schemas.negotiation import (
     AdminNegotiationToggle,
 )
 from app.schemas.order import (
+    AdminOrderRefundRead,
     AdminRefundFailed,
     AdminRefundPaid,
     OrderCancellationDecision,
@@ -927,7 +928,7 @@ def get_merchandising_campaign_opt_ins(
     )
 
 
-@router.get("/order-refunds", response_model=list[OrderRefundRead])
+@router.get("/order-refunds", response_model=list[AdminOrderRefundRead])
 def get_order_refunds(
     current_user: RequireFinanceAdmin,
     list_params: AdminListParams,
@@ -935,9 +936,13 @@ def get_order_refunds(
     status_filter: str | None = Query(default=None, alias="status", max_length=20),
 ):
     """The refund desk, oldest first — a refund waiting three days outranks one
-    raised this morning."""
+    raised this morning.
+
+    Carries the order and payee context, because KutanaPay has no refund
+    endpoint and paying one of these is a person making a transfer by hand.
+    """
     limit, offset = list_params
-    return list_refunds(db, status_filter=status_filter, limit=limit, offset=offset)
+    return list_refund_payloads(db, status_filter=status_filter, limit=limit, offset=offset)
 
 
 @router.post("/order-refunds/{refund_id}/paid", response_model=OrderRefundRead)

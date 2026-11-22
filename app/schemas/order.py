@@ -350,6 +350,30 @@ class OrderRefundRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class AdminOrderRefundRead(OrderRefundRead):
+    """A refund as the finance desk needs to see it.
+
+    KutanaPay has no refund endpoint, so paying one of these back is a person
+    making a transfer by hand. That needs the order it belongs to and who to
+    send it to — a reference and an amount alone are not actionable.
+
+    Separate from `OrderRefundRead` so the customer contact details stay off
+    the shopper-facing payload, where they have no business being.
+    """
+
+    order_id: uuid.UUID
+    order_number: str
+    customer_name: str | None = None
+    customer_phone: str | None = None
+    #: Set when the refund covers one shop's package rather than the whole order.
+    vendor_user_id: uuid.UUID | None = None
+    vendor_name: str | None = None
+    order_total: float = 0
+    #: Everything already refunded on this order, so an admin can see at a
+    #: glance whether paying this one out would exceed what was collected.
+    order_refunded_total: float = 0
+
+
 class OrderCancellationRequest(BaseModel):
     """A shopper asking to cancel.
 

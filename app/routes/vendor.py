@@ -18,6 +18,7 @@ from app.controllers.flash_sale_nominations_controller import (
     create_vendor_flash_sale_nomination,
     list_vendor_flash_sale_nominations,
 )
+from app.controllers.order_cancellation_controller import cancel_vendor_package
 from app.controllers.store_section_controller import (
     add_products_to_section,
     create_vendor_section,
@@ -31,7 +32,6 @@ from app.controllers.store_section_controller import (
     set_section_cover,
     update_vendor_section,
 )
-from app.controllers.order_cancellation_controller import cancel_vendor_package
 from app.controllers.vendor_controller import (
     acknowledge_vendor_order,
     archive_vendor_voucher,
