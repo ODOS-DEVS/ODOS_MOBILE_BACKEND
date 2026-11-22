@@ -131,6 +131,7 @@ from app.controllers.wallet_controller import (
 from app.core.admin_permissions import (
     require_admin_feature,
     require_audit_access,
+    require_permission,
     require_super_admin,
 )
 from app.core.auth import get_current_user
@@ -254,6 +255,19 @@ RequireOrdersAdmin = Annotated[User, Depends(require_admin_feature("orders"))]
 RequireDashboardAdmin = Annotated[User, Depends(require_admin_feature("dashboard"))]
 RequireReturnsAdmin = Annotated[User, Depends(require_admin_feature("returns"))]
 RequireProductsAdmin = Annotated[User, Depends(require_admin_feature("products"))]
+
+# Action-level guards for the operations where "may reach this area" is not a
+# sufficient answer. Viewing the refund ledger and recording money as sent are
+# different jobs, and before these existed anyone with the "finance" module
+# could do both.
+RequireRefundApprove = Annotated[User, Depends(require_permission("finance.approve_refunds"))]
+RequireRefundProcess = Annotated[User, Depends(require_permission("finance.process_refunds"))]
+RequireRefundView = Annotated[User, Depends(require_permission("finance.view_refunds"))]
+RequireCancellationDecide = Annotated[
+    User, Depends(require_permission("orders.decide_cancellation"))
+]
+RequireOrderCancel = Annotated[User, Depends(require_permission("orders.cancel"))]
+RequireProductDelete = Annotated[User, Depends(require_permission("products.delete"))]
 RequireStoresAdmin = Annotated[User, Depends(require_admin_feature("stores"))]
 RequireMarketsAdmin = Annotated[User, Depends(require_admin_feature("markets"))]
 RequireCategoriesAdmin = Annotated[User, Depends(require_admin_feature("categories"))]
@@ -930,7 +944,7 @@ def get_merchandising_campaign_opt_ins(
 
 @router.get("/order-refunds", response_model=list[AdminOrderRefundRead])
 def get_order_refunds(
-    current_user: RequireFinanceAdmin,
+    current_user: RequireRefundView,
     list_params: AdminListParams,
     db: Session = Depends(get_db),
     status_filter: str | None = Query(default=None, alias="status", max_length=20),
@@ -949,7 +963,7 @@ def get_order_refunds(
 def post_refund_paid(
     refund_id: UUID,
     payload: AdminRefundPaid,
-    current_user: RequireFinanceAdmin,
+    current_user: RequireRefundProcess,
     db: Session = Depends(get_db),
 ):
     """Record that the money actually went back.
@@ -971,7 +985,7 @@ def post_refund_paid(
 def post_refund_failed(
     refund_id: UUID,
     payload: AdminRefundFailed,
-    current_user: RequireFinanceAdmin,
+    current_user: RequireRefundProcess,
     db: Session = Depends(get_db),
 ):
     """A transfer that did not go through. The order stays cancelled."""
@@ -993,7 +1007,7 @@ def get_cancellation_requests(
 def post_admin_cancellation_decision(
     order_id: str,
     payload: OrderCancellationDecision,
-    current_user: RequireOrdersAdmin,
+    current_user: RequireCancellationDecide,
     db: Session = Depends(get_db),
 ):
     """Admin resolving a request a vendor has left sitting.

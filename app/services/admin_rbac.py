@@ -108,17 +108,45 @@ def is_rbac_managed(db: Session, user: User | None) -> bool:
     return has_override is not None
 
 
+def _band_permissions(user: User) -> frozenset[str]:
+    """What the old module-level band amounts to in per-action terms.
+
+    Needed so `require_permission` can be deployed before the bootstrap has
+    run. A band granted whole modules, so it is read as every permission in
+    those modules — which is precisely what it allowed. Without this, adding an
+    action-level guard to an existing route would 403 every administrator still
+    on a band, which is a lockout rather than a tightening.
+
+    This path disappears once every administrator is role-governed.
+    """
+    from app.core.admin_permission_catalogue import PERMISSIONS_BY_MODULE
+    from app.core.admin_permissions import PERMISSION_FEATURES, resolve_admin_permission
+
+    allowed = PERMISSION_FEATURES.get(resolve_admin_permission(user), frozenset())
+    if "*" in allowed:
+        return frozenset(ALL_CODES)
+    codes: set[str] = set()
+    for module in allowed:
+        codes.update(p.code for p in PERMISSIONS_BY_MODULE.get(module, ()))
+    return frozenset(codes)
+
+
 def effective_permissions(db: Session, user: User | None) -> frozenset[str]:
     """Every permission code this administrator holds right now.
 
     Returns the whole catalogue for a super admin, and nothing at all for a
     non-admin — so a vendor or shopper token can never satisfy an admin check
     even if it somehow reaches one.
+
+    An administrator who is not yet role-governed is answered from their old
+    band, for the reason given in `_band_permissions`.
     """
     if user is None or user.role != UserRole.ADMIN:
         return frozenset()
     if is_super_admin(user):
         return frozenset(ALL_CODES)
+    if not is_rbac_managed(db, user):
+        return _band_permissions(user)
 
     # Roles, skipping deactivated ones: switching a role off has to remove the
     # access it carried without unpicking every assignment.
