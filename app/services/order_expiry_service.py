@@ -23,6 +23,7 @@ from app.core.database import SessionLocal
 from app.models import Order, Product, User
 from app.models.payment import PaymentTransaction
 from app.services import order_state_service as st
+from app.services.inventory_service import record_stock_change
 from app.services.order_timeline_service import record_order_status_event
 
 logger = logging.getLogger(__name__)
@@ -71,7 +72,15 @@ def _release_stock(db: Session, order: Order) -> None:
             continue
         product = db.get(Product, item.product_id)
         if product is not None:
-            product.stock = int(product.stock or 0) + int(item.quantity or 0)
+            record_stock_change(
+                db,
+                product,
+                new_stock=int(product.stock or 0) + int(item.quantity or 0),
+                reason="system",
+                reference_type="order",
+                reference_id=str(order.id),
+                note=f"Order #{order.order_number} expired unpaid",
+            )
 
 
 def expire_unpaid_orders(db: Session | None = None) -> int:

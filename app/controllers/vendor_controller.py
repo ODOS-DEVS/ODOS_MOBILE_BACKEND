@@ -7,6 +7,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.controllers.notification_controller import create_notification_event, order_notification_image
+from app.controllers.order_cancellation_controller import settle_cancelled_package
 from app.controllers.wallet_controller import publish_vendor_wallet_updates
 from app.core.admin_pagination import normalize_page_params, paginate_scalars
 from app.core.admin_permissions import list_admins_with_feature
@@ -586,6 +587,14 @@ def _serialize_vendor_order(db: Session, user: User, order: Order) -> VendorOrde
         placed_at=order.placed_at,
         paid_at=order.paid_at,
         created_at=order.created_at,
+        # Order-level on purpose: a cancellation request is made against the
+        # whole order, so every vendor on it needs to see the same request.
+        cancellation_status=order.cancellation_status or "none",
+        cancellation_requested_at=order.cancellation_requested_at,
+        cancellation_requested_role=order.cancellation_requested_role,
+        cancellation_reason_code=order.cancellation_reason_code,
+        cancellation_reason=order.cancellation_reason,
+        refund_status=order.refund_status or "not_applicable",
         timeline=[
             OrderStatusEventRead.model_validate(event) for event in order.timeline
         ],
@@ -2162,6 +2171,7 @@ def update_vendor_order_status(
                 ),
             )
 
+    previous_stage = current_status
     package.vendor_status = next_status
     changed_wallet_vendor_ids: set[uuid.UUID] = set()
     if next_status == "cancelled":
@@ -2172,6 +2182,13 @@ def update_vendor_order_status(
         package.cancelled_at = datetime.now(UTC)
         package.cancellation_reason = "Cancelled by store"
         package.tracking_eta = None
+        # Money and stock. Without this the bag was simply marked cancelled:
+        # a vendor could cancel a package somebody had paid for and no refund
+        # was ever opened, while the stock stayed decremented. Shared with
+        # cancel_vendor_package so both routes cost the same thing.
+        settle_cancelled_package(
+            db, order, package, initiated_by=user, previous_stage=previous_stage
+        )
         record_order_status_event(
             db,
             order,

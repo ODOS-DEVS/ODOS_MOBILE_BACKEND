@@ -24,6 +24,7 @@ from app.controllers.notification_controller import create_notification_event
 from app.models import Order, Product, User
 from app.models.order_refund import OrderRefund
 from app.services import order_state_service as st
+from app.services.inventory_service import record_stock_change
 from app.services.order_timeline_service import record_order_status_event
 from app.services.refund_service import (
     open_refund_for,
@@ -326,7 +327,18 @@ def _restore_inventory(db: Session, order: Order) -> None:
         product = db.get(Product, item.product_id)
         if product is None:
             continue
-        product.stock = int(product.stock or 0) + int(item.quantity or 0)
+        # Through the ledger, not a bare assignment: the vendor's stock history
+        # has to explain the jump, and this re-publishes anything the catalogue
+        # auto-hid when it sold out.
+        record_stock_change(
+            db,
+            product,
+            new_stock=int(product.stock or 0) + int(item.quantity or 0),
+            reason="return_restock",
+            reference_type="order",
+            reference_id=str(order.id),
+            note=f"Order #{order.order_number} cancelled",
+        )
 
 
 def _open_refund(db: Session, order: Order, *, initiated_by: User, vendor_user_id=None) -> OrderRefund:
@@ -516,6 +528,68 @@ def list_cancellation_requests(
     return mine[:limit]
 
 
+def settle_cancelled_package(
+    db: Session,
+    order: Order,
+    package,
+    *,
+    initiated_by: User,
+    previous_stage: str,
+) -> OrderRefund | None:
+    """The money and stock consequences of one package being cancelled.
+
+    Shared with `update_vendor_order_status`, which marks a package cancelled
+    straight from the fulfilment ladder. That path used to end there — the bag
+    was marked cancelled and nothing else happened, so a vendor could cancel a
+    paid package and the shopper got no refund and the stock never came back,
+    while the web UI told them a refund was on its way. Both paths now land
+    here so a cancelled package always costs the same thing.
+
+    `previous_stage` is the package's stage *before* it was marked cancelled.
+    Both callers overwrite `vendor_status` first, so reading it here would
+    always see "cancelled" and the dispatch check below would never fire.
+
+    Does not commit: the caller owns the transaction.
+    """
+    vendor_user_id = package.vendor_user_id if package is not None else None
+
+    # Only before dispatch. Once a parcel is in a van the goods are not on a
+    # shelf, and adding them back would oversell.
+    if (previous_stage or "").strip().lower() not in st.AFTER_DISPATCH:
+        for item in order.items:
+            if vendor_user_id is not None and item.vendor_user_id != vendor_user_id:
+                continue
+            if not item.product_id:
+                continue
+            product = db.get(Product, item.product_id)
+            if product is not None:
+                record_stock_change(
+                    db,
+                    product,
+                    new_stock=int(product.stock or 0) + int(item.quantity or 0),
+                    reason="return_restock",
+                    reference_type="order",
+                    reference_id=str(order.id),
+                    note=f"Package cancelled on order #{order.order_number}",
+                )
+
+    refund: OrderRefund | None = None
+    if st.refund_is_owed(order):
+        refund = _open_refund(db, order, initiated_by=initiated_by, vendor_user_id=vendor_user_id)
+        order.refund_status = st.REFUND_PENDING
+
+    # The parent order only closes when nothing is left to fulfil.
+    live_packages = [
+        p for p in (order.packages or []) if (p.vendor_status or "") != "cancelled"
+    ]
+    if not live_packages:
+        order.status = st.ORDER_CANCELLED
+        order.cancellation_status = st.CANCEL_COMPLETED
+        order.cancelled_at = datetime.now(UTC)
+
+    return refund
+
+
 def cancel_vendor_package(
     db: Session,
     actor: User,
@@ -536,6 +610,16 @@ def cancel_vendor_package(
     """
     order = _load(db, order_id)
 
+    # Validated for the same reason the shopper path validates: the code ends
+    # up in the timeline and in what the shopper is told, so it cannot be an
+    # arbitrary string a caller invented.
+    allowed = {"vendor": VENDOR_REASONS, "admin": ADMIN_REASONS}.get(actor_role, VENDOR_REASONS)
+    if reason_code not in allowed:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="That cancellation reason is not one we recognise.",
+        )
+
     if actor_role == "vendor" and actor.id != vendor_user_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="That order was not found.")
     if vendor_user_id not in _order_vendor_ids(db, order):
@@ -552,34 +636,18 @@ def cancel_vendor_package(
     package = next(
         (p for p in (order.packages or []) if p.vendor_user_id == vendor_user_id), None
     )
+    previous_stage = (package.vendor_status or "") if package is not None else st.vendor_stage(order)
     if package is not None:
-        if (package.vendor_status or "") in st.AFTER_DISPATCH:
+        if previous_stage in st.AFTER_DISPATCH:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="That package has already been dispatched and cannot be cancelled here.",
             )
         package.vendor_status = "cancelled"
 
-    for item in order.items:
-        if item.vendor_user_id != vendor_user_id or not item.product_id:
-            continue
-        product = db.get(Product, item.product_id)
-        if product is not None:
-            product.stock = int(product.stock or 0) + int(item.quantity or 0)
-
-    refund = None
-    if st.refund_is_owed(order):
-        refund = _open_refund(db, order, initiated_by=actor, vendor_user_id=vendor_user_id)
-        order.refund_status = st.REFUND_PENDING
-
-    # The parent order only closes when nothing is left to fulfil.
-    live_packages = [
-        p for p in (order.packages or []) if (p.vendor_status or "") != "cancelled"
-    ]
-    if not live_packages:
-        order.status = st.ORDER_CANCELLED
-        order.cancellation_status = st.CANCEL_COMPLETED
-        order.cancelled_at = datetime.now(UTC)
+    refund = settle_cancelled_package(
+        db, order, package, initiated_by=actor, previous_stage=previous_stage
+    )
 
     record_order_status_event(
         db,

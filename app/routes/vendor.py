@@ -31,6 +31,7 @@ from app.controllers.store_section_controller import (
     set_section_cover,
     update_vendor_section,
 )
+from app.controllers.order_cancellation_controller import cancel_vendor_package
 from app.controllers.vendor_controller import (
     acknowledge_vendor_order,
     archive_vendor_voucher,
@@ -87,6 +88,7 @@ from app.schemas.catalog import (
     VendorCampaignSubmissionResult,
     VendorCampaignWorkspaceRead,
 )
+from app.schemas.order import OrderCancellationRequest
 from app.schemas.user import MessageResponse
 from app.schemas.vendor import (
     VendorAnalyticsRead,
@@ -751,6 +753,35 @@ def patch_vendor_order_status(
     db: Session = Depends(get_db),
 ):
     return update_vendor_order_status(db, current_user, order_id, payload)
+
+
+@router.post("/orders/{order_id}/cancel", response_model=VendorOrderRead)
+def post_vendor_order_cancel(
+    order_id: str,
+    payload: OrderCancellationRequest,
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Session = Depends(get_db),
+):
+    """Withdraw this vendor's own package from an order, with a reason.
+
+    Only this shop's items are withdrawn — one shop running out of stock is not
+    a reason to unwind a basket three shops could otherwise fill. Stock goes
+    back and, if the shopper had paid, a refund is opened for exactly these
+    lines plus this package's delivery.
+
+    Prefer this over `PATCH /vendor/orders/{id}/status` with `cancelled`: that
+    route carries no reason code, and the reason is what the shopper is told.
+    """
+    cancel_vendor_package(
+        db,
+        current_user,
+        order_id,
+        current_user.id,
+        reason_code=payload.reason_code,
+        note=payload.note,
+        actor_role="vendor",
+    )
+    return get_vendor_order(db, current_user, order_id)
 
 
 @router.post("/orders/{order_id}/dispatch-photo", response_model=VendorOrderRead)

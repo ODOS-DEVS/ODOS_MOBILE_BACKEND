@@ -716,6 +716,17 @@ class VendorOrderRead(BaseModel):
     placed_at: datetime | None = None
     paid_at: datetime | None = None
     created_at: datetime
+    #: A cancellation the shopper has asked for and this vendor must answer.
+    #: Defaulted so an older mobile build that has never seen these keeps
+    #: parsing the payload unchanged. "requested" is the only value that needs
+    #: the vendor to do anything.
+    cancellation_status: str = "none"
+    cancellation_requested_at: datetime | None = None
+    cancellation_requested_role: str | None = None
+    cancellation_reason_code: str | None = None
+    #: The shopper's own words, where they gave any.
+    cancellation_reason: str | None = None
+    refund_status: str = "not_applicable"
     items: list[VendorOrderItemRead]
     timeline: list[OrderStatusEventRead] = []
 
