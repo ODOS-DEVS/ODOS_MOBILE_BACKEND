@@ -16,6 +16,8 @@ from app.middleware.unhandled_errors import UnhandledExceptionMiddleware
 from app.routes import (
     account,
     admin,
+    admin_invitations_public,
+    admin_rbac,
     admin_services,
     advanced_analytics,
     assistant,
@@ -222,6 +224,25 @@ async def _services_maintenance_loop() -> None:
         await asyncio.sleep(SERVICES_MAINTENANCE_INTERVAL_SECONDS)
 
 
+def _bootstrap_admin_rbac() -> None:
+    """Sync the permission catalogue and seed default roles.
+
+    Failure is logged and swallowed on purpose: a seeding problem must not stop
+    the API from serving. The existing super admin flag works without any of
+    these rows, so the platform stays administrable either way.
+    """
+    from app.core.database import SessionLocal
+    from app.services.admin_rbac_bootstrap import bootstrap_admin_rbac
+
+    db = SessionLocal()
+    try:
+        bootstrap_admin_rbac(db)
+    except Exception:
+        logger.exception("Admin RBAC bootstrap failed; continuing without it")
+    finally:
+        db.close()
+
+
 @app.on_event("startup")
 async def on_startup() -> None:
     # Initialize payment providers
@@ -230,6 +251,18 @@ async def on_startup() -> None:
 
     realtime_manager.bind_loop(asyncio.get_running_loop())
     asyncio.create_task(asyncio.to_thread(get_redis))
+
+    # Administrator roles and the permission catalogue. Idempotent and guarded
+    # by an advisory lock, so every worker can call it and only one does the
+    # work. Deliberately above the scheduler early-return below: access control
+    # has to be in place whether or not this process runs the periodic jobs.
+    #
+    # Awaited, not fired off as a task. A bare asyncio.create_task() is not
+    # retained anywhere and can be collected before it runs — which is exactly
+    # what happened the first time this was written. The work is two queries
+    # once seeded, and serving requests before the permission rows exist is the
+    # worse trade.
+    await asyncio.to_thread(_bootstrap_admin_rbac)
 
     # The periodic jobs run EITHER here as asyncio loops, or in a Celery worker driven by
     # beat — never both, or every job fires twice. SCHEDULER_ENABLED defaults to True, so a
@@ -300,6 +333,9 @@ app.include_router(services.bookings_router, prefix="/api")
 app.include_router(services.vendor_router, prefix="/api")
 app.include_router(services.quotations_router, prefix="/api")
 app.include_router(admin_services.router, prefix="/api")
+app.include_router(admin_rbac.router, prefix="/api")
+# Unauthenticated, token-gated: the account does not exist yet.
+app.include_router(admin_invitations_public.router, prefix="/api")
 app.include_router(customer_wallet.router, prefix="/api")
 app.include_router(realtime.router, prefix="/api")
 app.include_router(reviews.router, prefix="/api")

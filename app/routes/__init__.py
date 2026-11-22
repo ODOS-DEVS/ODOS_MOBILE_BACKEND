@@ -1,6 +1,8 @@
 from app.routes import (
     account,
     admin,
+    admin_invitations_public,
+    admin_rbac,
     assistant,
     auth,
     behavior,
@@ -23,6 +25,8 @@ from app.routes import (
 
 __all__ = [
     "admin",
+    "admin_invitations_public",
+    "admin_rbac",
     "account",
     "assistant",
     "auth",

@@ -30,6 +30,22 @@ ADMIN_VENDOR_MUTATION = "admin.vendor_mutation"
 ADMIN_FINANCE_MUTATION = "admin.finance_mutation"
 ADMIN_SETTINGS_MUTATION = "admin.settings_mutation"
 
+# Administration of administrators. Separated from ADMIN_ROLE_CHANGED (which
+# covers a user's platform role) because who may administer what is the thing
+# an audit is most often reconstructing after the fact.
+ADMIN_INVITED = "admin.invited"
+ADMIN_INVITATION_ACCEPTED = "admin.invitation_accepted"
+ADMIN_INVITATION_REVOKED = "admin.invitation_revoked"
+ADMIN_INVITATION_RESENT = "admin.invitation_resent"
+ADMIN_ACCOUNT_UPDATED = "admin.account_updated"
+ADMIN_ACCOUNT_DEACTIVATED = "admin.account_deactivated"
+ADMIN_ACCOUNT_REACTIVATED = "admin.account_reactivated"
+ADMIN_ROLES_ASSIGNED = "admin.roles_assigned"
+ADMIN_PERMISSION_OVERRIDDEN = "admin.permission_overridden"
+ADMIN_RBAC_ROLE_CREATED = "admin.rbac_role_created"
+ADMIN_RBAC_ROLE_UPDATED = "admin.rbac_role_updated"
+ADMIN_RBAC_ROLE_DEACTIVATED = "admin.rbac_role_deactivated"
+
 # Promotions
 PROMO_CREATED = "promo.created"
 PROMO_UPDATED = "promo.updated"
