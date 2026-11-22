@@ -14,6 +14,7 @@ from app.core.database import Base
 # gives type checkers and editors the real types without that cost.
 
 if TYPE_CHECKING:
+    from app.models.order_refund import OrderRefund
     from app.models.payment import PaymentTransaction
     from app.models.user import User
 
@@ -238,6 +239,12 @@ class Order(Base):
         back_populates="order",
         cascade="all, delete-orphan",
         order_by="ReturnRequest.created_at.desc()",
+    )
+    refunds: Mapped[list["OrderRefund"]] = relationship(
+        "OrderRefund",
+        cascade="all, delete-orphan",
+        order_by="OrderRefund.created_at",
+        foreign_keys="OrderRefund.order_id",
     )
     timeline: Mapped[list["OrderStatusEvent"]] = relationship(
         back_populates="order",

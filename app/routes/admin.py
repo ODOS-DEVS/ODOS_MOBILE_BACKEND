@@ -112,6 +112,13 @@ from app.controllers.flash_sale_nominations_controller import (
     list_admin_flash_sale_nominations,
     review_admin_flash_sale_nomination,
 )
+from app.controllers.order_cancellation_controller import (
+    decide_cancellation,
+    list_cancellation_requests,
+    list_refunds,
+    mark_refund_failed,
+    mark_refund_paid,
+)
 from app.controllers.vendor_controller import (
     approve_vendor_application,
     list_vendor_applications,
@@ -190,6 +197,13 @@ from app.schemas.negotiation import (
     AdminNegotiationRead,
     AdminNegotiationStatsRead,
     AdminNegotiationToggle,
+)
+from app.schemas.order import (
+    AdminRefundFailed,
+    AdminRefundPaid,
+    OrderCancellationDecision,
+    OrderRead,
+    OrderRefundRead,
 )
 from app.schemas.pagination import AdminPageRead
 from app.schemas.payment import (
@@ -910,6 +924,85 @@ def get_merchandising_campaign_opt_ins(
         status_filter=status_filter,
         limit=limit,
         offset=offset,
+    )
+
+
+@router.get("/order-refunds", response_model=list[OrderRefundRead])
+def get_order_refunds(
+    current_user: RequireFinanceAdmin,
+    list_params: AdminListParams,
+    db: Session = Depends(get_db),
+    status_filter: str | None = Query(default=None, alias="status", max_length=20),
+):
+    """The refund desk, oldest first — a refund waiting three days outranks one
+    raised this morning."""
+    limit, offset = list_params
+    return list_refunds(db, status_filter=status_filter, limit=limit, offset=offset)
+
+
+@router.post("/order-refunds/{refund_id}/paid", response_model=OrderRefundRead)
+def post_refund_paid(
+    refund_id: UUID,
+    payload: AdminRefundPaid,
+    current_user: RequireFinanceAdmin,
+    db: Session = Depends(get_db),
+):
+    """Record that the money actually went back.
+
+    KutanaPay exposes no refund endpoint, so the transfer happens outside ODOS
+    and this is the authoritative confirmation. The provider reference is
+    mandatory: without it, "refunded" is a word someone typed.
+    """
+    return mark_refund_paid(
+        db,
+        current_user,
+        refund_id,
+        provider_reference=payload.provider_reference,
+        note=payload.note,
+    )
+
+
+@router.post("/order-refunds/{refund_id}/failed", response_model=OrderRefundRead)
+def post_refund_failed(
+    refund_id: UUID,
+    payload: AdminRefundFailed,
+    current_user: RequireFinanceAdmin,
+    db: Session = Depends(get_db),
+):
+    """A transfer that did not go through. The order stays cancelled."""
+    return mark_refund_failed(db, current_user, refund_id, reason=payload.reason)
+
+
+@router.get("/cancellation-requests", response_model=list[OrderRead])
+def get_cancellation_requests(
+    current_user: RequireOrdersAdmin,
+    list_params: AdminListParams,
+    db: Session = Depends(get_db),
+):
+    """Cancellations waiting on someone, oldest first."""
+    limit, offset = list_params
+    return list_cancellation_requests(db, limit=limit, offset=offset)
+
+
+@router.post("/orders/{order_id}/cancellation-decision", response_model=OrderRead)
+def post_admin_cancellation_decision(
+    order_id: str,
+    payload: OrderCancellationDecision,
+    current_user: RequireOrdersAdmin,
+    db: Session = Depends(get_db),
+):
+    """Admin resolving a request a vendor has left sitting.
+
+    The escalation path: a vendor must not be able to ignore a valid
+    cancellation indefinitely.
+    """
+    return decide_cancellation(
+        db,
+        current_user,
+        order_id,
+        approve=payload.approve,
+        note=payload.note,
+        actor_role="admin",
     )
 
 

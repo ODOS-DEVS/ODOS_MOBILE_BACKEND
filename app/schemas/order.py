@@ -267,6 +267,17 @@ class OrderRead(BaseModel):
     progress: float | None
     tracking_eta: str | None
     cancellation_reason: str | None
+    #: The dimensions that let a client tell "cancelled" apart from "cancelled
+    #: and your money is back". Defaulted so an older build that has never seen
+    #: them keeps parsing the payload unchanged.
+    cancellation_status: str = "none"
+    cancellation_requested_at: datetime | None = None
+    cancellation_requested_role: str | None = None
+    cancellation_reason_code: str | None = None
+    cancellation_decided_at: datetime | None = None
+    cancellation_decision_note: str | None = None
+    refund_status: str = "not_applicable"
+    refunds: list["OrderRefundRead"] = []
     delivery_instructions: str | None
     delivery_rating: int | None
     delivery_rated_at: datetime | None
@@ -312,6 +323,33 @@ class OrderRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class OrderRefundRead(BaseModel):
+    """One attempt to return money, with the arithmetic that produced it.
+
+    The breakdown is stored rather than recomputed, so a query months later is
+    answered from what was true at the time rather than from prices that moved.
+    """
+
+    id: uuid.UUID
+    reference: str
+    amount: float
+    currency: str
+    status: str
+    items_amount: float = 0
+    delivery_amount: float = 0
+    discount_withheld: float = 0
+    gateway_fee_withheld: float = 0
+    reason_code: str | None = None
+    reason_note: str | None = None
+    #: Present only once the money has actually moved.
+    provider_reference: str | None = None
+    failure_reason: str | None = None
+    confirmed_at: datetime | None = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class OrderCancellationRequest(BaseModel):
     """A shopper asking to cancel.
 
@@ -326,3 +364,14 @@ class OrderCancellationRequest(BaseModel):
 class OrderCancellationDecision(BaseModel):
     approve: bool
     note: str | None = Field(default=None, max_length=500)
+
+
+class AdminRefundPaid(BaseModel):
+    """Confirming a refund that was transferred outside ODOS."""
+
+    provider_reference: str = Field(min_length=2, max_length=120)
+    note: str | None = Field(default=None, max_length=500)
+
+
+class AdminRefundFailed(BaseModel):
+    reason: str = Field(min_length=2, max_length=500)

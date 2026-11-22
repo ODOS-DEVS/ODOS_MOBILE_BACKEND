@@ -468,3 +468,139 @@ def mark_refund_failed(
         )
         db.commit()
     return refund
+
+
+# ---------------------------------------------------------------------------
+# Admin and vendor queues
+# ---------------------------------------------------------------------------
+
+
+def list_refunds(
+    db: Session,
+    *,
+    status_filter: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[OrderRefund]:
+    """The refund desk. Ordered oldest-first on purpose: a refund waiting three
+    days matters more than one raised this morning."""
+    query = select(OrderRefund).order_by(OrderRefund.created_at.asc())
+    cleaned = (status_filter or "").strip().lower()
+    if cleaned and cleaned != "all":
+        query = query.where(OrderRefund.status == cleaned)
+    return list(db.scalars(query.offset(offset).limit(limit)).all())
+
+
+def list_cancellation_requests(
+    db: Session,
+    *,
+    vendor_user_id=None,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[Order]:
+    """Cancellations awaiting a decision, oldest first.
+
+    Scoped to one vendor's own orders when a vendor asks, so the queue can be
+    served to either audience from one place without leaking across shops.
+    """
+    query = (
+        select(Order)
+        .options(selectinload(Order.items))
+        .where(Order.cancellation_status == st.CANCEL_REQUESTED)
+        .order_by(Order.cancellation_requested_at.asc())
+    )
+    rows = list(db.scalars(query.offset(offset).limit(limit * 4 if vendor_user_id else limit)).all())
+    if vendor_user_id is None:
+        return rows[:limit]
+    mine = [order for order in rows if vendor_user_id in _order_vendor_ids(db, order)]
+    return mine[:limit]
+
+
+def cancel_vendor_package(
+    db: Session,
+    actor: User,
+    order_id: str,
+    vendor_user_id,
+    *,
+    reason_code: str,
+    note: str | None = None,
+    actor_role: str = "vendor",
+) -> OrderRefund | None:
+    """Cancel one vendor's part of a multi-vendor order.
+
+    The other vendors' packages are untouched — one shop running out of stock
+    is not a reason to unwind a basket that three shops could otherwise fill.
+    The refund covers only the cancelled lines plus that package's own delivery,
+    with the cart discount apportioned by line value so the surviving items keep
+    the share they earned.
+    """
+    order = _load(db, order_id)
+
+    if actor_role == "vendor" and actor.id != vendor_user_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="That order was not found.")
+    if vendor_user_id not in _order_vendor_ids(db, order):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="That vendor has nothing on this order.",
+        )
+    if st.order_is_closed(order):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"This order is {order.status} and cannot be changed.",
+        )
+
+    package = next(
+        (p for p in (order.packages or []) if p.vendor_user_id == vendor_user_id), None
+    )
+    if package is not None:
+        if (package.vendor_status or "") in st.AFTER_DISPATCH:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="That package has already been dispatched and cannot be cancelled here.",
+            )
+        package.vendor_status = "cancelled"
+
+    for item in order.items:
+        if item.vendor_user_id != vendor_user_id or not item.product_id:
+            continue
+        product = db.get(Product, item.product_id)
+        if product is not None:
+            product.stock = int(product.stock or 0) + int(item.quantity or 0)
+
+    refund = None
+    if st.refund_is_owed(order):
+        refund = _open_refund(db, order, initiated_by=actor, vendor_user_id=vendor_user_id)
+        order.refund_status = st.REFUND_PENDING
+
+    # The parent order only closes when nothing is left to fulfil.
+    live_packages = [
+        p for p in (order.packages or []) if (p.vendor_status or "") != "cancelled"
+    ]
+    if not live_packages:
+        order.status = st.ORDER_CANCELLED
+        order.cancellation_status = st.CANCEL_COMPLETED
+        order.cancelled_at = datetime.now(UTC)
+
+    record_order_status_event(
+        db,
+        order,
+        status="vendor_package_cancelled",
+        actor_role=actor_role,
+        note=note or reason_code,
+    )
+    db.commit()
+
+    _notify(
+        db,
+        order.user_id,
+        order=order,
+        kind="order_item_cancelled",
+        title="Part of your order was cancelled",
+        body=(
+            f"One seller on order #{order.order_number} cannot fulfil their items."
+            + (f" A refund of GHS {refund.amount:,.2f} is being processed." if refund else "")
+        ),
+        accent="warning",
+    )
+    db.commit()
+    return refund
