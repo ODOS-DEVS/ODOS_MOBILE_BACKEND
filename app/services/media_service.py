@@ -11,12 +11,12 @@ from fastapi import HTTPException, UploadFile, status
 
 from app.core.config import settings
 from app.services import object_storage
-from app.services.image_variants import VARIANT_WIDTHS, VariantError, build_variants
 from app.services.image_validation import (
     ImageRejected,
     ensure_safe_image_dimensions,
     safe_upload_filename,
 )
+from app.services.image_variants import VARIANT_WIDTHS, VariantError, build_variants
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +62,16 @@ MAX_CHAT_DOCUMENT_BYTES = 15 * 1024 * 1024
 # A single request may carry at most this many images. Each one costs a
 # Cloudinary round trip and up to MAX_IMAGE_UPLOAD_BYTES of memory.
 MAX_IMAGES_PER_REQUEST = 10
+
+#: How many images are stored at once by `save_image_uploads`. Bounded because
+#: each in-flight image holds its bytes plus its variants in memory.
+CONCURRENT_IMAGE_UPLOADS = 4
+
+#: Per-request timeout talking to the storage provider. Was 30s, which a single
+#: large photo on a slow link could exceed — and because one failure aborts the
+#: whole product, that turned an occasional slow upload into "the product did
+#: not save".
+STORAGE_REQUEST_TIMEOUT_SECONDS = 90
 
 _READ_CHUNK_BYTES = 1024 * 1024
 
@@ -363,7 +373,7 @@ async def save_image_upload(upload: UploadFile, folder: str) -> str:
                 content_type,
             )
         },
-        timeout=30,
+        timeout=STORAGE_REQUEST_TIMEOUT_SECONDS,
     )
 
     if not response.ok:
@@ -381,6 +391,27 @@ async def save_image_upload(upload: UploadFile, folder: str) -> str:
 
 
 async def save_image_uploads(uploads: list[UploadFile] | None, *, folder: str) -> list[str]:
+    """Store several images, concurrently, preserving the caller's order.
+
+    This used to be a plain `for` loop, and that is part of why a vendor could
+    save a product with one photo but not with four. On the S3 path each image
+    costs a decode plus four writes (the original and three variants); on
+    Cloudinary it is one upload that the CDN derives sizes from. Either way it
+    measured at roughly eight seconds for a 1.4MB photo, so four took over
+    thirty seconds in series — and the picker sends phone originals, which are
+    several times larger. Anything in front of the API with a thirty- or
+    sixty-second idle timeout cut the request off, and the vendor saw a
+    failure with no product created.
+
+    Running them together turns "slowest sum" into "slowest single", which is
+    what keeps the request inside those limits. `gather` preserves input order,
+    so `image_urls[0]` is still the photo the vendor put first and still
+    becomes the primary image.
+
+    Concurrency is bounded because each task holds an image in memory and the
+    decode pool is only two slots wide; letting ten large photos decode at once
+    is how you turn a slow request into an out-of-memory one.
+    """
     if not uploads:
         return []
     if len(uploads) > MAX_IMAGES_PER_REQUEST:
@@ -389,10 +420,13 @@ async def save_image_uploads(uploads: list[UploadFile] | None, *, folder: str) -
             detail=f"You can upload at most {MAX_IMAGES_PER_REQUEST} images at a time.",
         )
 
-    image_urls: list[str] = []
-    for upload in uploads:
-        image_urls.append(await save_image_upload(upload, folder=folder))
-    return image_urls
+    limit = asyncio.Semaphore(CONCURRENT_IMAGE_UPLOADS)
+
+    async def store(upload: UploadFile) -> str:
+        async with limit:
+            return await save_image_upload(upload, folder=folder)
+
+    return list(await asyncio.gather(*(store(upload) for upload in uploads)))
 
 
 async def _upload_raw_to_cloudinary(
@@ -443,7 +477,7 @@ async def _upload_raw_to_cloudinary(
             "signature": _sign_cloudinary_payload(upload_payload),
         },
         files={"file": (filename, file_bytes, content_type)},
-        timeout=30,
+        timeout=STORAGE_REQUEST_TIMEOUT_SECONDS,
     )
 
     if not response.ok:
@@ -629,7 +663,7 @@ def import_avatar_from_url(source_url: str | None) -> str | None:
                     content_type,
                 )
             },
-            timeout=30,
+            timeout=STORAGE_REQUEST_TIMEOUT_SECONDS,
         )
     except requests.RequestException:
         return normalized[:500]
