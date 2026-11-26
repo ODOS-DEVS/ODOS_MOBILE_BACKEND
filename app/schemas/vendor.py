@@ -524,7 +524,18 @@ class VendorProductUpdate(BaseModel):
     is_returnable: bool | None = None
     #: Price negotiation. The floor is returned only here, on the vendor's own
     #: authenticated view of their product — never in any public schema.
-    is_negotiable: bool = False
+    #:
+    #: Nullable, unlike on create, because this is a PATCH: the route passes
+    #: every Form field explicitly, so one the vendor never touched still
+    #: arrives as None. As a plain `bool = False` that was two bugs at once.
+    #: A None raised ValidationError inside the handler, so every edit that
+    #: omitted the field became a 500 -- which is why products could not be
+    #: edited from the app at all, since it never sends this field. And had
+    #: the None been accepted, it would have silently switched negotiation off
+    #: and wiped the vendor's private floor on every unrelated edit. None now
+    #: means "leave alone", matching every other field here; the column is
+    #: NOT NULL, so the controller's non-nullable sweep drops it.
+    is_negotiable: bool | None = None
     min_acceptable_price: int | None = Field(default=None, ge=1)
     negotiation_max_quantity: int | None = Field(default=None, ge=1, le=99)
     negotiation_note: str | None = Field(default=None, max_length=255)
